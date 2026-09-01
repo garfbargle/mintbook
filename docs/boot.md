@@ -1,8 +1,8 @@
 # Boot, firmware and kernels
 
-> **Partly unverified.** The OpenCore configuration itself has not been inspected —
-> the ESP is not readable without sudo. Sections marked **TODO** are the gaps.
-> Everything else here is evidenced from the running system.
+> The boot chain is now confirmed: **OpenCore is the loader.** The ESP layout below was
+> read directly. What remains unread is `config.plist` itself — see the TODO at the end
+> of that section.
 
 ---
 
@@ -27,57 +27,88 @@ nvme0n1     233.8G
 
 ---
 
-## GRUB is not in the boot path
+## The boot chain: OpenCore, not GRUB
 
 **This is the thing to understand before changing any boot setting.**
 
-The kernel is booted **directly (EFISTUB)**, not by GRUB. Two independent proofs:
+```
+Apple EFI firmware
+  -> Boot0080 "EFI"  (\System\Library\CoreServices\boot.efi on the ESP)
+  -> OpenCore        (EFI/OC/OpenCore.efi, GUI picker via OpenCanopy)
+  -> OpenLinuxBoot   (scans ext4, boots the kernel directly via EFISTUB)
+  -> kernel
+```
 
-**1. The kernel command line is not GRUB's format.**
+GRUB is installed but **is not in this path**.
+
+### ESP layout
+
+```
+/boot/efi/EFI/
+├── APPLE/          Apple firmware + SMC updaters (stock, leave alone)
+├── BOOT/           BOOTX64.EFI, fbx64.efi, mmx64.efi
+├── OC/             OpenCore
+│   ├── config.plist
+│   ├── config.plist.bak-ext4-1446      <- prior experiment
+│   ├── config.plist.bak-shim-1505      <- prior experiment
+│   ├── Drivers/    Ext4Dxe, OpenCanopy, OpenLinuxBoot, OpenRuntime, ResetNvramEntry
+│   ├── Kexts/      macOS-side only (Lilu, AirportBrcmFixup, AppleHSSPI*, ...)
+│   ├── Tools/      BootKicker.efi, OpenShell.efi
+│   └── Resources/  OpenCanopy icons/fonts (Acidanthera GoldenGate)
+└── ubuntu/         grubx64.efi, shimx64.efi, grub.cfg
+                    + grub.cfg.orig, grub.cfg.claude-minimal   <- modified
+```
+
+**`OpenLinuxBoot.efi` + `Ext4Dxe.efi` is the mechanism.** OpenLinuxBoot reads the ext4
+root directly, finds the kernels in `/boot`, and boots them EFISTUB — no bootloader on
+the Linux side involved. That is exactly why the command line looks like this:
 
 ```
 $ cat /proc/cmdline
 initrd=\boot\initrd.img-7.0.0-30-generic root=PARTUUID=bad575a6-... ro
 ```
 
-Backslash path separators and `root=PARTUUID=`. GRUB emits forward slashes and
-normally `root=UUID=`. Backslashes are the EFI path convention — this line was written
-by an EFI bootloader handing the kernel straight to the firmware.
-
-**2. There is no Linux boot entry in NVRAM.**
+EFI backslash paths and `root=PARTUUID=`, which GRUB would never emit. And why NVRAM
+holds no Linux entry at all:
 
 ```
 $ efibootmgr
 BootOrder: 0080
 Boot0080* EFI       ...\System\Library\CoreServices\boot.efi
-Boot0081* Mac OS X  ...\System\Library\CoreServices\boot.efi
-Boot0082*           ...\System\Library\CoreServices\boot.efi
+Boot0081* Mac OS X  ...
+Boot0082*           ...
 ```
 
-No `ubuntu`, no `GRUB`, no `Linux`. The active entry (`0080`) points at an
-Apple-shaped `boot.efi` path on the ESP — the usual place **OpenCore** installs
-itself. OpenCore then presents its own picker and boots the kernel.
+"Select EFI, then EFI again" is the **firmware picker** followed by **OpenCanopy**,
+OpenCore's own graphical picker.
 
 ### What this means in practice
 
-- **`/etc/default/grub` and `update-grub` do nothing on this machine.** Editing
-  `GRUB_DEFAULT`, `GRUB_TIMEOUT` or `GRUB_CMDLINE_LINUX_DEFAULT` will not change how it
-  boots. Any earlier note claiming otherwise was wrong.
-- **Kernel selection is OpenCore's**, not GRUB's. That is why the sequence is
-  "select EFI, then EFI again" — the firmware picker, then OpenCore's picker.
-- **Kernel parameters must be added in OpenCore's config**, not on the Linux side.
-  Prefer fixes that do not need a kernel parameter at all — see [input.md](input.md)
-  for one done that way deliberately.
+- **`update-grub` does nothing** for how this machine boots. Kernel entries come from
+  OpenLinuxBoot scanning `/boot`, so a newly installed kernel appears automatically.
+- **Kernel selection is OpenCore's**, in the OpenCanopy picker.
+- **Kernel parameters are *probably* still taken from `/etc/default/grub`.** There is no
+  `/etc/kernel/cmdline` and no `/boot/loader/entries/`, so OpenLinuxBoot is in
+  autodetect mode, where it falls back to reading `GRUB_CMDLINE_LINUX_DEFAULT` /
+  `GRUB_CMDLINE_LINUX`. Both are currently empty, which matches the bare command line
+  observed. **Unverified** — if you need a kernel argument, set it there, reboot, and
+  confirm it actually shows up in `/proc/cmdline` before trusting it. Prefer fixes that
+  need no kernel argument at all; see [input.md](input.md).
 
 ### The bare `grub>` prompt
 
-Pressing `Shift`/`Esc` during boot has produced a bare GRUB command line. GRUB *is*
-installed on disk, it is simply not the configured boot path. Chainloading it lands in
-a GRUB that never found its own `grub.cfg`, hence a prompt rather than a menu. It is a
-side road, not the main one — recovering usually means going back to the OpenCore
-picker rather than trying to drive that prompt.
+`EFI/ubuntu/` contains `grub.cfg` alongside **`grub.cfg.orig` and
+`grub.cfg.claude-minimal`** — the config there has been replaced at some point. If
+OpenCore chainloads `shimx64.efi`/`grubx64.efi`, you land in a GRUB whose config is
+minimal or cannot locate the real `/boot/grub/grub.cfg`, which presents as a bare
+prompt instead of a menu. That is a side road; the working path is to go back to the
+OpenCanopy picker and choose a kernel entry.
 
-If you do need to boot from it by hand:
+The two `config.plist` backups (`bak-ext4-1446`, `bak-shim-1505`) show that booting via
+Ext4Dxe and via shim were both tried. The current, working arrangement is the
+Ext4Dxe/OpenLinuxBoot one.
+
+If you must hand-boot from a `grub>` prompt:
 
 ```
 grub> ls
@@ -88,9 +119,9 @@ grub> initrd /boot/initrd.img-7.0.0-30-generic
 grub> boot
 ```
 
-**TODO** (needs sudo): read the ESP and record what is actually there —
-`sudo ls -R /boot/efi/EFI/` — then document OpenCore's entry list, its `config.plist`
-location, and which entry leads to Linux.
+**TODO:** `EFI/OC/config.plist` itself has not been read (root-only). Worth recording:
+the `Misc/Entries` list, `Misc/Boot` picker settings, and OpenLinuxBoot's `Driver
+Arguments`. Dump it with `sudo cat /boot/efi/EFI/OC/config.plist`.
 
 ---
 
