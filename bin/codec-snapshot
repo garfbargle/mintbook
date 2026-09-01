@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# codec-snapshot - save the full CS4208 codec state for diffing.
+# Usage: bin/codec-snapshot <label>      e.g. bin/codec-snapshot after-macos
+# Read-only. No sudo. Snapshots land in ~/codec-snapshots/.
+set -uo pipefail
+
+label="${1:-}"
+[ -z "$label" ] && { echo "usage: $0 <label>"; exit 2; }
+
+out="$HOME/codec-snapshots"; mkdir -p "$out"
+codec=$(grep -ls CS4208 /proc/asound/card*/codec#* 2>/dev/null | head -1)
+[ -z "$codec" ] && { echo "!! no CS4208 codec found"; exit 1; }
+
+f="$out/$label.txt"
+{
+  echo "# label:  $label"
+  echo "# date:   $(date -Is)"
+  echo "# kernel: $(uname -r)"
+  echo "# driver: $(modinfo snd_hda_codec_cirrus 2>/dev/null | awk '/^filename/{print $2}')"
+  echo "# uptime: $(uptime -p)"
+  echo
+  cat "$codec"
+} > "$f"
+
+echo "saved: $f"
+echo
+echo "GPIO state:"
+grep -A7 '^GPIO' "$f" | sed 's/^/  /'
