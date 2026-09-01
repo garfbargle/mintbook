@@ -129,37 +129,34 @@ Arguments`. Dump it with `sudo cat /boot/efi/EFI/OC/config.plist`.
 
 | Kernel | Notes |
 |---|---|
-| `7.0.0-30-generic` | Current default. Ubuntu HWE (`linux-hwe-7.0`). |
-| `6.14.0-37-generic` | **Also fine.** Kernel binary untouched since 2025-11-20. |
+| `7.0.0-30-generic` | **Required.** Ubuntu HWE (`linux-hwe-7.0`). Speakers only work here. |
 
-**Both kernels work.** An earlier version of this document claimed 6.14 had no working
-keyboard or trackpad — **that was wrong**, and it was wrong in a way worth
-understanding: it was a sample of two bad boots. The keyboard/trackpad failure is an
-intermittent boot race that hits **both** kernels at roughly the same rate. See
-**[input.md](input.md)** — that is the doc that matters here.
+`6.14.0-37-generic` was removed 2026-09-01. It was fine for keyboard/trackpad (the
+input failure is a boot race on every kernel — [input.md](input.md)), but the
+working speaker stack is a 7.0 DKMS build against Ubuntu's `linux-hwe-7.0` HDA
+tree. OpenLinuxBoot scans `/boot`, so once the 6.14 `vmlinuz`/`initrd` are gone
+the picker stops offering it.
 
-Do not conclude a kernel is broken from a single bad boot on this machine. Check
-`bin/input-check` first.
+Keep `linux-image-generic-hwe-24.04` installed so apt stays on the 7.0 HWE line.
 
-### Do not let DKMS build for 7.0
+Do not conclude a kernel is broken from a single bad boot. Check `bin/input-check`
+first.
 
-The out-of-tree audio driver **panics at probe on 7.0** and takes the analog card down
-with it. Its `dkms.conf` sets `AUTOINSTALL="yes"`, so it rebuilds itself for every
-newly installed kernel. If it is installed for 6.14, check for and remove any 7.0
-build:
+### DKMS audio modules
 
-```bash
-dkms status
-sudo dkms remove -m macbook12-audio-driver -v 0.1 -k 7.0.0-30-generic
-```
+`macbook12-audio/0.1` from [thomas-shirley/macbook8.1-speaker-driver](https://github.com/thomas-shirley/macbook8.1-speaker-driver)
+is installed for 7.0 (`dkms status`). It **must** be built against Ubuntu's
+`linux-hwe-7.0` `sound/hda` tree, not kernel.org — kernel.org structs panic at
+probe on this ABI (same trap as `leifliddy/macbook12-audio-driver`). See
+[audio.md](audio.md).
 
 ---
 
 ## Rollback safety
 
-Both kernels stay installed and selectable from the OpenCore picker, so a bad kernel is
-never a dead end. `timeshift` is installed; snapshot before anything touching kernels
-or modules:
+Only 7.0 is installed, so a bad kernel is no longer recoverable from the OpenCanopy
+picker. macOS is still on `nvme0n1p2`. `timeshift` is installed; snapshot before
+anything touching kernels or modules:
 
 ```bash
 sudo timeshift --create --comments "before <change>"

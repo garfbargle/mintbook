@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""While audio is already playing, enable DigEn and sweep speaker-amp GPIOs.
+
+Must be run as root. Caller should already have a tone playing.
+"""
+import array
+import fcntl
+import os
+import sys
+import time
+
+def _ioc(direction, type_, nr, size):
+    return (direction << 30) | (size << 16) | (ord(type_) << 8) | nr
+
+IOCTL = _ioc(1 | 2, "H", 0x11, 8)
+
+SET_DIGI_CONVERT_1, SET_DIGI_CONVERT_2, GET_DIGI_CONVERT_1 = 0x70D, 0x70E, 0xF0D
+SET_PIN_WIDGET_CONTROL, GET_PIN_WIDGET_CONTROL = 0x707, 0xF07
+SET_POWER_STATE, GET_POWER_STATE = 0x705, 0xF05
+GET_CONV = 0xF06
+SET_GPIO_MASK, SET_GPIO_DIRECTION, SET_GPIO_DATA = 0x716, 0x717, 0x715
+GET_GPIO_MASK, GET_GPIO_DIRECTION, GET_GPIO_DATA = 0xF16, 0xF17, 0xF15
+SET_PROC_STATE, SET_COEF_INDEX, SET_PROC_COEF, GET_PROC_COEF = 0x703, 0x500, 0x400, 0xC00
+GET_PIN_SENSE = 0xF09
+
+
+def main():
+    fd = os.open("/dev/snd/hwC0D0", os.O_RDWR)
+
+    def verb(nid, v, param=0):
+        packed = ((nid & 0xFF) << 24) | ((v & 0xFFFF) << 8) | (param & 0xFFFF)
+        buf = array.array("I", [packed, 0xFFFFFFFF])
+        fcntl.ioctl(fd, IOCTL, buf)
+        return buf[1]
+
+    def digen():
+        verb(0x0A, SET_POWER_STATE, 0)
+        verb(0x0A, SET_DIGI_CONVERT_1, 0x11)
+        verb(0x0A, SET_DIGI_CONVERT_2, 0x01)
+        verb(0x1D, SET_PIN_WIDGET_CONTROL, 0x40)
+        verb(0x24, SET_PROC_STATE, 1)
+        verb(0x24, SET_COEF_INDEX, 0)
+        verb(0x24, SET_PROC_COEF, 0x20C4)
+
+    def gpio(mask, direction, data):
+        verb(0x01, SET_GPIO_DIRECTION, direction)
+        verb(0x01, SET_GPIO_DATA, data)
+        verb(0x01, SET_GPIO_MASK, mask)
+
+    def show(label):
+        print(
+            f"{label} | 0x0a pwr={verb(0x0A, GET_POWER_STATE):x} "
+            f"conv={verb(0x0A, GET_CONV):x} digi={verb(0x0A, GET_DIGI_CONVERT_1):x} "
+            f"| GPIO m/d/data={verb(0x01, GET_GPIO_MASK):x}/"
+            f"{verb(0x01, GET_GPIO_DIRECTION):x}/{verb(0x01, GET_GPIO_DATA):x} "
+            f"| HP={verb(0x10, GET_PIN_SENSE):x}",
+            flush=True,
+        )
+
+    print("HP sense", hex(verb(0x10, GET_PIN_SENSE)), flush=True)
+    show("start")
+
+    steps = [
+        ("1 DigEn only (GPIO0 stock)", lambda: (digen(), None)[1]),
+        ("2 A1534 play GPIO mask=0x37 dir=0x31 data=0x01", lambda: gpio(0x37, 0x31, 0x01)),
+        ("3 GPIO0+4 data=0x11", lambda: gpio(0x37, 0x31, 0x11)),
+        ("4 GPIO0+5 data=0x21", lambda: gpio(0x37, 0x31, 0x21)),
+        ("5 GPIO0+4+5 data=0x31", lambda: gpio(0x37, 0x31, 0x31)),
+        ("6 GPIO4 only data=0x10", lambda: gpio(0x37, 0x31, 0x10)),
+        ("7 GPIO5 only data=0x20", lambda: gpio(0x37, 0x31, 0x20)),
+        ("8 GPIO0+2 data=0x05", lambda: gpio(0x37, 0x35, 0x05)),
+        ("9 GPIO0+3 data=0x09", lambda: gpio(0x3F, 0x39, 0x09)),
+        ("10 all GPIOs high", lambda: gpio(0x3F, 0x3F, 0x3F)),
+        ("11 pin 0x1e OUT + DigEn on 0x0b", None),
+    ]
+
+    for label, fn in steps:
+        digen()
+        if fn:
+            fn()
+        if label.startswith("11"):
+            verb(0x0B, SET_POWER_STATE, 0)
+            verb(0x0B, SET_DIGI_CONVERT_1, 0x11)
+            verb(0x0B, SET_DIGI_CONVERT_2, 0x01)
+            verb(0x1E, SET_PIN_WIDGET_CONTROL, 0x40)
+            gpio(0x37, 0x31, 0x01)
+        show(label)
+        time.sleep(3.0)
+
+    # A1534 headphone-amp reset dance, then speaker enable
+    digen()
+    gpio(0x37, 0x31, 0x20)
+    time.sleep(0.15)
+    gpio(0x37, 0x31, 0x30)
+    time.sleep(0.15)
+    gpio(0x37, 0x31, 0x10)
+    time.sleep(0.15)
+    gpio(0x37, 0x31, 0x00)
+    time.sleep(0.15)
+    gpio(0x37, 0x31, 0x01)
+    show("12 after A1534 reset dance -> GPIO0")
+    time.sleep(3.0)
+
+    # leave stock-ish GPIO0 on
+    gpio(0x01, 0x01, 0x01)
+    digen()
+    show("end (GPIO0 only, DigEn left on)")
+    os.close(fd)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

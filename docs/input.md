@@ -101,7 +101,7 @@ To undo, delete the file and reboot.
 
 ### Verifying
 
-After rebooting, on **each** kernel:
+After rebooting:
 
 ```bash
 bin/input-check
@@ -111,8 +111,9 @@ Expect `using PIO`, zero timeouts, and both keyboard and touchpad present.
 
 ## Consequences
 
-- **6.14 is not broken and never was.** It is as usable as 7.0. This unblocks the
-  speaker-driver test that needs it — see [audio.md](audio.md).
+- **6.14 was not broken for input.** The race hits every kernel. 6.14 was still
+  removed on 2026-09-01 because the working speaker stack is 7.0-only — see
+  [audio.md](audio.md) and [boot.md](boot.md).
 - This is very likely the cause of the long, miserable session of black screens and
   unresponsive boots that preceded this investigation. Combined with a boot menu that
   is easy to mis-navigate ([boot.md](boot.md)), a dead-input boot is hard to tell apart

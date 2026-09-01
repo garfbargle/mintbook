@@ -1,9 +1,11 @@
 # Audio — internal speakers
 
-**Status: UNSOLVED.** The out-of-tree driver runs cleanly on kernel 6.14 with the
-amplifier GPIO asserted, and the speakers are *still* silent — so the A1534 sequence
-alone is not sufficient on the 8,1. See [The verdict](#the-verdict). Headphone jack
-works.
+**Status: WORKING on 7.0.** Confirmed 2026-09-01 on 7.0.0-30-generic with
+[thomas-shirley/macbook8.1-speaker-driver](https://github.com/thomas-shirley/macbook8.1-speaker-driver)
+(`macbook12-audio/0.1` DKMS). `coef 0x1f = 0` (clock locked). Play through
+**MacBook Speaker (EQ)** (`input.MacBook_Speaker`) — Chrome/YouTube included.
+Headphone jack switching is still described as wonky upstream. Kernel 6.14 was
+removed; this stack does not exist there.
 
 ---
 
@@ -185,6 +187,10 @@ RIP: 0010:cs_4208_build_pcms_explicit+0xd9/0x1d0 [snd_hda_codec_cs420x]
 The analog card disappears entirely — **including the headphone jack**, so this is
 strictly worse than stock until uninstalled.
 
+The same panic happens if [thomas-shirley/macbook8.1-speaker-driver](https://github.com/thomas-shirley/macbook8.1-speaker-driver)
+is built against kernel.org HDA headers. The working 7.0 install uses Ubuntu's
+`linux-hwe-7.0` `sound/hda` tree instead. See [What actually works](#what-actually-works).
+
 **This is memory corruption, not a logic bug.** The evidence:
 
 1. The parse prints `inputs: Mic=0x18, Internal Mic=0x19` — `num_inputs` is **2**.
@@ -206,7 +212,7 @@ loads into Ubuntu's **`linux-hwe-7.0`** kernel (the oops trace shows the build p
 `struct hda_gen_spec`, every write the driver makes lands at the wrong offset. 9,1 and
 10,1 owners never hit this because their kernels happened to agree with upstream.
 
-### On kernel 6.14 it was never tested
+### On kernel 6.14 it loads, and the speakers stay silent
 
 The 6.14 build uses a *different, older and better-tested* code path
 (`patch_cirrus.c` → `snd-hda-codec-cirrus`, versus `cs420x.c` for kernels >= 6.17).
@@ -231,10 +237,9 @@ sudo cp linux-6.14.tar.xz /var/cache/macbook12-audio-driver/
 > `sudo ./install.cirrus.driver.sh -u` **deletes `/var/cache/macbook12-audio-driver/`
 > entirely**, tarball included. Re-stage it after every uninstall.
 
-**This is no longer blocked.** 6.14 was previously believed to have no working keyboard
-or trackpad. That was wrong — it was a sample of two unlucky boots. The input failure is
-an intermittent boot race that hits **both** kernels and has a fix; apply
-[input.md](input.md) first, then 6.14 is a perfectly usable place to run this test.
+The input failure is an intermittent boot race, not a 6.14-only bug
+([input.md](input.md)). That unblocked this test; it was run; speakers stayed
+silent. 6.14 was removed after the 7.0 stack worked.
 
 ---
 
@@ -280,43 +285,107 @@ exposes the proc dump **without running any init**. Comparing a cold `probe_only
 against a `probe_only` boot warm out of macOS yields exactly what macOS wrote, and
 nothing else. That experiment has not been run yet.
 
-**This is the hard case.** The remaining paths, in order of cost:
+### GPIO sweep and DigEn — ruled out, 2026-09-01
 
-1. **Probe the other GPIOs.** The codec has six (`io=6`); the driver only drives GPIO 0.
-   Cheap and bounded. Needs `hda-verb` (`sudo apt install alsa-tools`) and root.
-   Modest odds — if the amp were a plain GPIO enable, GPIO 0 was the likely one.
-2. **Capture the real sequence from macOS** using the isolated `probe_only=1` method
-   described above. macOS is installed on this same disk (`nvme0n1p2`) and drives these
-   speakers correctly. This is the current plan.
-3. **Stop.** Headphone jack and USB-C audio both work.
+Done on stock 6.14 with headphones unplugged, a live 440 Hz stream on converter
+`0x0a` (`conv=0x50`, power D0), and Digital Enable held at `0x111` for the whole
+run. Scripts: [`bin/hda-dump`](../bin/hda-dump), [`bin/hda-gpio-sweep`](../bin/hda-gpio-sweep).
+Baseline coefs: `~/codec-snapshots/stock-6.14-coefs.txt`.
 
-Keeping the driver installed on 6.14 is harmless — it does not crash and it does not
-make anything worse — but it does not currently buy anything either. It must **not** be
-installed for 7.0.
+| Try | Result |
+|---|---|
+| DigEn + SPDIF_STAT `0x20c4` during playback | silence |
+| A1534 play GPIO (`mask=0x37 dir=0x31 data=0x01`) | silence |
+| GPIO 4, 5, 2, 3, all-high, 0x1e/0x0b, A1534 reset dance | silence |
 
-If yes, this is solvable and worth real effort. If no, the 2015 model needs a
-different init than the 2016/2017 models — the genuinely hard case, meaning the
-sequence has to be reverse-engineered.
+**Why none of that could have worked:** vendor coef **`0x1f = 0x400`**. That bit is
+a latched CS4208 PLL clock fault. EFI leaves it at `0x0` (the boot chime plays);
+stock `snd-hda-intel` pulses a controller reset on probe and **sets the latch**.
+It cannot be cleared by any verb while a driver owns the link — which is why
+poking GPIOs and DigEn on a running Linux session is a dead end.
 
-**That is not hopeless here: macOS is still installed** on this machine
-(`nvme0n1p2`, 159 GB APFS — see [boot.md](boot.md)). macOS drives these speakers
-correctly, so the working init sequence can in principle be captured from it. That is
-exactly how the 9,1/10,1 sequence in `patch_cirrus_a1534_setup.h` was produced. It is
-a large job, but the reference implementation is sitting on the same disk.
+The 2016/2017 `leifliddy/macbook12-audio-driver` never had to solve this; those
+amps come up after a reset. The 2015 amp does not.
 
-Do not invest in fixing the 7.0 ABI problem until this question is answered, because
-a cleanly-initialising driver that still produces no sound is worth nothing.
+## What actually works
 
-## Next options, in order of cost
+[thomas-shirley/macbook8.1-speaker-driver](https://github.com/thomas-shirley/macbook8.1-speaker-driver)
+is a four-part DKMS stack for this exact machine (`0x10134208` / `0x106b6400`):
 
-1. **Get input working on 6.14**, then install the driver there. Cheapest real test —
-   it uses the mature code path and everything else is already staged.
-2. **Rebuild against Ubuntu's own kernel source for 7.0.** Enable `deb-src` and
-   `apt-get source linux-hwe-7.0`, then point the build at that tree instead of the
-   kernel.org tarball. Note `linux-source-6.8.0` is the only packaged kernel source in
-   the archive — there is no packaged 7.0 shortcut.
-3. **Accept the workaround.** The headphone jack works; a USB-C audio adapter or DAC
-   bypasses this codec entirely.
+1. `snd-hda-intel` — attach to the live EFI link **without** a controller reset
+2. `single_cmd=1 power_save=0` via `/etc/modprobe.d/mb81-singlecmd.conf`
+3. `snd-hda-codec-cs420x` — write the EFI coef image; TDM prepare without the
+   sync-dance that re-latches the clock
+4. `snd-hda-codec-generic` — skip input-path / `init_digital` (those re-latch `0x1f`)
+
+Cloned at `~/macbook8.1-speaker-driver`. DKMS name is still `macbook12-audio/0.1`.
+Installed for **7.0.0-30-generic** only. `6.14` was removed 2026-09-01.
+
+### Build against Ubuntu HDA, not kernel.org
+
+The installer's default of fetching kernel.org `sound/hda` panics at probe on
+Mint's `linux-hwe-7.0` (same struct-ABI trap as leifliddy above). The working
+tree is Ubuntu's `linux-hwe-7.0` orig tarball plus debian diff, with
+`sound/hda` extracted under `~/macbook8.1-speaker-driver/build/ubuntu-src/`.
+`install.cirrus.driver.sh` was patched locally to skip kernel.org for
+`*-generic` kernels.
+
+DKMS `CLEAN="rm -rf build"` also deleted the just-built `.ko` files; local
+`dkms.conf` uses `CLEAN="true"`.
+
+### Play through the EQ sink, not IEC958
+
+ALSA devices after the patched driver:
+
+| PCM | Role |
+|---|---|
+| `hw:PCH,0` | analog / headphones |
+| `hw:PCH,1` | CS4208 Digital / IEC958 — **do not use** (shares converter `0x0a`) |
+| `hw:PCH,2` | 4-channel TDM speakers |
+
+PipeWire EQ (`~/.config/pipewire/pipewire.conf.d/51-macbook81-speaker.conf`, from
+the driver) is the sink apps should use: **MacBook Speaker (EQ)** /
+`input.MacBook_Speaker`. Its DSP output targets `MacBook_Speaker_Raw` (`hw:PCH,2`,
+S16LE / 44100 / 4ch `FL FR RL RR`).
+
+Mint 22 ships **WirePlumber 0.4.17**. The driver's
+`~/.config/wireplumber/wireplumber.conf.d/51-mb81-rawpcm-speaker.conf` is
+WirePlumber **0.5** SPA-JSON and is **ignored**, so ACP never exports device 2.
+Chrome then followed the default EQ sink, whose DSP fell back onto IEC958 —
+silent YouTube, no reboot required to fix. The WP 0.4 stand-in is a static
+PipeWire adapter:
+
+- repo: [`config/pipewire/52-macbook81-raw-sink.conf`](../config/pipewire/52-macbook81-raw-sink.conf)
+- live: `~/.config/pipewire/pipewire.conf.d/52-macbook81-raw-sink.conf`
+
+After copying, `systemctl --user restart pipewire pipewire-pulse wireplumber`.
+A cold boot can still race the static adapter (card not ready yet); if speakers
+are silent after login:
+
+```bash
+systemctl --user restart pipewire pipewire-pulse wireplumber
+pactl set-default-sink input.MacBook_Speaker
+```
+
+Refresh any Chrome tab that was already playing. Confirm routing with
+`pactl list short sinks` — `MacBook_Speaker_Raw` should exist, IEC958 should
+be idle/suspended, default sink `input.MacBook_Speaker`.
+
+### Checks after a 7.0 boot
+
+```bash
+dmesg | grep -i "attaching to running EFI link without reset"
+modinfo -n snd-hda-intel snd-hda-codec-cs420x snd-hda-codec-generic
+# expect .../updates/dkms/...
+wpctl status | grep -i speaker
+pactl get-default-sink   # input.MacBook_Speaker
+```
+
+`coef 0x1f` absent from a nonzero dump means `0` (locked). Bad is `0x400`.
+
+Known leftover: headphone jack auto-switch is still wonky upstream. ACP still
+exposes IEC958 because analog-stereo is marked unavailable with the jack
+unplugged — leave it unused.
 
 **Bluetooth audio is not an option.** There is no Bluetooth adapter present at all —
 `/sys/class/bluetooth/` is empty and `rfkill` lists only the WLAN device. That is a
@@ -327,8 +396,15 @@ separate BCM4350 firmware problem.
 ## Reverting
 
 ```bash
-cd ~/macbook12-audio-driver && sudo ./install.cirrus.driver.sh -u
+cd ~/macbook8.1-speaker-driver && sudo bash install.sh -r
+rm -f ~/.config/pipewire/pipewire.conf.d/52-macbook81-raw-sink.conf
 sudo reboot
+```
+
+The older 2016/2017 tree, if it is still around:
+
+```bash
+cd ~/macbook12-audio-driver && sudo ./install.cirrus.driver.sh -u
 ```
 
 Verify recovery with: analog card back, and zero crash lines.

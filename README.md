@@ -24,8 +24,7 @@ Full detail and the live report: [docs/hardware.md](docs/hardware.md).
 |---|---|
 | macOS-style desktop | **Done** — [docs/desktop.md](docs/desktop.md) |
 | HiDPI scaling | **Done** — [docs/display.md](docs/display.md) |
-| Wi-Fi, headphones, battery, display | **Working** |
-| **Internal speakers** | **Unsolved** — [docs/audio.md](docs/audio.md) |
+| Wi-Fi, headphones, speakers, battery, display | **Working** — speakers need kernel **7.0**, see [docs/audio.md](docs/audio.md) |
 | **Keyboard/trackpad** | **Intermittent at boot — has a fix** — [docs/input.md](docs/input.md) |
 | **Bluetooth** | **No adapter present** |
 | Boot chain | **OpenCore loader; GRUB is inert** — [docs/boot.md](docs/boot.md) |
@@ -38,10 +37,10 @@ Read in this order if you are new to the machine:
 |---|---|
 | [docs/input.md](docs/input.md) | **Read first.** The SPI keyboard/trackpad boot race — why input dies at random, and the fix |
 | [docs/hardware.md](docs/hardware.md) | What the machine is; per-device working/broken matrix; battery, thermals, toolchain |
-| [docs/boot.md](docs/boot.md) | Disk layout, dual-boot, why GRUB is **not** in the boot path, the two kernels |
+| [docs/boot.md](docs/boot.md) | Disk layout, dual-boot, why GRUB is **not** in the boot path, kernel 7.0 |
 | [docs/display.md](docs/display.md) | HiDPI scaling — why it is split between window scale and font DPI |
 | [docs/desktop.md](docs/desktop.md) | The macOS look: top bar, dock, Spotlight, WM, panel indicators, and its gotchas |
-| [docs/audio.md](docs/audio.md) | The CS4208 speaker investigation — full evidence, everything ruled out, what is left |
+| [docs/audio.md](docs/audio.md) | CS4208 speakers — what was ruled out, the 7.0 DKMS fix, PipeWire routing |
 
 ## Repo layout
 
@@ -50,12 +49,17 @@ bin/                    scripts; mirrors ~/.local/bin/
   audio-diag            dump the full audio/codec state       (read-only)
   hw-report             live hardware status                  (read-only)
   input-check           SPI keyboard/trackpad PIO-vs-DMA check (read-only)
+  hda-dump              HDA verb dump (root; historical)
+  hda-enable-digen      enable CS4208 Digital Convert (root; historical)
+  hda-gpio-sweep        GPIO/DigEn sweep during playback (root; ruled out)
+  codec-snapshot        capture codec state to diff
   spotlight             Cmd+Space launcher toggle
   panel-cpu             genmon CPU sparkline
   panel-temp            genmon CPU temperature
   panel-update          genmon update-manager indicator
   panel-wifi            genmon Wi-Fi indicator
   revert-mac-theme      restore XFCE config from the backup
+config/pipewire/        WP 0.4 raw-speaker adapter (copy to ~/.config/pipewire/pipewire.conf.d/)
 config/plank/           dock launcher definitions
 config/rofi/            rofi config + Spotlight theme
 config/xfce4-panel/     genmon rc files (genmon does NOT use xfconf)
@@ -79,8 +83,9 @@ first created.
 
 ## Before changing anything risky
 
-Both kernels stay installed and selectable, so a bad kernel is recoverable from the
-GRUB menu. For anything touching modules or packages, snapshot first:
+Only kernel **7.0** is installed (speakers need it). OpenLinuxBoot, not GRUB, is
+the picker — see [docs/boot.md](docs/boot.md). For anything touching modules or
+packages, snapshot first:
 
 ```bash
 sudo timeshift --create --comments "before <change>"

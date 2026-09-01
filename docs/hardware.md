@@ -22,7 +22,7 @@ What works, what does not, and what was measured. Regenerate the live parts with
 | Display / HiDPI | **Working** | Needs manual scaling, see [display.md](display.md) |
 | Wi-Fi | **Working** | `brcmfmac`, associates and resolves normally |
 | **Bluetooth** | **Not present** | No adapter at all — see below |
-| **Internal speakers** | **Broken** | Unsolved, see [audio.md](audio.md) |
+| Internal speakers | **Working on 7.0** | [audio.md](audio.md) — CS4208 TDM, clock latch fix |
 | Headphone jack | **Working** | The analog path in the codec is healthy |
 | Microphone | Working | `Mic=0x18`, `Internal Mic=0x19` |
 | Keyboard / trackpad | **Intermittent — fixable** | Boot race, hits **both** kernels, see [input.md](input.md) |
@@ -32,8 +32,8 @@ What works, what does not, and what was measured. Regenerate the live parts with
 
 ## Bluetooth is absent, not broken
 
-Worth stating plainly because it removes the obvious workaround for the speaker
-problem (Bluetooth speakers/headphones):
+Worth stating plainly — it is not a fallback if the built-in speakers or jack
+fail:
 
 ```
 /sys/class/bluetooth/     empty
@@ -82,7 +82,7 @@ risk of hard OOM rather than gradual slowdown. `zram-config` would be the cheap 
 ## Base toolchain
 
 Present on a stock install: `git`, `python3` (3.12), `gcc`, `make`, `curl`, `dkms`,
-`timeshift`, kernel headers for both installed kernels.
+`timeshift`, kernel headers for **7.0.0-30-generic**.
 
 **Absent:** `node`, `npm`, `jq`, `gh`, `docker`, `rustc`, `go`, `java`. Claude Desktop
 is installed as a `.deb` and bundles its own runtime under
