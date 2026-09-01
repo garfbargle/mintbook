@@ -27,7 +27,7 @@
 /plugins/plugin-13/digital-date-font          Sans 8
 /plugins/plugin-13/digital-layout             3
 /plugins/plugin-13/digital-time-font          Inter 11
-/plugins/plugin-13/digital-time-format        %a %-d %b  %H:%M
+/plugins/plugin-13/digital-time-format         %a %-d %b  %H:%M  
 /plugins/plugin-14                            separator
 /plugins/plugin-17                            genmon
 /plugins/plugin-18                            genmon

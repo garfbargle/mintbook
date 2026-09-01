@@ -103,7 +103,7 @@ Plugin order (`plugin-ids`), left to right:
 | 18 | genmon | Wi-Fi |
 | 12 | pulseaudio | volume |
 | 11 | power-manager-plugin | battery |
-| 13 | clock | `%a %-d %b  %H:%M`, Inter 11, `digital-layout=3` (time only) |
+| 13 | clock | ` %a %-d %b  %H:%M  `, Inter 11, `digital-layout=3` (time only) |
 
 Right-to-left: **date/time, battery, volume, wifi, update manager, temperature, CPU,
 then the rest.** This follows the macOS convention — the clock is furthest right with
@@ -164,6 +164,9 @@ panel is itself a CPU burst, so the reading used to jump high and then drift bac
 The underlying heat was real — this smooths the presentation, it does not hide a
 problem.
 
+Its tooltip lists CPU / SSD / PCH / battery, right-justified inside a
+`font_family="monospace"` span for the same reason as the CPU one.
+
 ### Update manager (`plugin-20`, genmon)
 
 Runs [`bin/panel-update`](bin/panel-update), icons from
@@ -220,6 +223,13 @@ zoom-percent=150   hide-mode=intelligent   auto-pinning=false
 
 Theme copied from `~/.themes/WhiteSur-Light/plank/dock.theme` to
 `~/.local/share/plank/themes/WhiteSur/dock.theme`.
+
+### Clock padding
+
+The clock is the last item on the bar, so its text ran into the screen edge. The
+`digital-time-format` carries a **leading space and two trailing spaces** — panel items
+have no margin of their own and the clock plugin exposes no padding setting. This
+yields 16px of trailing gap. If the format string is ever edited, keep those spaces.
 
 ### Window manager (xfwm4)
 
