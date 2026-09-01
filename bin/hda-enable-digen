@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+"""Enable the CS4208 digital speaker converter (DigEn) and SPDIF stat coef.
+
+Does not touch GPIO 4/5 (those are used by the headphone amp sequence).
+Needs root (CAP_SYS_RAWIO).
+"""
+import array
+import fcntl
+import os
+import sys
+
+def _ioc(direction, type_, nr, size):
+    return (direction << 30) | (size << 16) | (ord(type_) << 8) | nr
+
+SNDRV_HDA_IOCTL_VERB_WRITE = _ioc(1 | 2, "H", 0x11, 8)
+
+SET_DIGI_CONVERT_1 = 0x70D
+SET_DIGI_CONVERT_2 = 0x70E
+GET_DIGI_CONVERT_1 = 0xF0D
+SET_PROC_STATE = 0x703
+SET_COEF_INDEX = 0x500
+SET_PROC_COEF = 0x400
+GET_PROC_COEF = 0xC00
+SET_GPIO_MASK = 0x716
+SET_GPIO_DIRECTION = 0x717
+SET_GPIO_DATA = 0x715
+GET_GPIO_MASK = 0xF16
+GET_GPIO_DATA = 0xF15
+GET_GPIO_DIRECTION = 0xF17
+GET_PIN_SENSE = 0xF09
+
+def main():
+    fd = os.open("/dev/snd/hwC0D0", os.O_RDWR)
+
+    def verb(nid, v, param=0):
+        packed = ((nid & 0xFF) << 24) | ((v & 0xFFFF) << 8) | (param & 0xFFFF)
+        buf = array.array("I", [packed, 0xFFFFFFFF])
+        fcntl.ioctl(fd, SNDRV_HDA_IOCTL_VERB_WRITE, buf)
+        return buf[1]
+
+    print("before: HP sense", hex(verb(0x10, GET_PIN_SENSE)))
+    print("before: 0x0a digi", hex(verb(0x0A, GET_DIGI_CONVERT_1)))
+    print("before: GPIO m/d/data", hex(verb(0x01, GET_GPIO_MASK)),
+          hex(verb(0x01, GET_GPIO_DIRECTION)), hex(verb(0x01, GET_GPIO_DATA)))
+
+    verb(0x24, SET_PROC_STATE, 1)
+    verb(0x24, SET_COEF_INDEX, 0x0000)
+    print("before: coef[00]", hex(verb(0x24, GET_PROC_COEF)))
+
+    # Digital enable on the speaker converter — this is 0 on stock.
+    verb(0x0A, SET_DIGI_CONVERT_1, 0x11)
+    verb(0x0A, SET_DIGI_CONVERT_2, 0x01)
+
+    # macOS A1534 sequence writes 0x20c4 to SPDIF_STAT (coef 0).
+    verb(0x24, SET_PROC_STATE, 1)
+    verb(0x24, SET_COEF_INDEX, 0x0000)
+    verb(0x24, SET_PROC_COEF, 0x20C4)
+
+    print("after:  0x0a digi", hex(verb(0x0A, GET_DIGI_CONVERT_1)))
+    verb(0x24, SET_COEF_INDEX, 0x0000)
+    print("after:  coef[00]", hex(verb(0x24, GET_PROC_COEF)))
+    os.close(fd)
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())

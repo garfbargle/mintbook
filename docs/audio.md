@@ -1,8 +1,8 @@
 # Audio — internal speakers
 
-**Status: UNSOLVED, and the key question is now ANSWERED — negatively.** The
-out-of-tree driver runs cleanly on kernel 6.14 and correctly enables the amplifier,
-and the speakers are *still* silent. See [The verdict](#the-verdict). Headphone jack
+**Status: UNSOLVED.** The out-of-tree driver runs cleanly on kernel 6.14 with the
+amplifier GPIO asserted, and the speakers are *still* silent — so the A1534 sequence
+alone is not sufficient on the 8,1. See [The verdict](#the-verdict). Headphone jack
 works.
 
 ---
@@ -55,8 +55,10 @@ that initialisation.
 
 Supporting evidence:
 
-- All six codec GPIOs read `enable=0` (`GPIO: io=6, o=2, i=0`). The amp enable line is
-  never asserted.
+- The codec has six GPIOs (`GPIO: io=6, o=2, i=0`). **Mainline already drives GPIO 0**
+  — `cs4208_fixup_mac()` falls back to `codec->fixup_id = CS4208_GPIO0` for any Apple
+  CS4208 — so a stock 6.14 boot shows `IO[0]: enable=1, dir=1, data=1` on its own.
+  Asserting GPIO 0 is therefore **not** the missing piece.
 - At boot the driver logs `CS4208: picked fixup  for codec SSID 106b:0000` — note the
   **blank fixup name**. There is no mainline quirk for this machine.
 - There is **no amplifier on any I2C bus** (`/sys/bus/i2c/devices/` holds only the
@@ -101,8 +103,13 @@ sudo modprobe snd_hda_intel model=gpio0
 ```
 
 Result: the quirk *did* apply — the parse changed from `line_outs=1` to
-`line_outs=5 (0x11/0x12/0x13/0x14/0x1d)` and a Digital PCM device appeared. But the
-GPIOs still read `enable=0` and the speakers stayed silent.
+`line_outs=5 (0x11/0x12/0x13/0x14/0x1d)` and a Digital PCM device appeared. Silent
+anyway.
+
+> **Unexplained:** the GPIO dump taken during that test read `enable=0` on all six,
+> which contradicts both `model=gpio0` and the mainline Apple default. A later stock
+> 6.14 boot clearly shows `IO[0]: enable=1`. Treat that one early reading as suspect
+> rather than as evidence; re-measure with `bin/codec-snapshot` before relying on it.
 
 > The services **and their sockets** must be stopped, or systemd socket-activation
 > restarts PipeWire mid-unload and `modprobe -r` fails with `Module is in use`.
@@ -243,7 +250,7 @@ a failed install:
 |---|---|
 | Module loaded | `updates/dkms/snd-hda-codec-cirrus.ko.zst` |
 | Kernel crashes | **0** (the 7.0 oops is specific to the >= 6.17 `cs420x.c` path) |
-| **Amp GPIO** | **`IO[0]: enable=1, dir=1, data=1`** — asserted, where mainline left all six at 0 |
+| Amp GPIO | `IO[0]: enable=1, dir=1, data=1` — but **mainline sets this too**, so it is not a differentiator |
 | Speaker converter `0x0a` during playback | **`Power: D0`, `stream=1`** — powered and carrying audio |
 | Speaker pin `0x1d` | `Pin-ctls: 0x40 OUT` |
 | PipeWire | `Active Port: analog-output-speaker`, sink at 150%, unmuted |
@@ -256,15 +263,31 @@ Every stage of the chain is correct and live, and no sound comes out. The 2015 m
 amplifier therefore needs something the 2016/2017 sequence does not provide — a
 different enable line, or an init step beyond asserting GPIO 0.
 
+### The macOS warm-handoff attempt was inconclusive
+
+Codec registers are not power-cycled by a restart, so the idea was: boot macOS (where
+the speakers work), restart into Linux, and read what macOS left. Done 2026-09-01.
+
+It proved nothing, because **the stock Linux driver sets GPIO 0 itself** (above), so a
+GPIO 0 reading cannot be attributed to macOS. The state after the handoff was identical
+to a normal Linux boot apart from which converter the Analog PCM was bound to
+(`0x02` stock vs `0x04` under the out-of-tree driver, which hardcodes
+`info->stream[PLAYBACK].nid = 0x04`).
+
+The method is still sound — it just has to be **isolated** from Linux's own
+initialisation. `snd_hda_intel` has a `probe_only=1` parameter that probes the codec and
+exposes the proc dump **without running any init**. Comparing a cold `probe_only` boot
+against a `probe_only` boot warm out of macOS yields exactly what macOS wrote, and
+nothing else. That experiment has not been run yet.
+
 **This is the hard case.** The remaining paths, in order of cost:
 
 1. **Probe the other GPIOs.** The codec has six (`io=6`); the driver only drives GPIO 0.
    Cheap and bounded. Needs `hda-verb` (`sudo apt install alsa-tools`) and root.
    Modest odds — if the amp were a plain GPIO enable, GPIO 0 was the likely one.
-2. **Capture the real sequence from macOS.** macOS is installed on this same disk
-   (`nvme0n1p2`) and drives these speakers correctly. That is exactly how the 9,1/10,1
-   sequence in `patch_cirrus_a1534_setup.h` was produced. Large job, but the reference
-   implementation is right there.
+2. **Capture the real sequence from macOS** using the isolated `probe_only=1` method
+   described above. macOS is installed on this same disk (`nvme0n1p2`) and drives these
+   speakers correctly. This is the current plan.
 3. **Stop.** Headphone jack and USB-C audio both work.
 
 Keeping the driver installed on 6.14 is harmless — it does not crash and it does not
