@@ -5,7 +5,7 @@
 /panels/panel-1/background-style              1
 /panels/panel-1/enable-struts                 true
 /panels/panel-1/enter-opacity                 100
-/panels/panel-1/icon-size                     30
+/panels/panel-1/icon-size                     36
 /panels/panel-1/leave-opacity                 100
 /panels/panel-1/length                        100
 /panels/panel-1/plugin-ids                    <<UNSUPPORTED>>
@@ -29,34 +29,9 @@
 /plugins/plugin-13/digital-time-font          Inter 11
 /plugins/plugin-13/digital-time-format        %a %-d %b  %H:%M
 /plugins/plugin-14                            separator
-/plugins/plugin-15                            cpugraph
-/plugins/plugin-15/background                 <<UNSUPPORTED>>
-/plugins/plugin-15/bars                       0
-/plugins/plugin-15/border                     0
-/plugins/plugin-15/color-mode                 0
-/plugins/plugin-15/command                    gnome-system-monitor
-/plugins/plugin-15/foreground-1               <<UNSUPPORTED>>
-/plugins/plugin-15/foreground-2               <<UNSUPPORTED>>
-/plugins/plugin-15/foreground-3               <<UNSUPPORTED>>
-/plugins/plugin-15/foreground-iowait          <<UNSUPPORTED>>
-/plugins/plugin-15/foreground-nice            <<UNSUPPORTED>>
-/plugins/plugin-15/foreground-system          <<UNSUPPORTED>>
-/plugins/plugin-15/foreground-user            <<UNSUPPORTED>>
-/plugins/plugin-15/frame                      0
-/plugins/plugin-15/in-terminal                1
-/plugins/plugin-15/load-threshold             0
-/plugins/plugin-15/mode                       1
-/plugins/plugin-15/per-core                   0
-/plugins/plugin-15/per-core-spacing           1
-/plugins/plugin-15/size                       74
-/plugins/plugin-15/smt-issues                 0
-/plugins/plugin-15/smt-issues-color           <<UNSUPPORTED>>
-/plugins/plugin-15/smt-stats                  0
-/plugins/plugin-15/startup-notification       0
-/plugins/plugin-15/time-scale                 0
-/plugins/plugin-15/tracked-core               0
-/plugins/plugin-15/update-interval            2
 /plugins/plugin-17                            genmon
+/plugins/plugin-18                            genmon
+/plugins/plugin-19                            genmon
 /plugins/plugin-1/button-icon                 view-app-grid-symbolic
 /plugins/plugin-1/button-single-row           true
 /plugins/plugin-1/button-title                

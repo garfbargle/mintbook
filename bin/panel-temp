@@ -20,7 +20,13 @@ if   [ "$c" -ge 90 ]; then col='#ff5f56'
 elif [ "$c" -ge 80 ]; then col='#ffbd2e'
 else                       col='#ffffff'
 fi
-printf '<txt><span foreground="%s">%s°C</span></txt>\n' "$col" "$c"
+
+# Pad to a constant 3 digits with U+2007 FIGURE SPACE (exactly one digit wide)
+# and render with tabular figures, so the label never changes width.
+padded="$c"
+while [ "${#padded}" -lt 3 ]; do padded=$' '"$padded"; done
+
+printf '<txt><span font_features="tnum" foreground="%s">%s°C </span></txt>\n' "$col" "$padded"
 
 tip="CPU package ${c}°C"
 for h in /sys/class/hwmon/hwmon*; do

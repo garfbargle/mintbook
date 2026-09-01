@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""
+CPU sparkline for xfce4-genmon-plugin.
+
+Replaces xfce4-cpugraph-plugin, which draws hard vertical edges and offers no
+control over its tooltip. This renders an SVG with the leading and trailing
+edges faded out via a gradient mask, and builds a tooltip listing the top 5
+processes by *interval* CPU (computed from /proc deltas, not ps's
+since-process-start average, which is misleading for a live readout).
+"""
+import os, sys
+
+W, H      = 84, 26          # canvas; height sits inside the 52px bar
+HIST      = 46              # samples retained
+STATE     = os.path.expanduser('~/.cache/mintbook/cpu.state')
+FADE      = 0.16            # fraction of width faded at each edge
+NCPU      = os.cpu_count() or 1
+CLK       = os.sysconf('SC_CLK_TCK')
+
+def read_state():
+    try:
+        with open(STATE) as f:
+            parts = f.read().split('\n')
+        total = int(parts[0]); idle = int(parts[1])
+        hist  = [float(x) for x in parts[2].split(',') if x]
+        procs = {}
+        for ln in parts[3:]:
+            if not ln: continue
+            pid, t, name = ln.split(' ', 2)
+            procs[pid] = (int(t), name)
+        return total, idle, hist, procs
+    except Exception:
+        return None, None, [], {}
+
+def cpu_totals():
+    with open('/proc/stat') as f:
+        v = [int(x) for x in f.readline().split()[1:]]
+    idle = v[3] + (v[4] if len(v) > 4 else 0)
+    return sum(v), idle
+
+def proc_times():
+    out = {}
+    for pid in os.listdir('/proc'):
+        if not pid.isdigit(): continue
+        try:
+            with open(f'/proc/{pid}/stat') as f:
+                s = f.read()
+            name  = s[s.index('(')+1 : s.rindex(')')]
+            rest  = s[s.rindex(')')+2:].split()
+            out[pid] = (int(rest[11]) + int(rest[12]), name)   # utime + stime
+        except Exception:
+            continue
+    return out
+
+def area_path(hist):
+    if len(hist) < 2:
+        return None
+    n = len(hist)
+    step = W / (n - 1)
+    pts = []
+    for i, v in enumerate(hist):
+        x = i * step
+        y = H - (max(0.0, min(100.0, v)) / 100.0) * (H - 1) - 0.5
+        pts.append(f'{x:.1f} {y:.1f}')
+    return f'M0 {H} L' + ' L'.join(pts) + f' L{W} {H} Z'
+
+def render(hist, path_out):
+    d = area_path(hist)
+    body = '' if not d else (
+        f'  <g mask="url(#fade)">\n'
+        f'    <path d="{d}" fill="#ffffff" fill-opacity="0.82"/>\n'
+        f'  </g>\n')
+    svg = (
+f'''<svg width="{W}" height="{H}" viewBox="0 0 {W} {H}" xmlns="http://www.w3.org/2000/svg">
+ <defs>
+  <linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
+   <stop offset="0" stop-color="#fff" stop-opacity="0"/>
+   <stop offset="{FADE}" stop-color="#fff" stop-opacity="1"/>
+   <stop offset="{1-FADE}" stop-color="#fff" stop-opacity="1"/>
+   <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+  </linearGradient>
+  <mask id="fade"><rect width="{W}" height="{H}" fill="url(#g)"/></mask>
+ </defs>
+{body}</svg>
+''')
+    tmp = path_out + '.tmp'
+    with open(tmp, 'w') as f:
+        f.write(svg)
+    os.replace(tmp, path_out)
+
+def main():
+    out_svg = os.path.expanduser('~/.cache/mintbook/cpu.svg')
+    ptotal, pidle, hist, pprocs = read_state()
+    total, idle = cpu_totals()
+    procs = proc_times()
+
+    if ptotal is None or total <= ptotal:
+        pct, top = 0.0, []
+    else:
+        dt, di = total - ptotal, idle - pidle
+        pct = max(0.0, min(100.0, 100.0 * (dt - di) / dt))
+        top = []
+        for pid, (t, name) in procs.items():
+            pt = pprocs.get(pid)
+            if not pt: continue
+            d = t - pt[0]
+            if d > 0:
+                top.append((100.0 * d / dt * NCPU, name))
+        top.sort(reverse=True)
+        top = top[:5]
+
+    hist.append(pct)
+    hist = hist[-HIST:]
+    render(hist, out_svg)
+
+    with open(STATE + '.tmp', 'w') as f:
+        f.write(f'{total}\n{idle}\n' + ','.join(f'{v:.1f}' for v in hist) + '\n')
+        f.write('\n'.join(f'{p} {t} {n}' for p, (t, n) in procs.items()))
+    os.replace(STATE + '.tmp', STATE)
+
+    tip = f'CPU {pct:.0f}%'
+    if top:
+        tip += '\n' + '\n'.join(f'{n[:18]:<18} {v:5.1f}%' for v, n in top)
+    print(f'<img>{out_svg}</img>')
+    print(f'<tool>{tip}</tool>')
+    print('<click>gnome-system-monitor</click>')
+
+if __name__ == '__main__':
+    main()
