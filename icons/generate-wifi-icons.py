@@ -24,7 +24,7 @@ Re-run after any WhiteSur theme update, which will overwrite these files:
 import math, os
 
 SPAN   = 32.0            # half-angle of each arc, degrees
-THICK  = 2.1             # arc band thickness, in 16px design units
+THICK  = 2.8             # arc band thickness, in 16px design units
 RADII  = (5.5, 10.0, 14.5)
 CY     = 14.5            # arc origin, near the bottom of the box
 DOT    = 1.45
@@ -44,14 +44,14 @@ def svg(size, arcs_on):
     cx, cy = 8 * k, CY * k
     parts = []
     for i, ro in enumerate(RADII):
-        dim = '' if i < arcs_on else ' fill-opacity=".26"'
+        dim = '' if i < arcs_on else ' fill-opacity=".40"'
         parts.append(f'  <path d="{band(cx, cy, ro * k, THICK * k, SPAN)}"{dim}/>')
     parts.append(f'  <circle cx="{cx:.2f}" cy="{cy:.2f}" r="{DOT * k:.2f}"/>')
     return (f'<svg width="{size}" height="{size}" viewBox="0 0 {size} {size}" '
             f'version="1.1" xmlns="http://www.w3.org/2000/svg">\n'
             f' <g fill="#363636">\n' + '\n'.join(parts) + '\n </g>\n</svg>\n')
 
-LEVELS = {'00': 0, '25': 1, '50': 2, '75': 2, '100': 3}
+LEVELS = {'00': 0, '25': 1, '50': 2, '75': 3, '100': 3}
 NAMES  = {'00': 'none', '25': 'weak', '50': 'ok', '75': 'good', '100': 'excellent'}
 
 def main():
