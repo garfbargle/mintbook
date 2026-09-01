@@ -96,16 +96,20 @@ Plugin order (`plugin-ids`), left to right:
 | 1 | whiskermenu | `button-icon=view-app-grid-symbolic`, no title |
 | 7 | separator | `expand=true` — pushes everything right |
 | 8 | systray | "the rest" — currently just Claude's tray icon |
-| 19 | genmon | CPU sparkline, see below |
-| 17 | genmon | CPU temperature, see below |
-| 18 | genmon | Wi-Fi indicator, see below |
+| 10 | xapp-status-plugin | "the rest" — empty now; kept so any future XApp icon has a home |
+| 19 | genmon | CPU sparkline |
+| 17 | genmon | CPU temperature |
+| 20 | genmon | update manager |
+| 18 | genmon | Wi-Fi |
 | 12 | pulseaudio | volume |
-| 13 | clock | `%a %-d %b  %H:%M`, Inter 11, `digital-layout=3` (time only) |
-| 10 | xapp-status-plugin | update manager only, now that nm-applet is disabled |
 | 11 | power-manager-plugin | battery |
+| 13 | clock | `%a %-d %b  %H:%M`, Inter 11, `digital-layout=3` (time only) |
 
-Right-to-left this reads: **battery, update manager, date/time, speaker, wifi,
-temperature, CPU, then the rest** — which is the requested order.
+Right-to-left: **date/time, battery, volume, wifi, update manager, temperature, CPU,
+then the rest.** This follows the macOS convention — the clock is furthest right with
+the battery beside it, then volume, then Wi-Fi. Informational items (update, temp, CPU)
+sit inboard of the system status group, and anything unrecognised accumulates
+right-to-left from the far left of the group.
 
 **Reordering panel items:** XFCE has no macOS-style hold-a-key-and-drag. The
 equivalents are right-click any item → **Move** (then drag it along the bar), or
@@ -130,6 +134,10 @@ version gives:
   average, which is misleading for a live readout.
 - **Click opens System Monitor.**
 
+The tooltip is wrapped in `<span font_family="monospace">`. This is required, not
+cosmetic: GTK tooltips render in a proportional font, so space-padded columns do not
+line up without it.
+
 State (previous jiffies + history + per-process times) lives in
 `~/.cache/mintbook/cpu.state`, written via a temp file and `os.replace` so a
 half-written file is never read.
@@ -148,6 +156,31 @@ The label is **fixed-width**: the number is padded to three characters with U+20
 FIGURE SPACE (exactly one digit wide) and rendered with `font_features="tnum"`, so
 the reading never changes width as the value moves between 2 and 3 digits. Verified
 at a constant 38px for values from 7 to 100. Font is Inter 9.
+
+The reading is **smoothed with an EMA** (alpha 0.35) held in
+`~/.cache/mintbook/temp.state`. The raw sensor is instantaneous, and restarting the
+panel is itself a CPU burst, so the reading used to jump high and then drift back over
+~10s. State survives restarts, so the displayed value now eases rather than slamming.
+The underlying heat was real — this smooths the presentation, it does not hide a
+problem.
+
+### Update manager (`plugin-20`, genmon)
+
+Runs [`bin/panel-update`](bin/panel-update), icons from
+[`icons/generate-update-icons.py`](icons/generate-update-icons.py).
+
+Reads **`~/.linuxmint/mintupdate/updates.json`** — mintupdate's own 90-byte cache — so
+it never shells out to `mintupdate-cli`, which would hit apt metadata on every refresh.
+Click opens Update Manager. Polls every 30s.
+
+mintupdate's built-in tray icon is a 1px-thick ring that read far thinner than its
+neighbours, and being an XApp icon it was stuck at 20px. It is now hidden with
+`gsettings set com.linuxmint.updates hide-systray true`, and mintUpdate still runs in
+the background doing its normal update checks.
+
+> These icons use **strokes**, unlike the symbolic ones under `~/.icons`. That is safe
+> here because genmon shows them via `<img>` with no GTK recolouring — the fill-only
+> recolouring rule does not apply.
 
 ### Wi-Fi indicator (`plugin-18`, genmon)
 
@@ -255,6 +288,11 @@ System Monitor. The key is `in-terminal`, not the `InTerminal` string in the bin
 (value 500), but setting it changes nothing — GTK3 hardcodes the hover delay. Verified
 by comparing 120 vs 2000: tooltips appeared at the same moment under both. The panel
 tooltip delay is not configurable without patching GTK.
+
+**`hide-systray` needs mintUpdate restarted.** Setting
+`com.linuxmint.updates hide-systray true` does nothing until the running `mintUpdate`
+process is restarted (`mintupdate-launcher`); until then it keeps its XApp icon
+registered and you get two update icons.
 
 **Panel plugins re-append themselves.** Removing a plugin from `plugin-ids` is not
 enough — on restart the panel finds the orphaned `/plugins/plugin-N` config and adds it

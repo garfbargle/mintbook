@@ -15,6 +15,17 @@ done
 if [ -z "$t" ]; then echo "<txt>--</txt>"; exit 0; fi
 c=$(( t / 1000 ))
 
+# Smooth with an EMA (alpha 0.35) held in a state file. The raw sensor is
+# instantaneous, so restarting the panel - itself a CPU burst - made the
+# reading jump and then drift back. State persists across restarts, so the
+# displayed value eases instead of slamming.
+SF="$HOME/.cache/mintbook/temp.state"
+mkdir -p "$(dirname "$SF")"
+prev=$(cat "$SF" 2>/dev/null)
+case "$prev" in ''|*[!0-9]*) prev=$c ;; esac
+c=$(( (35 * c + 65 * prev) / 100 ))
+printf '%s' "$c" > "$SF" 
+
 # warn as the fanless Core M approaches its throttle point
 if   [ "$c" -ge 90 ]; then col='#ff5f56'
 elif [ "$c" -ge 80 ]; then col='#ffbd2e'

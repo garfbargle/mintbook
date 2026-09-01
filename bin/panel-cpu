@@ -10,7 +10,7 @@ since-process-start average, which is misleading for a live readout).
 """
 import os, sys
 
-W, H      = 84, 26          # canvas; height sits inside the 52px bar
+W, H      = 92, 36          # canvas; height sits inside the 52px bar
 HIST      = 46              # samples retained
 STATE     = os.path.expanduser('~/.cache/mintbook/cpu.state')
 FADE      = 0.16            # fraction of width faded at each edge
@@ -118,9 +118,11 @@ def main():
         f.write('\n'.join(f'{p} {t} {n}' for p, (t, n) in procs.items()))
     os.replace(STATE + '.tmp', STATE)
 
-    tip = f'CPU {pct:.0f}%'
-    if top:
-        tip += '\n' + '\n'.join(f'{n[:18]:<18} {v:5.1f}%' for v, n in top)
+    # Monospace, or the columns will not line up - GTK tooltips otherwise
+    # render in a proportional font and space-padding does nothing.
+    rows = ''.join(f'\n{n[:16]:<16}{v:>6.1f}%' for v, n in top)
+    tip = ('<span font_family="monospace">'
+           f'{"CPU":<16}{pct:>6.1f}%{rows}</span>')
     print(f'<img>{out_svg}</img>')
     print(f'<tool>{tip}</tool>')
     print('<click>gnome-system-monitor</click>')

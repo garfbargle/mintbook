@@ -44,6 +44,7 @@
 /plugins/plugin-1/show-button-icon            true
 /plugins/plugin-1/show-button-title           false
 /plugins/plugin-2                             showdesktop
+/plugins/plugin-20                            genmon
 /plugins/plugin-3                             launcher
 /plugins/plugin-3/items                       <<UNSUPPORTED>>
 /plugins/plugin-4                             launcher
