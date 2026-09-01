@@ -1,8 +1,9 @@
 # Audio — internal speakers
 
-**Status: UNSOLVED.** Headphone jack works. Internal speakers are silent and no
-software configuration change has fixed it. This document records the full
-investigation so it is not repeated from scratch.
+**Status: UNSOLVED, and the key question is now ANSWERED — negatively.** The
+out-of-tree driver runs cleanly on kernel 6.14 and correctly enables the amplifier,
+and the speakers are *still* silent. See [The verdict](#the-verdict). Headphone jack
+works.
 
 ---
 
@@ -230,12 +231,45 @@ an intermittent boot race that hits **both** kernels and has a fix; apply
 
 ---
 
-## The actual open question
+## The verdict
 
-Everything above is about *getting the driver to run*. The question it exists to
-answer is still unanswered:
+> **Does the MacBook8,1's amplifier respond to the A1534 init sequence?**
+> **No.** Tested 2026-09-01 on kernel 6.14.0-37.
 
-> **Does the MacBook8,1's amplifier respond to the A1534 init sequence at all?**
+The driver was built and installed on 6.14 and it **works as designed** — this is not
+a failed install:
+
+| Check | Result |
+|---|---|
+| Module loaded | `updates/dkms/snd-hda-codec-cirrus.ko.zst` |
+| Kernel crashes | **0** (the 7.0 oops is specific to the >= 6.17 `cs420x.c` path) |
+| **Amp GPIO** | **`IO[0]: enable=1, dir=1, data=1`** — asserted, where mainline left all six at 0 |
+| Speaker converter `0x0a` during playback | **`Power: D0`, `stream=1`** — powered and carrying audio |
+| Speaker pin `0x1d` | `Pin-ctls: 0x40 OUT` |
+| PipeWire | `Active Port: analog-output-speaker`, sink at 150%, unmuted |
+| ALSA `Master` / `PCM` / `Line Out` | 100%, all `[on]` |
+| `Auto-Mute Mode` | `Disabled` |
+| Headphone jack sense | not plugged, so speakers are the correct target |
+| **Audible output** | **none** |
+
+Every stage of the chain is correct and live, and no sound comes out. The 2015 model's
+amplifier therefore needs something the 2016/2017 sequence does not provide — a
+different enable line, or an init step beyond asserting GPIO 0.
+
+**This is the hard case.** The remaining paths, in order of cost:
+
+1. **Probe the other GPIOs.** The codec has six (`io=6`); the driver only drives GPIO 0.
+   Cheap and bounded. Needs `hda-verb` (`sudo apt install alsa-tools`) and root.
+   Modest odds — if the amp were a plain GPIO enable, GPIO 0 was the likely one.
+2. **Capture the real sequence from macOS.** macOS is installed on this same disk
+   (`nvme0n1p2`) and drives these speakers correctly. That is exactly how the 9,1/10,1
+   sequence in `patch_cirrus_a1534_setup.h` was produced. Large job, but the reference
+   implementation is right there.
+3. **Stop.** Headphone jack and USB-C audio both work.
+
+Keeping the driver installed on 6.14 is harmless — it does not crash and it does not
+make anything worse — but it does not currently buy anything either. It must **not** be
+installed for 7.0.
 
 If yes, this is solvable and worth real effort. If no, the 2015 model needs a
 different init than the 2016/2017 models — the genuinely hard case, meaning the
