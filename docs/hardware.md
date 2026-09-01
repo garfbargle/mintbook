@@ -25,7 +25,7 @@ What works, what does not, and what was measured. Regenerate the live parts with
 | **Internal speakers** | **Broken** | Unsolved, see [audio.md](audio.md) |
 | Headphone jack | **Working** | The analog path in the codec is healthy |
 | Microphone | Working | `Mic=0x18`, `Internal Mic=0x19` |
-| Keyboard / trackpad | **Working on 7.0, dead on 6.14** | Blocks the audio test, see [boot.md](boot.md) |
+| Keyboard / trackpad | **Intermittent — fixable** | Boot race, hits **both** kernels, see [input.md](input.md) |
 | Battery | Working | ~84% of design capacity |
 | Webcam | Untested | |
 | Secure Boot | Not supported | Unsigned DKMS modules load without signing |

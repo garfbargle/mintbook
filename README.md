@@ -26,9 +26,9 @@ Full detail and the live report: [docs/hardware.md](docs/hardware.md).
 | HiDPI scaling | **Done** — [docs/display.md](docs/display.md) |
 | Wi-Fi, headphones, battery, display | **Working** |
 | **Internal speakers** | **Unsolved** — [docs/audio.md](docs/audio.md) |
-| **Keyboard/trackpad on kernel 6.14** | **Broken** (fine on 7.0) — [docs/boot.md](docs/boot.md) |
+| **Keyboard/trackpad** | **Intermittent at boot — has a fix** — [docs/input.md](docs/input.md) |
 | **Bluetooth** | **No adapter present** |
-| OpenCore / boot chain | **Undocumented** — [docs/boot.md](docs/boot.md) |
+| Boot chain | **OpenCore loader; GRUB is inert** — [docs/boot.md](docs/boot.md) |
 
 ## Documentation
 
@@ -36,8 +36,9 @@ Read in this order if you are new to the machine:
 
 | Doc | Covers |
 |---|---|
+| [docs/input.md](docs/input.md) | **Read first.** The SPI keyboard/trackpad boot race — why input dies at random, and the fix |
 | [docs/hardware.md](docs/hardware.md) | What the machine is; per-device working/broken matrix; battery, thermals, toolchain |
-| [docs/boot.md](docs/boot.md) | Disk layout, dual-boot, GRUB, the two kernels, boot failure symptoms and recovery |
+| [docs/boot.md](docs/boot.md) | Disk layout, dual-boot, why GRUB is **not** in the boot path, the two kernels |
 | [docs/display.md](docs/display.md) | HiDPI scaling — why it is split between window scale and font DPI |
 | [docs/desktop.md](docs/desktop.md) | The macOS look: top bar, dock, Spotlight, WM, panel indicators, and its gotchas |
 | [docs/audio.md](docs/audio.md) | The CS4208 speaker investigation — full evidence, everything ruled out, what is left |
@@ -48,6 +49,7 @@ Read in this order if you are new to the machine:
 bin/                    scripts; mirrors ~/.local/bin/
   audio-diag            dump the full audio/codec state       (read-only)
   hw-report             live hardware status                  (read-only)
+  input-check           SPI keyboard/trackpad PIO-vs-DMA check (read-only)
   spotlight             Cmd+Space launcher toggle
   panel-cpu             genmon CPU sparkline
   panel-temp            genmon CPU temperature

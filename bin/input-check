@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# input-check - is the Apple SPI keyboard/trackpad on the working PIO path?
+# Read-only, no sudo. See docs/input.md.
+#   --history   survey every boot recorded in the journal
+set -uo pipefail
+
+verdict() { # $1=pio $2=timeouts $3=touchpad
+  if [ "$1" -eq 0 ] && [ "$2" -eq 0 ] && [ "$3" -eq 0 ]; then echo "no data"
+  elif [ "$1" -gt 0 ] && [ "$3" -gt 0 ] && [ "$2" -eq 0 ]; then echo "OK (PIO)"
+  elif [ "$2" -gt 0 ] || [ "$3" -eq 0 ];                  then echo "DEAD (DMA)"
+  else                                                         echo "unclear"; fi
+}
+
+scan() { # $1 = boot id or offset
+  local b=$1
+  local pio to tp
+  pio=$(journalctl -b "$b" -k --no-pager 2>/dev/null | grep -c "using PIO")
+  to=$(journalctl -b "$b" -k --no-pager 2>/dev/null | grep -c "SPI transfer timed out")
+  tp=$(journalctl -b "$b" -k --no-pager 2>/dev/null | grep -c "Apple SPI Touchpad")
+  echo "$pio $to $tp"
+}
+
+if [ "${1:-}" = "--history" ]; then
+  printf '%-4s %-10s %-5s %-9s %-9s %s\n' IDX KERNEL PIO TIMEOUTS TOUCHPAD RESULT
+  journalctl --list-boots --no-pager 2>/dev/null | awk 'NF>2 {print $1, $2}' | \
+  while read -r off id; do
+    case "$off" in ''|*[!0-9-]*) [ "${off#-}" = "$off" ] && [ "$off" != "0" ] && continue ;; esac
+    k=$(journalctl -b "$id" -k --no-pager 2>/dev/null \
+          | grep -m1 -oE 'Linux version [0-9]+\.[0-9]+\.[0-9]+-[0-9]+' | sed 's/Linux version //')
+    read -r pio to tp <<<"$(scan "$id")"
+    printf '%-4s %-10s %-5s %-9s %-9s %s\n' "$off" "${k:-?}" "$pio" "$to" "$tp" "$(verdict "$pio" "$to" "$tp")"
+  done
+  exit 0
+fi
+
+echo "kernel: $(uname -r)"
+read -r pio to tp <<<"$(scan 0)"
+echo "  'using PIO' lines ....... $pio   (want >0)"
+echo "  SPI transfer timeouts ... $to   (want 0)"
+echo "  Apple SPI Touchpad ...... $tp   (want >0)"
+echo "  verdict ................. $(verdict "$pio" "$to" "$tp")"
+echo
+echo "live input devices:"
+grep -E '^N: Name="Apple SPI' /proc/bus/input/devices 2>/dev/null | sed 's/^/  /' \
+  || echo "  (no Apple SPI devices present)"
+echo
+if [ -f /etc/modprobe.d/blacklist-dw-dmac.conf ]; then
+  echo "fix: /etc/modprobe.d/blacklist-dw-dmac.conf is INSTALLED"
+else
+  echo "fix: NOT installed - boots are a coin flip. See docs/input.md"
+fi
+lsmod | grep -q '^dw_dmac_pci' && echo "     (dw_dmac_pci is currently loaded)" \
+                               || echo "     (dw_dmac_pci not loaded - good)"

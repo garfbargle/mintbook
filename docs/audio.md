@@ -223,9 +223,10 @@ sudo cp linux-6.14.tar.xz /var/cache/macbook12-audio-driver/
 > `sudo ./install.cirrus.driver.sh -u` **deletes `/var/cache/macbook12-audio-driver/`
 > entirely**, tarball included. Re-stage it after every uninstall.
 
-**But this is currently blocked:** kernel 6.14 has no working keyboard or trackpad on
-this machine — see [boot.md](boot.md). The driver cannot be exercised there until
-input works.
+**This is no longer blocked.** 6.14 was previously believed to have no working keyboard
+or trackpad. That was wrong — it was a sample of two unlucky boots. The input failure is
+an intermittent boot race that hits **both** kernels and has a fix; apply
+[input.md](input.md) first, then 6.14 is a perfectly usable place to run this test.
 
 ---
 
@@ -237,9 +238,14 @@ answer is still unanswered:
 > **Does the MacBook8,1's amplifier respond to the A1534 init sequence at all?**
 
 If yes, this is solvable and worth real effort. If no, the 2015 model needs a
-different init than the 2016/2017 models, and that is the genuinely hard case —
-it would mean reverse-engineering the sequence without a macOS install to capture
-from.
+different init than the 2016/2017 models — the genuinely hard case, meaning the
+sequence has to be reverse-engineered.
+
+**That is not hopeless here: macOS is still installed** on this machine
+(`nvme0n1p2`, 159 GB APFS — see [boot.md](boot.md)). macOS drives these speakers
+correctly, so the working init sequence can in principle be captured from it. That is
+exactly how the 9,1/10,1 sequence in `patch_cirrus_a1534_setup.h` was produced. It is
+a large job, but the reference implementation is sitting on the same disk.
 
 Do not invest in fixing the 7.0 ABI problem until this question is answered, because
 a cleanly-initialising driver that still produces no sound is worth nothing.
