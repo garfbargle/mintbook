@@ -1,0 +1,20 @@
+net.launchpad.plank.dock.settings alignment 'center'
+net.launchpad.plank.dock.settings auto-pinning false
+net.launchpad.plank.dock.settings current-workspace-only false
+net.launchpad.plank.dock.settings dock-items ['01-thunar.dockitem', 'google-chrome.dockitem', '03-terminal.dockitem', '04-claude.dockitem', '05-mintinstall.dockitem', '06-settings.dockitem']
+net.launchpad.plank.dock.settings hide-delay 100
+net.launchpad.plank.dock.settings hide-mode 'intelligent'
+net.launchpad.plank.dock.settings icon-size 80
+net.launchpad.plank.dock.settings items-alignment 'center'
+net.launchpad.plank.dock.settings lock-items false
+net.launchpad.plank.dock.settings monitor ''
+net.launchpad.plank.dock.settings offset 0
+net.launchpad.plank.dock.settings pinned-only false
+net.launchpad.plank.dock.settings position 'bottom'
+net.launchpad.plank.dock.settings pressure-reveal false
+net.launchpad.plank.dock.settings show-dock-item false
+net.launchpad.plank.dock.settings theme 'WhiteSur'
+net.launchpad.plank.dock.settings tooltips-enabled true
+net.launchpad.plank.dock.settings unhide-delay 100
+net.launchpad.plank.dock.settings zoom-enabled true
+net.launchpad.plank.dock.settings zoom-percent 150

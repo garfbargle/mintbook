@@ -1,0 +1,16 @@
+configuration {
+    modes:                  "drun,run";
+    show-icons:             true;
+    icon-theme:             "WhiteSur-light";
+    drun-display-format:    "{name}";
+    display-drun:           "⌕";
+    display-run:            "";
+    terminal:               "xfce4-terminal";
+    drun-match-fields:      "name,generic,exec,categories,keywords";
+    matching:               "fuzzy";
+    sort:                   true;
+    sorting-method:         "fzf";
+    kb-cancel:              "Escape,Super+space";
+    kb-row-up:              "Up,Control+p";
+    kb-row-down:            "Down,Control+n";
+}

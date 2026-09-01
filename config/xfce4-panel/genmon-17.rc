@@ -1,0 +1,8 @@
+Command=/home/cobo/.local/bin/panel-temp
+UpdateInterval=5000
+Text=
+Font=Inter 11
+UseLabel=0
+SingleRow=1
+UpdatePeriod=30000
+

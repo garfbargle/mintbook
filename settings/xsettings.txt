@@ -1,0 +1,18 @@
+/Gdk/WindowScalingFactor  1
+/Gtk/ButtonImages         false
+/Gtk/CursorThemeName      Bibata-Modern-Classic
+/Gtk/CursorThemeSize      40
+/Gtk/DecorationLayout     close,minimize,maximize:
+/Gtk/DialogsUseHeader     false
+/Gtk/FontName             Inter 10
+/Gtk/MenuImages           true
+/Gtk/MonospaceFontName    Monospace 10
+/Gtk/TitlebarMiddleClick  lower
+/Net/DoubleClickTime      400
+/Net/IconThemeName        WhiteSur-light
+/Net/ThemeName            WhiteSur-Light
+/Xfce/SyncThemes          true
+/Xft/Antialias            1
+/Xft/DPI                  168
+/Xft/HintStyle            hintslight
+/Xft/RGBA                 rgb

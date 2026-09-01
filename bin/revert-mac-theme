@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Undo the macOS-style XFCE customisation. Restores config from /home/cobo/mac-mint-backup-20260831-224309
+set -e
+BK="/home/cobo/mac-mint-backup-20260831-224309"
+[ -f "$BK/xfce4-config.tar.gz" ] || { echo "Backup missing: $BK"; exit 1; }
+echo "Stopping dock + panel..."
+pkill plank 2>/dev/null || true
+rm -f ~/.config/autostart/plank.desktop
+xfce4-panel -q 2>/dev/null || true
+sleep 2
+echo "Restoring XFCE config..."
+pkill xfconfd 2>/dev/null || true
+sleep 1
+tar xzf "$BK/xfce4-config.tar.gz" -C ~/.config
+sleep 1
+echo "Restarting..."
+nohup xfce4-panel >/dev/null 2>&1 &
+sleep 3
+nohup xfwm4 --replace >/dev/null 2>&1 &
+echo "Reverted. Themes remain in ~/.themes and ~/.icons (delete manually if unwanted)."

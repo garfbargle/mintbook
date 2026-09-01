@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# CPU package temperature for xfce4-genmon-plugin.
+# Finds coretemp by name (hwmon numbering is not stable across boots).
+t=""
+for h in /sys/class/hwmon/hwmon*; do
+    [ "$(cat "$h/name" 2>/dev/null)" = "coretemp" ] || continue
+    for f in "$h"/temp*_input; do
+        [ -e "$f" ] || continue
+        case "$(cat "${f%_input}_label" 2>/dev/null)" in
+            Package*) t=$(cat "$f" 2>/dev/null) ;;
+        esac
+    done
+    [ -n "$t" ] || t=$(cat "$h/temp1_input" 2>/dev/null)
+done
+if [ -z "$t" ]; then echo "<txt>--</txt>"; exit 0; fi
+c=$(( t / 1000 ))
+
+# warn as the fanless Core M approaches its throttle point
+if   [ "$c" -ge 90 ]; then col='#ff5f56'
+elif [ "$c" -ge 80 ]; then col='#ffbd2e'
+else                       col='#ffffff'
+fi
+printf '<txt><span foreground="%s">%s°C</span></txt>\n' "$col" "$c"
+
+tip="CPU package ${c}°C"
+for h in /sys/class/hwmon/hwmon*; do
+    n=$(cat "$h/name" 2>/dev/null)
+    case "$n" in
+        pch_*) tip="$tip
+PCH $(( $(cat "$h/temp1_input" 2>/dev/null) / 1000 ))°C" ;;
+        nvme)  tip="$tip
+SSD $(( $(cat "$h/temp1_input" 2>/dev/null) / 1000 ))°C" ;;
+    esac
+done
+printf '<tool>%s</tool>\n' "$tip"

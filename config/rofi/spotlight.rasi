@@ -1,0 +1,89 @@
+/* macOS Spotlight-style rofi theme — tuned for 2304x1440 @ Xft.dpi 168 */
+
+* {
+    font:                        "Inter 13";
+    bg:                          rgba(28, 28, 30, 88%);
+    bg-alt:                      rgba(255, 255, 255, 8%);
+    fg:                          #f2f2f7ff;
+    fg-dim:                      rgba(242, 242, 247, 55%);
+    accent:                      rgba(255, 255, 255, 14%);
+    background-color:            transparent;
+    text-color:                  @fg;
+}
+
+window {
+    transparency:                "real";
+    location:                    north;
+    anchor:                      north;
+    y-offset:                    14%;
+    width:                       46%;
+    border-radius:               16px;
+    background-color:            @bg;
+    children:                    [ mainbox ];
+}
+
+mainbox {
+    padding:                     0px;
+    children:                    [ inputbar, listview ];
+}
+
+inputbar {
+    padding:                     18px 24px;
+    spacing:                     16px;
+    children:                    [ prompt, entry ];
+}
+
+prompt {
+    enabled:                     true;
+    text-color:                  @fg-dim;
+    font:                        "Noto Sans Symbols 26";
+    str:                         "⌕";
+    vertical-align:              0.5;
+}
+
+entry {
+    placeholder:                 "Spotlight Search";
+    placeholder-color:           @fg-dim;
+    font:                        "Inter 17";
+    vertical-align:              0.5;
+    cursor:                      text;
+}
+
+listview {
+    columns:                     1;
+    lines:                       8;
+    fixed-height:                false;
+    scrollbar:                   false;
+    padding:                     6px 8px 10px 8px;
+    spacing:                     2px;
+    border:                      1px 0px 0px 0px;
+    border-color:                @accent;
+}
+
+element {
+    padding:                     10px 16px;
+    spacing:                     14px;
+    border-radius:               8px;
+    children:                    [ element-icon, element-text ];
+}
+
+element normal.normal   { text-color: @fg; }
+element alternate.normal{ text-color: @fg; }
+
+element selected.normal {
+    background-color:            rgba(255, 255, 255, 14%);
+    text-color:                  @fg;
+}
+
+element-icon {
+    size:                        34px;
+    vertical-align:              0.5;
+}
+
+element-text {
+    vertical-align:              0.5;
+    highlight:                   bold;
+}
+
+message { padding: 10px 20px; }
+textbox { text-color: @fg-dim; }

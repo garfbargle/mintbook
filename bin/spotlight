@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Toggle a Spotlight-style rofi launcher
+if pgrep -x rofi > /dev/null; then
+    pkill -x rofi
+else
+    exec rofi -show drun -theme "$HOME/.config/rofi/spotlight.rasi"
+fi
