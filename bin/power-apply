@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# mintbook-power-apply — CPU policy for MacBook8,1.
+# Must run as root. Idempotent. See docs/hardware.md.
+#
+#   mintbook-power-apply              # auto from ADP1 (udev / boot)
+#   mintbook-power-apply auto
+#   mintbook-power-apply power-saver  # EPB=15, max_perf_pct=70
+#   mintbook-power-apply balanced     # EPB=6,  max_perf_pct=100
+#   mintbook-power-apply performance  # PPD performance, max_perf_pct=100
+#
+# PPD's profile alone does not cap frequency on this Broadwell-Y chip.
+set -euo pipefail
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "run as root: pkexec $0 [auto|power-saver|balanced|performance]" >&2
+  exit 1
+fi
+
+ADP=/sys/class/power_supply/ADP1/online
+PSTATE=/sys/devices/system/cpu/intel_pstate
+MODE=${1:-auto}
+
+online=1
+if [ -r "$ADP" ]; then
+  online=$(cat "$ADP")
+fi
+
+case "$MODE" in
+  auto|'')
+    if [ "$online" = 1 ]; then
+      profile=balanced
+      pct=100
+    else
+      profile=power-saver
+      pct=70
+    fi
+    MODE=auto
+    ;;
+  power-saver)
+    profile=power-saver
+    pct=70
+    ;;
+  balanced)
+    profile=balanced
+    pct=100
+    ;;
+  performance)
+    profile=performance
+    pct=100
+    ;;
+  *)
+    echo "usage: $0 [auto|power-saver|balanced|performance]" >&2
+    exit 2
+    ;;
+esac
+
+if [ -w "$PSTATE/max_perf_pct" ]; then
+  echo "$pct" > "$PSTATE/max_perf_pct"
+fi
+
+if command -v powerprofilesctl >/dev/null 2>&1; then
+  powerprofilesctl set "$profile" >/dev/null 2>&1 || true
+fi
+
+epb='?'
+[ -r /sys/devices/system/cpu/cpu0/power/energy_perf_bias ] && \
+  epb=$(cat /sys/devices/system/cpu/cpu0/power/energy_perf_bias)
+got_pct='?'
+[ -r "$PSTATE/max_perf_pct" ] && got_pct=$(cat "$PSTATE/max_perf_pct")
+
+logger -t mintbook-power \
+  "mode=$MODE ac=$online profile=$profile max_perf_pct=$got_pct epb=$epb"
+printf 'mode=%s ac=%s profile=%s max_perf_pct=%s epb=%s\n' \
+  "$MODE" "$online" "$profile" "$got_pct" "$epb"

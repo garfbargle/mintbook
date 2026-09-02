@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# power-install — udev + systemd hook so mintbook-power-apply runs at boot
+# and when the charger is plugged/unplugged. Must be run as root.
+# See docs/hardware.md.
+set -euo pipefail
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "run as root: pkexec $0" >&2
+  exit 1
+fi
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+APPLY_SRC="$ROOT/bin/power-apply"
+APPLY_DST=/usr/local/sbin/mintbook-power-apply
+UDEV_SRC="$ROOT/config/udev/99-mintbook-power.rules"
+UDEV_DST=/etc/udev/rules.d/99-mintbook-power.rules
+UNIT_SRC="$ROOT/config/systemd/mintbook-power.service"
+UNIT_DST=/etc/systemd/system/mintbook-power.service
+POLKIT_SRC="$ROOT/config/polkit/org.mintbook.power.policy"
+POLKIT_DST=/usr/share/polkit-1/actions/org.mintbook.power.policy
+
+for f in "$APPLY_SRC" "$UDEV_SRC" "$UNIT_SRC" "$POLKIT_SRC"; do
+  if [ ! -f "$f" ]; then
+    echo "missing $f" >&2
+    exit 1
+  fi
+done
+
+echo "==> $APPLY_DST"
+install -dm755 /usr/local/sbin
+install -m755 "$APPLY_SRC" "$APPLY_DST"
+
+echo "==> $UDEV_DST"
+install -m644 "$UDEV_SRC" "$UDEV_DST"
+udevadm control --reload-rules
+
+echo "==> $UNIT_DST"
+install -m644 "$UNIT_SRC" "$UNIT_DST"
+systemctl daemon-reload
+systemctl enable mintbook-power.service
+systemctl start mintbook-power.service
+
+echo "==> $POLKIT_DST"
+install -m644 "$POLKIT_SRC" "$POLKIT_DST"
+
+echo
+echo "applied. check with: $ROOT/bin/power-check"
+echo "undo: systemctl disable --now mintbook-power.service"
+echo "      rm -f $APPLY_DST $UDEV_DST $UNIT_DST $POLKIT_DST"
+echo "      echo 100 > /sys/devices/system/cpu/intel_pstate/max_perf_pct"
+echo "      powerprofilesctl set balanced"

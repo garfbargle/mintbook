@@ -53,14 +53,22 @@ echo "(speakers work on 7.0 via macbook12-audio DKMS — see docs/audio.md)"
 
 hr "BATTERY"
 upower -i /org/freedesktop/UPower/devices/battery_BAT0 2>/dev/null \
-  | grep -E 'state|percentage|capacity|energy-full' \
+  | grep -E 'state|percentage|capacity|energy-full|energy-rate' \
   | sed 's/^ */  /'
 echo "  cycles: $(cat /sys/class/power_supply/BAT0/cycle_count 2>/dev/null)"
 echo "  (percentage = charge; capacity = health)"
 echo "  kbd backlight: $(cat /sys/class/leds/spi::kbd_backlight/brightness 2>/dev/null)/$(cat /sys/class/leds/spi::kbd_backlight/max_brightness 2>/dev/null)"
+echo "  display backlight: $(cat /sys/class/backlight/acpi_video0/actual_brightness 2>/dev/null)/$(cat /sys/class/backlight/acpi_video0/max_brightness 2>/dev/null)"
+
+hr "POWER"
+echo "  ac(ADP1): $(cat /sys/class/power_supply/ADP1/online 2>/dev/null || echo ?)"
+echo "  profile: $(powerprofilesctl get 2>/dev/null || echo unavailable)"
+echo "  intel_pstate: $(cat /sys/devices/system/cpu/intel_pstate/status 2>/dev/null)  max_perf_pct=$(cat /sys/devices/system/cpu/intel_pstate/max_perf_pct 2>/dev/null)  no_turbo=$(cat /sys/devices/system/cpu/intel_pstate/no_turbo 2>/dev/null)"
+echo "  EPB: $(cat /sys/devices/system/cpu/cpu0/power/energy_perf_bias 2>/dev/null || echo none)"
+echo "  (battery: power-saver + max_perf_pct=70; AC: balanced + 100 — see docs/hardware.md)"
 
 hr "THERMALS"
-sensors 2>/dev/null | grep -E 'Core [0-9]|temp1' | head -5 || echo "(lm-sensors unavailable)"
+sensors 2>/dev/null | grep -E 'Package id|Core [0-9]|pch_wildcat|Composite' | head -8 || echo "(lm-sensors unavailable)"
 
 hr "KERNELS INSTALLED"
 ls /boot/vmlinuz-* 2>/dev/null | sed 's|.*vmlinuz-|  |'

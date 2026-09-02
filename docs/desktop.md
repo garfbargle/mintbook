@@ -78,15 +78,17 @@ Plugin order (`plugin-ids`), left to right:
 | 18 | genmon | Wi-Fi |
 | 21 | genmon | Bluetooth |
 | 12 | pulseaudio | volume |
+| 22 | genmon | power profile (Power Saver / Balanced / Performance) |
 | 11 | power-manager-plugin | battery |
 | 13 | clock | ` %a %-d %b  %H:%M  `, Inter 11, `digital-layout=3` (time only) |
 
-Right-to-left: **date/time, battery, volume, bluetooth, wifi, temperature, CPU,
-then the rest.** This follows the macOS convention — the clock is furthest right with
-the battery beside it, then volume, then Wi-Fi / Bluetooth. Informational items
-(temp, CPU) sit inboard of the system status group, and anything unrecognised
-accumulates right-to-left from the far left of the group. mintUpdate's own icon
-appears in the xapp group (plugin-10) only when there are updates.
+Right-to-left: **date/time, battery, power profile, volume, bluetooth, wifi,
+temperature, CPU, then the rest.** This follows the macOS convention — the clock
+is furthest right with the battery beside it, then the power mode, then volume,
+then Wi-Fi / Bluetooth. Informational items (temp, CPU) sit inboard of the system
+status group, and anything unrecognised accumulates right-to-left from the far
+left of the group. mintUpdate's own icon appears in the xapp group (plugin-10)
+only when there are updates.
 
 **Reordering panel items:** XFCE has no macOS-style hold-a-key-and-drag. The
 equivalents are right-click any item → **Move** (then drag it along the bar), or
@@ -201,6 +203,30 @@ full white when on; tooltip lists connected devices.
 
 blueman-applet stays running (pairing / secret agent). Only its tray icon is hidden,
 via `/plugins/plugin-8/hidden-items = blueman`.
+
+### Power profile (`plugin-22`, genmon)
+
+xfce4-power-manager **4.18 has no power-profiles-daemon UI** — the settings dialog
+is lid / sleep / brightness, and the battery plugin is charge only. The switcher
+is therefore another genmon icon, immediately left of the battery, same 30px
+canvas as wifi/bt.
+
+Runs [`bin/panel-power`](../bin/panel-power). Click opens [`bin/power-menu`](../bin/power-menu),
+an override-redirect popup (a Gtk.Menu dies immediately — genmon clicks have no
+Gdk event, so xfwm4 rejects the grab). **Power Saver / Balanced / Performance.**
+That calls `pkexec /usr/local/sbin/mintbook-power-apply <profile>` so the
+intel_pstate cap moves with the profile (Saver = 70%, the others = 100%). Polkit
+`allow_active=yes` so an active session is not prompted. Plug or unplug still
+runs the automatic AC/battery policy afterwards.
+
+The tooltip is the **current** profile and a one-line hint (what that profile
+does to the CPU), not two different modes. "Turbo allowed" means the 2.4 GHz
+ceiling is unlocked; it is not a fourth profile.
+
+Icons from [`icons/generate-power-genmon.py`](../icons/generate-power-genmon.py)
+(Adwaita `power-profile-*-symbolic` paths, baked `#ffffff`).
+
+CLI is still `powerprofilesctl get` / `pkexec mintbook-power-apply …`.
 
 ### Dock (Plank)
 
@@ -455,5 +481,7 @@ WM. It does **not** revert the icon theme files — originals for those are in
 - **Claude's tray icon** is a black XEmbed bitmap designed for a light menu bar, so it
   reads as a hole on the dark bar. User said to leave it. The real fix would be
   switching the bar to light with WhiteSur's `--black` panel-font option.
-- **Thermals.** The machine was reading 83-88°C during this work. Worth investigating
-  separately if it persists at idle.
+- ~~**Thermals / battery.**~~ **Done 2026-09-01.** Fanless; unrestricted Electron still
+  82–93 °C on AC (full turbo, by design). On battery: `power-saver` +
+  `max_perf_pct=70` (~77 °C / ~5.8 W package under the same load).
+  [hardware.md](hardware.md) Thermals. Do not add picom.

@@ -1,0 +1,4 @@
+# MacBook8,1: re-apply AC/battery CPU policy when the charger appears or
+# disappears. The oneshot reads ADP1/online itself. See docs/hardware.md.
+# Undo: delete this file and mintbook-power.service.
+SUBSYSTEM=="power_supply", ACTION=="change", ENV{POWER_SUPPLY_NAME}=="ADP1", TAG+="systemd", ENV{SYSTEMD_WANTS}="mintbook-power.service"

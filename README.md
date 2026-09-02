@@ -28,6 +28,7 @@ Full detail and the live report: [docs/hardware.md](docs/hardware.md).
 | **Keyboard/trackpad** | **Working** — DMA blacklist + DWT quirk; log out once for DWT — [docs/input.md](docs/input.md) |
 | **Bluetooth** | **Working on 7.0** — [docs/bluetooth.md](docs/bluetooth.md) |
 | **Webcam** | **Working on 7.0** — [docs/camera.md](docs/camera.md) |
+| Thermals / battery policy | **Done** — power-saver + 70% P-state on battery; [docs/hardware.md](docs/hardware.md) |
 | Boot chain | **OpenCore loader; GRUB is inert** — [docs/boot.md](docs/boot.md) |
 
 ## Documentation
@@ -44,6 +45,7 @@ Read in this order if you are new to the machine:
 | [docs/audio.md](docs/audio.md) | CS4208 speakers — what was ruled out, the 7.0 DKMS fix, PipeWire routing |
 | [docs/camera.md](docs/camera.md) | FaceTime HD (`14e4:1570`) — 848×588 sensor, DKMS, `intel_iommu=off` |
 | [docs/bluetooth.md](docs/bluetooth.md) | BCM4350 UART — SSDC serdev conflict, DSDT override on the 7.0 initrd; **working** |
+| [docs/session-battery-thermals.md](docs/session-battery-thermals.md) | Heat/battery session — **done**; kept as the prompt |
 
 ## Repo layout
 
@@ -69,15 +71,23 @@ bin/                    scripts; mirrors ~/.local/bin/
   panel-temp            genmon CPU temperature
   panel-wifi            genmon Wi-Fi indicator
   panel-bt              genmon Bluetooth indicator
+  power-check           AC/battery CPU policy status (read-only)
+  power-apply           set PPD + max_perf_pct (root; auto or a profile)
+  power-install         udev + systemd + polkit for power-apply (root)
+  power-menu            panel click: override-redirect power-profile popup
+  power-probe           RAPL / no_turbo experiment; restores (root)
+  panel-power           genmon power-profile icon
   revert-mac-theme      restore XFCE config from the backup
 config/initramfs/       post-update hook that prepends the BT DSDT override
 config/libinput/        local-overrides.quirks (DWT / palm size hint)
-config/systemd/         zram-generator.conf (compressed swap)
+config/systemd/         zram-generator.conf; mintbook-power.service
+config/udev/            99-mintbook-power.rules (ADP1 → power-apply)
+config/polkit/          org.mintbook.power.policy (panel pkexec, no password)
 config/pipewire/        WP 0.4 raw-speaker adapter (copy to ~/.config/pipewire/pipewire.conf.d/)
 config/plank/           dock launcher definitions
 config/rofi/            rofi config + Spotlight theme
 config/xfce4-panel/     genmon rc files (genmon does NOT use xfconf)
-icons/                  icon generators (wifi, bluetooth)
+icons/                  icon generators (wifi, bluetooth, power profile)
 settings/               xfconf + dconf dumps (reference snapshots)
 camera-test/            local FaceTime HD browser preview (bin/camera-test)
 docs/                   see above

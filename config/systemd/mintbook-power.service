@@ -1,0 +1,17 @@
+# MacBook8,1 AC/battery CPU policy. Installed to
+# /etc/systemd/system/mintbook-power.service. See docs/hardware.md.
+#
+# Type=oneshot with no RemainAfterExit so a udev SYSTEMD_WANTS on charger
+# change will run it again. Undo: systemctl disable --now this unit and
+# delete the file.
+[Unit]
+Description=mintbook MacBook8,1 AC/battery power policy
+After=power-profiles-daemon.service
+Wants=power-profiles-daemon.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/mintbook-power-apply
+
+[Install]
+WantedBy=multi-user.target

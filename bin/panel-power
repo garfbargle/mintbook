@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+"""Power-profile indicator for xfce4-genmon-plugin.
+
+xfce4-power-manager 4.18 has no power-profiles-daemon UI. The battery plugin
+is charge only. Click opens a menu (bin/power-menu) that sets PPD + the
+intel_pstate cap. See docs/hardware.md and docs/desktop.md.
+"""
+import os
+import subprocess
+import sys
+
+DIR = os.path.expanduser('~/.local/share/mintbook/power')
+MENU = os.path.expanduser('~/.local/bin/power-menu')
+
+LABELS = {
+    'power-saver': 'Power Saver',
+    'balanced': 'Balanced',
+    'performance': 'Performance',
+}
+HINTS = {
+    'power-saver': 'Battery default — CPU capped ~1.6 GHz',
+    'balanced': 'AC default — turbo allowed',
+    'performance': 'Prefer speed — turbo allowed',
+}
+
+
+def profile():
+    try:
+        out = subprocess.check_output(
+            ['powerprofilesctl', 'get'], text=True, timeout=2)
+        p = out.strip()
+        return p if p in LABELS else 'balanced'
+    except Exception:
+        return 'balanced'
+
+
+def main():
+    p = profile()
+    print(f'<click>{MENU}</click>')
+    print(f'<iconclick>{MENU}</iconclick>')
+    print(f'<img>{DIR}/{p}.svg</img>')
+    ac = 'unknown'
+    try:
+        with open('/sys/class/power_supply/ADP1/online') as f:
+            ac = 'plugged in' if f.read().strip() == '1' else 'on battery'
+    except OSError:
+        pass
+    print(
+        f'<tool>{LABELS[p]} ({ac})\n{HINTS[p]}\n'
+        f'Click to choose a profile</tool>'
+    )
+
+
+if __name__ == '__main__':
+    main()
+    sys.exit(0)

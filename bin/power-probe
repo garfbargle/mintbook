@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# power-probe — root-only thermal levers on MacBook8,1. Writes sysfs, restores
+# on exit. Log: /tmp/mintbook-power-probe.log
+set -euo pipefail
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "run as root: pkexec $0" >&2
+  exit 1
+fi
+
+LOG=/tmp/mintbook-power-probe.log
+RAPL=/sys/class/powercap/intel-rapl:0
+PSTATE=/sys/devices/system/cpu/intel_pstate
+exec > >(tee "$LOG") 2>&1
+
+pkg_temp() {
+  for h in /sys/class/hwmon/hwmon*; do
+    [ "$(cat "$h/name" 2>/dev/null || true)" = coretemp ] || continue
+    for t in "$h"/temp*_label; do
+      [ "$(cat "$t")" = "Package id 0" ] || continue
+      awk '{printf "%.0f", $1/1000}' "${t%_label}_input"
+      return
+    done
+  done
+  echo '?'
+}
+
+mhz() {
+  awk -F: '/cpu MHz/{s+=$2; n++} END{if(n) printf "%.0f", s/n; else print "?"}' /proc/cpuinfo
+}
+
+rapl_w() {
+  local t0 t1
+  t0=$(cat "$RAPL/energy_uj")
+  sleep 4
+  t1=$(cat "$RAPL/energy_uj")
+  awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.2f", (b-a)/4/1000000}'
+}
+
+sample() {
+  local label=$1
+  local watts freq temp pl1 turbo
+  watts=$(rapl_w)
+  freq=$(mhz)
+  temp=$(pkg_temp)
+  pl1=$(cat "$RAPL/constraint_0_power_limit_uw")
+  turbo=$(cat "$PSTATE/no_turbo")
+  printf '%s  pkg=%sC  rapl=%sW  avgMHz=%s  pl1_uw=%s  no_turbo=%s  load=%s\n' \
+    "$label" "$temp" "$watts" "$freq" "$pl1" "$turbo" "$(cut -d' ' -f1-3 /proc/loadavg)"
+}
+
+ORIG_PL1=$(cat "$RAPL/constraint_0_power_limit_uw")
+ORIG_PL2=$(cat "$RAPL/constraint_1_power_limit_uw")
+ORIG_WIN=$(cat "$RAPL/constraint_0_time_window_us")
+ORIG_TURBO=$(cat "$PSTATE/no_turbo")
+ORIG_STATUS=$(cat "$PSTATE/status")
+
+restore() {
+  echo "$ORIG_PL1" > "$RAPL/constraint_0_power_limit_uw" 2>/dev/null || true
+  echo "$ORIG_PL2" > "$RAPL/constraint_1_power_limit_uw" 2>/dev/null || true
+  echo "$ORIG_WIN" > "$RAPL/constraint_0_time_window_us" 2>/dev/null || true
+  echo "$ORIG_TURBO" > "$PSTATE/no_turbo" 2>/dev/null || true
+  echo "restored pl1=$ORIG_PL1 pl2=$ORIG_PL2 win=$ORIG_WIN no_turbo=$ORIG_TURBO"
+}
+trap restore EXIT
+
+echo "=== mintbook power-probe $(date -Iseconds) ==="
+echo "orig pl1=$ORIG_PL1 pl2=$ORIG_PL2 win=$ORIG_WIN no_turbo=$ORIG_TURBO pstate=$ORIG_STATUS"
+echo "profile=$(powerprofilesctl get 2>/dev/null || echo '?')"
+echo
+
+echo "-- baseline (no sysfs change) --"
+sample baseline
+
+set_pl() {
+  local uw=$1
+  if ! echo "$uw" > "$RAPL/constraint_0_power_limit_uw"; then
+    echo "FAIL writing PL1=$uw"
+    return 1
+  fi
+  echo "PL1 now $(cat "$RAPL/constraint_0_power_limit_uw") (wanted $uw)"
+}
+
+echo
+echo "-- PL1 7W --"
+set_pl 7000000 || true
+sleep 25
+sample pl1_7w
+
+echo
+echo "-- PL1 5W --"
+set_pl 5000000 || true
+sleep 25
+sample pl1_5w
+
+echo
+echo "-- PL1 restored, no_turbo=1 --"
+echo "$ORIG_PL1" > "$RAPL/constraint_0_power_limit_uw"
+echo 1 > "$PSTATE/no_turbo"
+echo "no_turbo=$(cat "$PSTATE/no_turbo") pl1=$(cat "$RAPL/constraint_0_power_limit_uw")"
+sleep 25
+sample no_turbo
+
+echo
+echo "-- no_turbo=1 + PL1 7W --"
+set_pl 7000000 || true
+sleep 20
+sample turbo_off_pl1_7w
+
+echo
+echo "done. trap will restore RAPL and no_turbo."

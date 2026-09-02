@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# power-check — read-only AC/battery policy status. No sudo.
+# See docs/hardware.md.
+set -uo pipefail
+
+PSTATE=/sys/devices/system/cpu/intel_pstate
+
+printf 'ac(ADP1):          %s\n' "$(cat /sys/class/power_supply/ADP1/online 2>/dev/null || echo missing)"
+printf 'bat status:        %s\n' "$(cat /sys/class/power_supply/BAT0/status 2>/dev/null || echo missing)"
+printf 'PPD profile:       %s\n' "$(powerprofilesctl get 2>/dev/null || echo unavailable)"
+printf 'intel_pstate:      %s\n' "$(cat $PSTATE/status 2>/dev/null || echo missing)"
+printf 'max_perf_pct:      %s\n' "$(cat $PSTATE/max_perf_pct 2>/dev/null || echo missing)"
+printf 'no_turbo:          %s\n' "$(cat $PSTATE/no_turbo 2>/dev/null || echo missing)"
+printf 'governor/driver:   %s / %s\n' \
+  "$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo ?)" \
+  "$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_driver 2>/dev/null || echo ?)"
+printf 'EPB (cpu0):        %s\n' \
+  "$(cat /sys/devices/system/cpu/cpu0/power/energy_perf_bias 2>/dev/null || echo none)"
+printf 'scaling_max_freq:  %s\n' \
+  "$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq 2>/dev/null || echo ?)"
+
+auto_pct=100
+auto_profile=balanced
+online=$(cat /sys/class/power_supply/ADP1/online 2>/dev/null || echo 1)
+if [ "$online" != 1 ]; then
+  auto_pct=70
+  auto_profile=power-saver
+fi
+
+got_pct=$(cat $PSTATE/max_perf_pct 2>/dev/null || echo '')
+got_profile=$(powerprofilesctl get 2>/dev/null || echo '')
+case "$got_profile" in
+  power-saver) expect_pct=70 ;;
+  balanced|performance) expect_pct=100 ;;
+  *) expect_pct= ;;
+esac
+
+echo
+printf 'auto would be:     %s + max_perf_pct=%s\n' "$auto_profile" "$auto_pct"
+if [ "$got_pct" = "$auto_pct" ] && [ "$got_profile" = "$auto_profile" ]; then
+  echo "policy: OK (auto: $got_profile, max_perf_pct=$got_pct)"
+elif [ -n "$expect_pct" ] && [ "$got_pct" = "$expect_pct" ]; then
+  echo "policy: OK (manual: $got_profile, max_perf_pct=$got_pct)"
+else
+  echo "policy: MISMATCH (have $got_profile + $got_pct)"
+  echo "        install: pkexec $(cd "$(dirname "$0")/.." && pwd)/bin/power-install"
+fi
+
+unit=mintbook-power.service
+if systemctl is-enabled "$unit" >/dev/null 2>&1; then
+  # oneshot without RemainAfterExit is inactive between runs — that is success
+  echo "unit:              enabled"
+else
+  echo "unit:              not enabled"
+fi
