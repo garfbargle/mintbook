@@ -9,7 +9,7 @@ What works, what does not, and what was measured. Regenerate the live parts with
 | Chassis | Apple **A1534** (shared with MacBook9,1 and 10,1 — relevant to [audio.md](audio.md)) |
 | CPU | Intel **Core M-5Y31** @ 0.9GHz base / 2.4GHz turbo — 2 cores, 4 threads, **fanless** |
 | GPU | Intel HD Graphics 5300 |
-| RAM | 7.7 GB — **no swap configured** |
+| RAM | 7.7 GB — **zram swap** (half of RAM, zstd) |
 | Storage | 233.8 GB NVMe |
 | Display | eDP-1, 2304x1440 in 259x162mm — **~226 DPI** |
 | Audio controller | PCI `00:1b.0` (Wildcat Point-LP), codec Cirrus **CS4208** |
@@ -68,16 +68,45 @@ Idle has been measured around 60°C, and 73-88°C during sustained desktop work
 sensors        # lm-sensors is installed
 ```
 
-## No swap
+## Swap (zram)
 
-7.7 GB with no swap at all. With Electron apps and Firefox on a Core M this is a real
-risk of hard OOM rather than gradual slowdown. `zram-config` would be the cheap fix
-(compressed swap in RAM, no NVMe wear). **Not done** — flagged only.
+7.7 GB with Electron apps is a real OOM risk with no swap at all. Disk swap would
+wear the NVMe, so this is compressed RAM instead.
+
+**Installed 2026-09-01** via `systemd-zram-generator` (not `zram-config` — that
+package is a SysV script that sizes zram to 100% of RAM). Config lives in
+[`config/systemd/zram-generator.conf`](../config/systemd/zram-generator.conf)
+and is copied to `/etc/systemd/zram-generator.conf`:
+
+```
+[zram0]
+zram-size = ram / 2
+compression-algorithm = zstd
+```
+
+Half of RAM as the uncompressed zram disk; zstd is built into this kernel
+(`CONFIG_ZRAM_BACKEND_ZSTD`). Typical compression is ~2×, so a full 4 GB of
+swap costs roughly 2 GB of RAM.
+
+```bash
+sudo apt install systemd-zram-generator
+sudo cp config/systemd/zram-generator.conf /etc/systemd/zram-generator.conf
+sudo systemctl daemon-reload
+sudo systemctl start systemd-zram-setup@zram0
+sudo systemctl start dev-zram0.swap
+```
+
+The setup unit only formats `/dev/zram0`. `dev-zram0.swap` is the generated unit
+that actually calls `swapon`. Both come back on boot via `swap.target`.
+
+`swapon --show` should list `/dev/zram0` (~3.8 G, zstd, prio 100). Confirmed
+2026-09-01. To undo: delete the conf file and reboot.
 
 ## Base toolchain
 
 Present on a stock install: `git`, `python3` (3.12), `gcc`, `make`, `curl`, `dkms`,
-`timeshift`, kernel headers for **7.0.0-30-generic**.
+`timeshift`, kernel headers for **7.0.0-30-generic**. Added for this machine:
+`libinput-tools`, `systemd-zram-generator`.
 
 **Absent:** `node`, `npm`, `jq`, `gh`, `docker`, `rustc`, `go`, `java`. Claude Desktop
 is installed as a `.deb` and bundles its own runtime under

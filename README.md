@@ -71,6 +71,7 @@ bin/                    scripts; mirrors ~/.local/bin/
   revert-mac-theme      restore XFCE config from the backup
 config/initramfs/       post-update hook that prepends the BT DSDT override
 config/libinput/        local-overrides.quirks (DWT / palm size hint)
+config/systemd/         zram-generator.conf (compressed swap)
 config/pipewire/        WP 0.4 raw-speaker adapter (copy to ~/.config/pipewire/pipewire.conf.d/)
 config/plank/           dock launcher definitions
 config/rofi/            rofi config + Spotlight theme
