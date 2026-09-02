@@ -1,8 +1,8 @@
 # Boot, firmware and kernels
 
-> The boot chain is now confirmed: **OpenCore is the loader.** The ESP layout below was
-> read directly. What remains unread is `config.plist` itself — see the TODO at the end
-> of that section.
+> The boot chain is now confirmed: **OpenCore is the loader.** The ESP layout and
+> `config.plist` were read on 2026-09-01 — see the snapshot below. Do not edit the
+> plist to "clean it up"; it boots both macOS and Linux.
 
 ---
 
@@ -128,9 +128,46 @@ grub> initrd /boot/initrd.img-7.0.0-30-generic
 grub> boot
 ```
 
-**TODO:** `EFI/OC/config.plist` itself has not been read (root-only). Worth recording:
-the `Misc/Entries` list, `Misc/Boot` picker settings, and OpenLinuxBoot's `Driver
-Arguments`. Dump it with `sudo cat /boot/efi/EFI/OC/config.plist`.
+### `config.plist` (read 2026-09-01)
+
+`/boot/efi/EFI/OC/config.plist` is **OpenCore Legacy Patcher 2.4.1** (built on
+this machine, 2025-11-12) driving **OpenCore 1.0.4 RELEASE**. Model is
+`MacBook8,1` with **no SMBIOS spoof** (`Spoofed-Model: MacBook8,1 - None`).
+Kexts and `Booter` patches are the macOS-side OCLP set; they do not affect
+how Linux is launched.
+
+The Linux-relevant bits:
+
+| | |
+|---|---|
+| `Misc/Entries` | **empty** — no hardcoded macOS or Linux rows |
+| `UEFI/Drivers` / `OpenLinuxBoot.efi` `Arguments` | **empty** — autodetect, no `autoopts` |
+| `UEFI/Drivers` / `Ext4Dxe.efi` | enabled, comment *ext4 support for OpenLinuxBoot* |
+| `Misc/Boot/ShowPicker` | `true` |
+| `Misc/Boot/Timeout` | **15** seconds |
+| `Misc/Boot/PickerMode` | `External` (OpenCanopy) |
+| `Misc/Boot/PickerVariant` | `Acidanthera\GoldenGate` |
+| `Misc/Boot/HideAuxiliary` | `false` |
+| `Misc/Boot/LauncherOption` | `Full` (owns the `Boot0080` EFI launcher) |
+| `Misc/Boot/HibernateSkipsPicker` | `true` |
+| `Misc/Security/ScanPolicy` | **0** (scan every filesystem, including ext4) |
+| `Misc/Security/SecureBootModel` | `Disabled` |
+
+Because `Entries` is empty, the picker is **scan-only**: OpenLinuxBoot lists
+whatever is in `/boot`, and macOS comes from the APFS volume. That matches
+live behavior. Empty OpenLinuxBoot arguments is why kernel cmdline is taken
+from `/etc/default/grub` and why the `autoopts` fallback was never needed.
+
+`PickerAttributes` is **145** (`VOLUME_ICON` + `POINTER_CONTROL` +
+`FLAVOUR_ICON`). Auxiliary tools, shown unless hidden: `BootKicker.efi`,
+`OpenShell.efi`.
+
+`Misc/BlessOverride` still lists `\EFI\Microsoft\Boot\bootmgfw.efi`. There is
+no Windows on this disk; it is leftover OCLP template. Harmless.
+
+Dump again with `sudo python3 -c 'import plistlib,pprint; pprint.pp(plistlib.load(open("/boot/efi/EFI/OC/config.plist","rb"))["Misc"])'`.
+Do not copy the `#Revision/Hardware-Probe` blob into this repo — it is a
+serialized hardware probe, not picker config.
 
 ---
 
