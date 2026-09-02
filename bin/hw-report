@@ -62,7 +62,7 @@ sensors 2>/dev/null | grep -E 'Core [0-9]|temp1' | head -5 || echo "(lm-sensors 
 
 hr "KERNELS INSTALLED"
 ls /boot/vmlinuz-* 2>/dev/null | sed 's|.*vmlinuz-|  |'
-echo "  running: $(uname -r)   (6.14 has NO working keyboard/trackpad)"
+echo "  running: $(uname -r)   (6.14 is the boot fallback; speakers only on 7.0)"
 
 hr "DKMS"
 dkms status 2>/dev/null | grep . || echo "(none installed)"

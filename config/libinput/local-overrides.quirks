@@ -1,0 +1,24 @@
+# libinput local overrides for MacBook8,1 (applespi).
+# Installed to /etc/libinput/local-overrides.quirks — that path is loaded last
+# and is not overwritten by package updates. See docs/input.md.
+#
+# Undo: delete the installed copy.
+
+# applespi reports the keyboard as vendor/product 0000/0000 on the SPI bus.
+# Stock [Apple Internal Keyboard (SPI)] matches MatchVendor=0x05AC, so it never
+# fires. Without AttrKeyboardIntegration=internal, libinput treats this as an
+# external keyboard and disable-while-typing is a no-op even when xinput says
+# it is enabled.
+[Apple SPI Keyboard]
+MatchName=Apple SPI Keyboard
+MatchUdevType=keyboard
+AttrKeyboardIntegration=internal
+
+# udev reports this pad as 112x69 mm. The stock applespi quirk uses AttrSizeHint
+# 104x75, which skews palm-size conversion. Correct the millimetre hint only;
+# leave PalmSizeThreshold at the stock 1600 until there is evidence to change it.
+[Apple SPI Touchpad]
+MatchName=Apple SPI Touchpad
+MatchBus=spi
+MatchVendor=0x06CB
+AttrSizeHint=112x69

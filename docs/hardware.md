@@ -25,7 +25,8 @@ What works, what does not, and what was measured. Regenerate the live parts with
 | Internal speakers | **Working on 7.0** | [audio.md](audio.md) — CS4208 TDM, clock latch fix |
 | Headphone jack | **Working** | The analog path in the codec is healthy |
 | Microphone | Working | `Mic=0x18`, `Internal Mic=0x19` |
-| Keyboard / trackpad | **Intermittent — fixable** | Boot race, hits **both** kernels, see [input.md](input.md) |
+| Keyboard / trackpad | **Working** | DMA blacklist + DWT quirk; log out once for DWT — [input.md](input.md) |
+| Keyboard backlight | **Working** | `spi::kbd_backlight`, hardware keys work |
 | Battery | Working | ~84% of design capacity |
 | Webcam | **Working on 7.0** | FaceTime HD `14e4:1570`, 848×588; `intel_iommu=off`; one client at a time — [camera.md](camera.md) |
 | Secure Boot | Not supported | Unsigned DKMS modules load without signing |

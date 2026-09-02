@@ -25,7 +25,7 @@ Full detail and the live report: [docs/hardware.md](docs/hardware.md).
 | macOS-style desktop | **Done** — [docs/desktop.md](docs/desktop.md) |
 | HiDPI scaling | **Done** — [docs/display.md](docs/display.md) |
 | Wi-Fi, headphones, speakers, battery, display | **Working** — speakers need kernel **7.0**, see [docs/audio.md](docs/audio.md) |
-| **Keyboard/trackpad** | **Intermittent at boot — has a fix** — [docs/input.md](docs/input.md) |
+| **Keyboard/trackpad** | **Working** — DMA blacklist + DWT quirk; log out once for DWT — [docs/input.md](docs/input.md) |
 | **Bluetooth** | **Working on 7.0** — [docs/bluetooth.md](docs/bluetooth.md) |
 | **Webcam** | **Working on 7.0** — [docs/camera.md](docs/camera.md) |
 | Boot chain | **OpenCore loader; GRUB is inert** — [docs/boot.md](docs/boot.md) |
@@ -36,7 +36,7 @@ Read in this order if you are new to the machine:
 
 | Doc | Covers |
 |---|---|
-| [docs/input.md](docs/input.md) | **Read first.** The SPI keyboard/trackpad boot race — why input dies at random, and the fix |
+| [docs/input.md](docs/input.md) | **Read first.** SPI boot race (fixed) and palm / disable-while-typing |
 | [docs/hardware.md](docs/hardware.md) | What the machine is; per-device working/broken matrix; battery, thermals, toolchain |
 | [docs/boot.md](docs/boot.md) | Disk layout, dual-boot, why GRUB is **not** in the boot path, kernel 7.0 |
 | [docs/display.md](docs/display.md) | HiDPI scaling — why it is split between window scale and font DPI |
@@ -56,7 +56,8 @@ bin/                    scripts; mirrors ~/.local/bin/
   bt-diag               Bluetooth / SSDC-UART state           (read-only)
   bt-install            DSDT override + 7.0 initrd prepend    (root)
   hw-report             live hardware status                  (read-only)
-  input-check           SPI keyboard/trackpad PIO-vs-DMA check (read-only)
+  input-check           SPI keyboard/trackpad PIO + DWT quirk check (read-only)
+  input-install         libinput DWT quirk + DMA blacklist (root)
   hda-dump              HDA verb dump (root; historical)
   hda-enable-digen      enable CS4208 Digital Convert (root; historical)
   hda-gpio-sweep        GPIO/DigEn sweep during playback (root; ruled out)
@@ -69,6 +70,7 @@ bin/                    scripts; mirrors ~/.local/bin/
   panel-bt              genmon Bluetooth indicator
   revert-mac-theme      restore XFCE config from the backup
 config/initramfs/       post-update hook that prepends the BT DSDT override
+config/libinput/        local-overrides.quirks (DWT / palm size hint)
 config/pipewire/        WP 0.4 raw-speaker adapter (copy to ~/.config/pipewire/pipewire.conf.d/)
 config/plank/           dock launcher definitions
 config/rofi/            rofi config + Spotlight theme
