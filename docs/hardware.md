@@ -113,3 +113,5 @@ is installed as a `.deb` and bundles its own runtime under
 `/usr/lib/claude-desktop`, which is why it runs with no system Node present.
 
 Screenshot tooling is **`xfce4-screenshooter` only** — no `scrot`, `maim` or `import`.
+This keyboard has no Print key; the bindings are **Cmd+Shift+3 / 4 / 5**
+([desktop.md](desktop.md)).

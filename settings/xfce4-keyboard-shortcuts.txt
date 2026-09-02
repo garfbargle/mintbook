@@ -21,6 +21,9 @@
 /commands/custom/<Super>p                  xfce4-display-settings --minimal
 /commands/custom/<Super>r                  xfce4-appfinder -c
 /commands/custom/<Super>r/startup-notify   true
+/commands/custom/<Super><Shift>3           xfce4-screenshooter -f
+/commands/custom/<Super><Shift>4           xfce4-screenshooter -r
+/commands/custom/<Super><Shift>5           xfce4-screenshooter -w
 /commands/custom/<Super>space              /home/cobo/.local/bin/spotlight
 /commands/custom/XF86Display               xfce4-display-settings --minimal
 /commands/custom/XF86Mail                  exo-open --launch MailReader

@@ -242,12 +242,31 @@ centred, 46% wide, 14% from the top, translucent dark, rounded 16px, fuzzy match
 ### Keyboard
 
 ```
-/commands/custom/Super_L        = /bin/true              # frees the Super key
-/commands/custom/<Super>space   = ~/.local/bin/spotlight
+/commands/custom/Super_L              = /bin/true              # frees the Super key
+/commands/custom/<Super>space         = ~/.local/bin/spotlight
+/commands/custom/<Super><Shift>3      = xfce4-screenshooter -f  # fullscreen
+/commands/custom/<Super><Shift>4      = xfce4-screenshooter -r  # region
+/commands/custom/<Super><Shift>5      = xfce4-screenshooter -w  # window
 ```
 
 Copy/paste is deliberately unchanged: **Ctrl+C / Ctrl+V** everywhere,
 **Ctrl+Shift+C / Ctrl+Shift+V** in the terminal.
+
+### Screenshots
+
+This keyboard has **no Print key**, so the stock XFCE `Print` /
+`Shift+Print` / `Alt+Print` bindings are unreachable. Super is already the
+Cmd-like key (Spotlight), so the macOS chords are the ones that work:
+
+| Chord | What |
+|---|---|
+| **Cmd+Shift+3** | whole screen |
+| **Cmd+Shift+4** | drag a region |
+| **Cmd+Shift+5** | current window |
+
+Each opens xfce4-screenshooter's save/copy dialog after capture. The old Print
+bindings are still in xfconf in case an external keyboard appears. There is no
+`scrot` / `maim` / `import` — see [display.md](display.md).
 
 ---
 

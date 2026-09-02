@@ -58,7 +58,16 @@ DPI was tuned by eye in stages: 96 (too small) → 144 (still too small) → **1
 ## Screenshots
 
 `xfce4-screenshooter` is the only screenshot tool installed (no `scrot`, `maim`, or
-`import`). It needs no sudo and is the quickest way to check scaling changes:
+`import`). This keyboard has **no Print key** — use the Super (Cmd) chords in
+[desktop.md](desktop.md):
+
+```
+Cmd+Shift+3   fullscreen
+Cmd+Shift+4   region
+Cmd+Shift+5   window
+```
+
+From a terminal, to check scaling:
 
 ```bash
 xfce4-screenshooter --fullscreen --save /tmp/screen.png
