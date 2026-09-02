@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""Bluetooth indicator for xfce4-genmon-plugin.
+
+Blueman's tray icon lives in the systray plugin with everything else (Claude),
+so it cannot be placed next to wifi on its own. This renders a matching-size
+icon via genmon <img> and opens blueman-manager on click. The blueman applet
+stays running as the BlueZ agent; only its tray icon is hidden.
+"""
+import os
+import sys
+
+DIR = os.path.expanduser('~/.local/share/mintbook/bt')
+
+print('<click>blueman-manager</click>')
+
+def emit(icon, tool):
+    print(f'<img>{DIR}/{icon}.svg</img>')
+    print(f'<tool>{tool}</tool>')
+    sys.exit(0)
+
+try:
+    from gi.repository import Gio
+    bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+    proxy = Gio.DBusProxy.new_sync(
+        bus, Gio.DBusProxyFlags.NONE, None,
+        'org.bluez', '/', 'org.freedesktop.DBus.ObjectManager', None)
+    objs = proxy.call_sync(
+        'GetManagedObjects', None, Gio.DBusCallFlags.NONE, 2000, None
+    ).unpack()[0]
+except Exception:
+    emit('bt-off', 'Bluetooth status unknown')
+
+powered = False
+have_adapter = False
+connected = []
+for _path, ifaces in objs.items():
+    adapter = ifaces.get('org.bluez.Adapter1')
+    if adapter:
+        have_adapter = True
+        powered = bool(adapter.get('Powered'))
+    dev = ifaces.get('org.bluez.Device1')
+    if dev and dev.get('Connected'):
+        connected.append(dev.get('Alias') or dev.get('Name') or dev.get('Address'))
+
+if not have_adapter:
+    emit('bt-off', 'No Bluetooth adapter')
+if not powered:
+    emit('bt-off', 'Bluetooth off')
+if connected:
+    names = '\n'.join(connected)
+    emit('bt-on', f'Bluetooth on\n{names}')
+emit('bt-on', 'Bluetooth on\nNo devices connected')

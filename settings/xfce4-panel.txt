@@ -20,7 +20,7 @@
 /plugins/plugin-12                            pulseaudio
 /plugins/plugin-12/enable-keyboard-shortcuts  true
 /plugins/plugin-12/enable-mpris               true
-/plugins/plugin-12/known-players              firefox
+/plugins/plugin-12/known-players              Chrome;firefox
 /plugins/plugin-12/mixer-command              pavucontrol
 /plugins/plugin-12/show-notifications         false
 /plugins/plugin-13                            clock
@@ -44,7 +44,7 @@
 /plugins/plugin-1/show-button-icon            true
 /plugins/plugin-1/show-button-title           false
 /plugins/plugin-2                             showdesktop
-/plugins/plugin-20                            genmon
+/plugins/plugin-21                            genmon
 /plugins/plugin-3                             launcher
 /plugins/plugin-3/items                       <<UNSUPPORTED>>
 /plugins/plugin-4                             launcher
@@ -58,6 +58,7 @@
 /plugins/plugin-7/expand                      true
 /plugins/plugin-7/style                       0
 /plugins/plugin-8                             systray
+/plugins/plugin-8/hidden-items                <<UNSUPPORTED>>
 /plugins/plugin-8/icon-size                   0
 /plugins/plugin-8/known-items                 <<UNSUPPORTED>>
 /plugins/plugin-8/known-legacy-items          <<UNSUPPORTED>>

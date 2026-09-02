@@ -65,15 +65,15 @@ bin/                    scripts; mirrors ~/.local/bin/
   spotlight             Cmd+Space launcher toggle
   panel-cpu             genmon CPU sparkline
   panel-temp            genmon CPU temperature
-  panel-update          genmon update-manager indicator
   panel-wifi            genmon Wi-Fi indicator
+  panel-bt              genmon Bluetooth indicator
   revert-mac-theme      restore XFCE config from the backup
 config/initramfs/       post-update hook that prepends the BT DSDT override
 config/pipewire/        WP 0.4 raw-speaker adapter (copy to ~/.config/pipewire/pipewire.conf.d/)
 config/plank/           dock launcher definitions
 config/rofi/            rofi config + Spotlight theme
 config/xfce4-panel/     genmon rc files (genmon does NOT use xfconf)
-icons/                  icon generators (wifi, update)
+icons/                  icon generators (wifi, bluetooth)
 settings/               xfconf + dconf dumps (reference snapshots)
 camera-test/            local FaceTime HD browser preview (bin/camera-test)
 docs/                   see above

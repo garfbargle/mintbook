@@ -71,21 +71,22 @@ Plugin order (`plugin-ids`), left to right:
 |---|---|---|
 | 1 | whiskermenu | `button-icon=view-app-grid-symbolic`, no title |
 | 7 | separator | `expand=true` — pushes everything right |
-| 8 | systray | "the rest" — currently just Claude's tray icon |
-| 10 | xapp-status-plugin | "the rest" — empty now; kept so any future XApp icon has a home |
+| 8 | systray | "the rest" — Claude; blueman is hidden here (see Bluetooth below) |
+| 10 | xapp-status-plugin | mintUpdate, only when updates are available |
 | 19 | genmon | CPU sparkline |
 | 17 | genmon | CPU temperature |
-| 20 | genmon | update manager |
 | 18 | genmon | Wi-Fi |
+| 21 | genmon | Bluetooth |
 | 12 | pulseaudio | volume |
 | 11 | power-manager-plugin | battery |
 | 13 | clock | ` %a %-d %b  %H:%M  `, Inter 11, `digital-layout=3` (time only) |
 
-Right-to-left: **date/time, battery, volume, wifi, update manager, temperature, CPU,
+Right-to-left: **date/time, battery, volume, bluetooth, wifi, temperature, CPU,
 then the rest.** This follows the macOS convention — the clock is furthest right with
-the battery beside it, then volume, then Wi-Fi. Informational items (update, temp, CPU)
-sit inboard of the system status group, and anything unrecognised accumulates
-right-to-left from the far left of the group.
+the battery beside it, then volume, then Wi-Fi / Bluetooth. Informational items
+(temp, CPU) sit inboard of the system status group, and anything unrecognised
+accumulates right-to-left from the far left of the group. mintUpdate's own icon
+appears in the xapp group (plugin-10) only when there are updates.
 
 **Reordering panel items:** XFCE has no macOS-style hold-a-key-and-drag. The
 equivalents are right-click any item → **Move** (then drag it along the bar), or
@@ -143,23 +144,23 @@ problem.
 Its tooltip lists CPU / SSD / PCH / battery, right-justified inside a
 `font_family="monospace"` span for the same reason as the CPU one.
 
-### Update manager (`plugin-20`, genmon)
+### Update manager (mintUpdate tray)
 
-Runs [`bin/panel-update`](../bin/panel-update), icons from
-[`icons/generate-update-icons.py`](../icons/generate-update-icons.py).
+A genmon replacement (`plugin-20` / `bin/panel-update`) was tried and **reverted**.
+Two independent failures stacked:
 
-Reads **`~/.linuxmint/mintupdate/updates.json`** — mintupdate's own 90-byte cache — so
-it never shells out to `mintupdate-cli`, which would hit apt metadata on every refresh.
-Click opens Update Manager. Polls every 30s.
+1. The script read `~/.linuxmint/mintupdate/updates.json`, which stays `{"updates": {}}`
+   even when Update Manager has a real list, so the genmon icon never switched to
+   "pending" — it just sat there.
+2. `gsettings set com.linuxmint.updates hide-systray true` does **not** hide the
+   stock icon forever. The preference label is *"Only show a tray icon when updates
+   are available or in case of errors"*. mintUpdate still calls `set_status(..., True)`
+   whenever updates exist, so the old XApp icon appeared next to the dead genmon one
+   as soon as there was something to install.
 
-mintupdate's built-in tray icon is a 1px-thick ring that read far thinner than its
-neighbours, and being an XApp icon it was stuck at 20px. It is now hidden with
-`gsettings set com.linuxmint.updates hide-systray true`, and mintUpdate still runs in
-the background doing its normal update checks.
-
-> These icons use **strokes**, unlike the symbolic ones under `~/.icons`. That is safe
-> here because genmon shows them via `<img>` with no GTK recolouring — the fill-only
-> recolouring rule does not apply.
+mintUpdate's own XApp icon in `plugin-10` is the indicator again. `hide-systray`
+stays **true**, so the bar is clean when the system is up to date and the stock icon
+appears (still ~20px) when there is work to do. Click it to open Update Manager.
 
 ### Wi-Fi indicator (`plugin-18`, genmon)
 
@@ -185,6 +186,21 @@ work normally — verified `connected:full` with working DNS after the change.
 > `nm-connection-editor` (which the indicator opens on click) or
 > `nmcli device wifi connect <ssid> --ask`. To undo this entirely: delete that
 > autostart file and run `nm-applet &`.
+
+### Bluetooth indicator (`plugin-21`, genmon)
+
+Runs [`bin/panel-bt`](../bin/panel-bt), icons from
+[`icons/generate-bt-genmon.py`](../icons/generate-bt-genmon.py).
+
+Blueman's tray icon is a StatusNotifier item, so it lands in the systray plugin
+(plugin-8) alongside Claude and **cannot** be placed on its own. Same constraint as
+nm-applet / mintUpdate in xapp-status-plugin: one widget, one group. The genmon
+indicator sits immediately left of volume / right of wifi; click opens
+`blueman-manager`. Polls BlueZ over D-Bus every 5s. Dim icon when powered off;
+full white when on; tooltip lists connected devices.
+
+blueman-applet stays running (pairing / secret agent). Only its tray icon is hidden,
+via `/plugins/plugin-8/hidden-items = blueman`.
 
 ### Dock (Plank)
 
@@ -249,22 +265,26 @@ is 2304x272 and keeps that size even while the dock is hidden, so it cast a shad
 across the bottom fifth of the screen over everything. Fixed with
 `show_dock_shadow=false`.
 
-**xapp-status-plugin icons are hard-pinned at ~20px.** The wifi and update icons cannot
-be enlarged. Ruled out by testing, all with no effect whatsoever:
+**xapp-status-plugin icons are hard-pinned at ~20px.** Ruled out by testing, all
+with no effect whatsoever:
 - panel `icon-size` at 30, 38 and 44
 - the plugin's own `symbolic-icon-size` / `color-icon-size`, as both `int` and `uint`
 - panel `size` (height) at 52 and 64
 
-Meanwhile pulseaudio and power-manager icons *do* follow panel `icon-size`. This is why
-the wifi looks smaller than the speaker and battery, and the only remaining fix would be
-to drop nm-applet's tray icon and render wifi through genmon — at the cost of losing the
-network-picker popup. Not done.
+Meanwhile pulseaudio and power-manager icons *do* follow panel `icon-size`. Wifi
+and Bluetooth therefore render through genmon `<img>` at the SVG's own size.
+mintUpdate stays as an XApp icon and is accepted at 20px; it is also hidden until
+there are updates (`hide-systray`).
 
 **xapp-status-plugin holds every XApp status icon in one widget.** nm-applet and
 mintupdate both register there, so they render as one contiguous group and cannot be
 placed at separate positions in the bar. Within the group they are sorted by bus name
-(`mintUpdate_py` before `nm_applet`), which is also not controllable. The only way to
-separate them was to take one out of XApp entirely — hence the genmon wifi indicator.
+(`mintUpdate_py` before `nm_applet`), which is also not controllable. Wifi was taken
+out of XApp entirely (genmon) for that reason; nm-applet is disabled.
+
+**The systray plugin is the same kind of trap for StatusNotifier items.** Blueman and
+Claude both land in plugin-8 and cannot be split. Bluetooth is therefore a genmon
+indicator too, with blueman hidden via `hidden-items`.
 
 **`xfce4-cpugraph-plugin` defaults to `in-terminal=1`.** Its click command therefore
 opens inside a terminal window — this was the stray terminal appearing alongside
@@ -275,10 +295,14 @@ System Monitor. The key is `in-terminal`, not the `InTerminal` string in the bin
 by comparing 120 vs 2000: tooltips appeared at the same moment under both. The panel
 tooltip delay is not configurable without patching GTK.
 
-**`hide-systray` needs mintUpdate restarted.** Setting
-`com.linuxmint.updates hide-systray true` does nothing until the running `mintUpdate`
-process is restarted (`mintupdate-launcher`); until then it keeps its XApp icon
-registered and you get two update icons.
+**`hide-systray` does not mean "never show the icon".** The gsettings key name is
+misleading. The Update Manager preference is *"Only show a tray icon when updates are
+available or in case of errors"*. With it on, mintUpdate still shows its XApp icon
+whenever `set_status` is called with `visible=True` — which is the "updates available"
+and "restart required" paths. A genmon replacement that assumed the stock icon would
+stay gone therefore produced two icons as soon as there were updates. The setting also
+does nothing to a running `mintUpdate` until that process is restarted
+(`mintupdate-launcher`).
 
 **Panel plugins re-append themselves.** Removing a plugin from `plugin-ids` is not
 enough — on restart the panel finds the orphaned `/plugins/plugin-N` config and adds it
