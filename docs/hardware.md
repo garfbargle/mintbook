@@ -27,7 +27,7 @@ What works, what does not, and what was measured. Regenerate the live parts with
 | Microphone | Working | `Mic=0x18`, `Internal Mic=0x19` |
 | Keyboard / trackpad | **Working** | DMA blacklist + DWT quirk; log out once for DWT — [input.md](input.md) |
 | Keyboard backlight | **Working** | `spi::kbd_backlight`, hardware keys work |
-| Battery | Working | ~84% of design capacity |
+| Battery | Working | ~85% of design capacity |
 | Webcam | **Working on 7.0** | FaceTime HD `14e4:1570`, 848×588; `intel_iommu=off`; one client at a time — [camera.md](camera.md) |
 | Secure Boot | Not supported | Unsigned DKMS modules load without signing |
 
@@ -45,8 +45,8 @@ device unless SSDC is hidden.
 
 | | |
 |---|---|
-| Health | **~84%** of design (34.2 Wh of 40.3 Wh) |
-| Cycles | 147 |
+| Health | **~85%** of design (34.4 Wh of 40.3 Wh) |
+| Cycles | 149 (2026-09-01) |
 
 Good for a machine of this age. Read it with:
 

@@ -33,12 +33,13 @@ lspci -k 2>/dev/null | grep -A2 -i 'network controller' | grep -E 'Network|drive
 
 hr "BLUETOOTH"
 ls /sys/class/bluetooth/ 2>/dev/null | grep . || echo "NO ADAPTER PRESENT"
-echo "serial0-0: $(cat /sys/bus/serial/devices/serial0-0/firmware_node/path 2>/dev/null || echo missing)"
-if dmesg 2>/dev/null | grep -q 'Table Upgrade: override'; then
-  echo "ACPI override: yes (Table Upgrade)"
-else
-  echo "ACPI override: no"
-fi
+btpath=$(cat /sys/bus/serial/devices/serial0-0/firmware_node/path 2>/dev/null || echo missing)
+echo "serial0-0: $btpath"
+case "$btpath" in
+  *BLTH*) echo "ACPI override: yes (serial0-0 is BLTH, not SSDC)" ;;
+  *SSDC*) echo "ACPI override: no (serial0-0 is still SSDC)" ;;
+  *)      echo "ACPI override: unknown" ;;
+esac
 
 hr "WEBCAM"
 lspci -nnk -d 14e4:1570 2>/dev/null | sed 's/^/  /' || echo "  (no 14e4:1570)"
@@ -48,7 +49,7 @@ grep -qw intel_iommu=off /proc/cmdline && echo "  intel_iommu=off: yes" || echo 
 
 hr "AUDIO"
 cat /proc/asound/cards
-echo "(speakers are expected to be silent - see docs/audio.md)"
+echo "(speakers work on 7.0 via macbook12-audio DKMS — see docs/audio.md)"
 
 hr "BATTERY"
 upower -i /org/freedesktop/UPower/devices/battery_BAT0 2>/dev/null \
@@ -56,6 +57,7 @@ upower -i /org/freedesktop/UPower/devices/battery_BAT0 2>/dev/null \
   | sed 's/^ */  /'
 echo "  cycles: $(cat /sys/class/power_supply/BAT0/cycle_count 2>/dev/null)"
 echo "  (percentage = charge; capacity = health)"
+echo "  kbd backlight: $(cat /sys/class/leds/spi::kbd_backlight/brightness 2>/dev/null)/$(cat /sys/class/leds/spi::kbd_backlight/max_brightness 2>/dev/null)"
 
 hr "THERMALS"
 sensors 2>/dev/null | grep -E 'Core [0-9]|temp1' | head -5 || echo "(lm-sensors unavailable)"
