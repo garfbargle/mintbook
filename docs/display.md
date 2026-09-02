@@ -67,6 +67,10 @@ Cmd+Shift+4   region
 Cmd+Shift+5   window
 ```
 
+Do not bind `<Super><Shift>3` in xfconf; XFCE looks up `numbersign` /
+`dollar` / `percent`. Do not pass `-s` a directory. Both were ruled out as
+the reason the first bind appeared dead.
+
 From a terminal, to check scaling:
 
 ```bash

@@ -260,23 +260,61 @@ Cmd-like key (Spotlight), so the macOS chords are the ones that work:
 
 | Chord | What | Saved as |
 |---|---|---|
-| **Cmd+Shift+3** | whole screen | `~/Pictures/Screenshots/` |
-| **Cmd+Shift+4** | drag a region | same |
+| **Cmd+Shift+3** | whole screen | `~/Pictures/Screenshots/Screenshot_*.png` |
+| **Cmd+Shift+4** | drag a region (click, drag, release) | same |
 | **Cmd+Shift+5** | current window | same |
 
-They run [`bin/screenshot`](../bin/screenshot), which calls xfce4-screenshooter
-with `-s` so there is **no save/copy dialog**. That dialog is why the first bind
-looked dead: `xfce4-screenshooter -f` with no `-s` waits on a GTK window that
-does not reliably appear on this panel.
-
-**The xfconf key names are not `3` / `4` / `5`.** XFCE's grabber translates
-Shift+3 to keyval `numbersign` and then *keeps* Shift in the modifier mask
-(libxfce4ui bug #8744 workaround). The event it looks up is
-`<Shift><Super>numbersign`, not `<Super><Shift>3`. Binding the latter is a
-no-op — X receives the grab, the filter does not match, nothing runs. Same
-for `dollar` (4) and `percent` (5).
+They run [`bin/screenshot`](../bin/screenshot) → `xfce4-screenshooter -$mode -s $file`.
+Confirmed 2026-09-01: fullscreen write of a 2304×1440 PNG in under a second.
 
 The old Print bindings stay in xfconf in case an external keyboard appears.
+
+#### Why the first bind did nothing (two independent bugs)
+
+**1. XFCE never matched the chord.** `xmodmap` on this US ANSI board:
+
+```
+keycode 12  3   numbersign
+keycode 13  4   dollar
+keycode 14  5   percent
+```
+
+`gtk_accelerator_parse("<Super><Shift>3")` yields keyval `3` plus Shift+Super.
+That is also what `gtk_accelerator_name` prints (`<Shift><Super>3`). It is **not**
+what the live event is.
+
+libxfce4ui's grabber (`xfce-shortcuts-grabber.c`, the bug #8744 workaround):
+`gdk_keymap_translate_keyboard_state` turns Shift+3 into keyval `numbersign` and
+marks Shift as consumed; the grabber then **puts Shift back** into the modifier
+mask. The lookup key is therefore `<Shift><Super>numbersign`, not
+`<Super><Shift>3`. X may still grab keycode 12; the filter does not match, so
+the command never runs. Same for `dollar` / `percent`.
+
+The working xfconf properties are exactly those lookup names:
+
+```
+/commands/custom/<Shift><Super>numbersign  ~/.local/bin/screenshot -f
+/commands/custom/<Shift><Super>dollar      ~/.local/bin/screenshot -r
+/commands/custom/<Shift><Super>percent     ~/.local/bin/screenshot -w
+```
+
+**2. Even a correct command hung on a hidden dialog.**
+`xfce4-screenshooter -f` with no `-s`, or `-s` pointing at a **directory**,
+waits on the save/copy GTK window. On this HiDPI panel that window does not
+reliably appear, so the process sits there until killed. `-s` must be a
+**file path**. `bin/screenshot` always passes one.
+
+#### Ruled out
+
+- **The tool.** `xfce4-screenshooter -f -s /tmp/foo.png` writes a valid
+  2304×1440 PNG immediately. No extra package (`scrot` / `maim` / `import`).
+- **Super_L = /bin/true eating chords.** `Cmd+Space` (Spotlight) still fires.
+  Only the shifted number keys were wrong.
+- **Clipboard (`-c`).** `xclip` is not installed. `-f -c -s <dir>` sat for ~30s
+  and then wrote a file anyway; skip `-c`.
+- **Reordering modifiers to `<Shift><Super>3`.** Same keyval `3`. Still not
+  `numbersign`.
+
 
 ---
 
@@ -359,6 +397,10 @@ with stroked paths will not follow the panel's foreground colour. Draw filled ba
 
 **Electron and Firefox draw their own titlebars.** The Claude app will always keep its
 buttons on the right; xfwm4 cannot theme client-side decorations.
+
+**Cmd+Shift+3 is not an xfconf name.** Binding `<Super><Shift>3` is a silent no-op
+on this keyboard — see Screenshots above. Do not "fix" it by putting `3` back.
+
 
 ---
 
