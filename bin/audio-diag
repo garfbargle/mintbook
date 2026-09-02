@@ -63,5 +63,6 @@ for d in /sys/bus/i2c/devices/*/; do
   n=$(cat "$d/name" 2>/dev/null) && echo "$(basename "$d"): $n"
 done
 
-hr "BLUETOOTH  (no adapter = BT audio is not a fallback)"
+hr "BLUETOOTH  (no hci0 = BT audio is not a fallback; see docs/bluetooth.md)"
 ls /sys/class/bluetooth/ 2>/dev/null | grep . || echo "(no adapter present)"
+echo "serial0-0: $(cat /sys/bus/serial/devices/serial0-0/firmware_node/path 2>/dev/null || echo missing)"

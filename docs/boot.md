@@ -97,6 +97,12 @@ OpenCore's own graphical picker.
   `/proc/cmdline` after reboot. The `config.plist` `autoopts` fallback was
   not needed. Prefer fixes that need no kernel argument at all; see
   [input.md](input.md).
+- **Early initrd is not a GRUB feature here.** OpenLinuxBoot passes one
+  `initrd=` path. The Bluetooth DSDT override is prepended to that file
+  (`/boot/initrd.img-7.0*`) by `bin/bt-install` and an
+  `update-initramfs` post-update hook. `GRUB_EARLY_INITRD_LINUX_CUSTOM`
+  is unused. 6.14's initrd is left stock as the ACPI fallback. See
+  [bluetooth.md](bluetooth.md).
 
 ### The bare `grub>` prompt
 

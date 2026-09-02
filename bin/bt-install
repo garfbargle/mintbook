@@ -1,0 +1,335 @@
+#!/usr/bin/env bash
+# bt-install — hide URT0.SSDC via a DSDT override so serdev can bind Bluetooth.
+# Must be run as root. See docs/bluetooth.md.
+#
+# GRUB is not in the boot path. The override is prepended to the 7.0 initrd
+# as an uncompressed cpio (kernel ACPI table upgrade). A post-update hook
+# re-applies that on every update-initramfs for non-6.14 kernels.
+# update-grub is deliberately not run.
+set -euo pipefail
+
+OVERRIDE_NAME=acpi_override_ssdc.img
+OVERRIDE_PATH=/boot/$OVERRIDE_NAME
+BACKUP_DIR=/var/lib/macbook-bt-ssdc
+HOOK_SRC="$(cd "$(dirname "$0")/.." && pwd)/config/initramfs/zz-acpi-ssdc-override"
+HOOK_DST=/etc/initramfs/post-update.d/zz-acpi-ssdc-override
+WORK=""
+MODE=install
+
+log()  { printf '[*] %s\n' "$*"; }
+ok()   { printf '[+] %s\n' "$*"; }
+warn() { printf '[!] %s\n' "$*" >&2; }
+die()  { printf '[x] %s\n' "$*" >&2; exit 1; }
+
+cleanup() { [ -n "${WORK:-}" ] && [ -d "$WORK" ] && rm -rf "$WORK"; }
+trap cleanup EXIT
+
+require_root() {
+  [ "$(id -u)" -eq 0 ] || die "run as root: sudo $0 $*"
+}
+
+# --------------------------------------------------------------------------
+# Diagnose: did the override take effect? Use after reboot.
+# --------------------------------------------------------------------------
+diagnose() {
+  echo "=== 1. Secure Boot / lockdown (lockdown blocks initrd ACPI overrides) ==="
+  echo "lockdown: $(cat /sys/kernel/security/lockdown 2>/dev/null || echo n/a)"
+  echo "cmdline: $(cat /proc/cmdline)"
+
+  echo
+  echo "=== 2. ACPI table override (dmesg Table Upgrade; taint bit 8 is unreliable on 7.0) ==="
+  local t; t="$(cat /proc/sys/kernel/tainted 2>/dev/null || echo 0)"
+  echo "tainted = $t"
+  if dmesg 2>/dev/null | grep -q 'Table Upgrade: override'; then
+    ok "ACPI table override DID take effect (Table Upgrade in dmesg)."
+  elif (( (t & 256) != 0 )); then
+    ok "ACPI table override DID take effect (taint bit 8)."
+  else
+    warn "No Table Upgrade line and taint bit 8 clear."
+  fi
+
+  echo
+  echo "=== 3. Early-ACPI dmesg ==="
+  dmesg 2>/dev/null | grep -iE \
+    'found in initrd|table upgrade|ACPI OVERRIDE|tainting kernel|ignoring.*table' \
+    | head -40 || echo "(none)"
+
+  echo
+  echo "=== 4. serial0-0 (expect URT0.BLTH, not URT0.SSDC) ==="
+  echo "path: $(cat /sys/bus/serial/devices/serial0-0/firmware_node/path 2>/dev/null || echo MISSING)"
+  echo "modalias: $(cat /sys/bus/serial/devices/serial0-0/modalias 2>/dev/null || echo MISSING)"
+
+  echo
+  echo "=== 5. Live DSDT SSDC._STA (Zero = applied, 0x0F = firmware) ==="
+  if command -v iasl >/dev/null && [ -r /sys/firmware/acpi/tables/DSDT ]; then
+    local tmp; tmp="$(mktemp -d)"
+    cp /sys/firmware/acpi/tables/DSDT "$tmp/_live.dat"
+    ( cd "$tmp" && iasl -d _live.dat >/dev/null 2>&1 ) || true
+    awk '
+      /Device \(SSDC\)/ { f=1 }
+      f {
+        print "  " $0
+        n = gsub(/\{/, "{"); o = gsub(/\}/, "}")
+        d += n - o
+        if (n > 0) s = 1
+        if (s && d == 0) exit
+      }
+    ' "$tmp/_live.dsl" 2>/dev/null || echo "(could not decompile live DSDT)"
+    rm -rf "$tmp"
+  else
+    warn "Need iasl + readable DSDT to inspect the live SSDC block."
+  fi
+
+  echo
+  echo "=== 6. Bluetooth presence ==="
+  ls /sys/class/bluetooth 2>/dev/null | grep -q hci && ok "hci device present." \
+    || warn "No hci device under /sys/class/bluetooth."
+  rfkill list 2>/dev/null || true
+}
+
+uninstall() {
+  require_root
+  rm -f "$HOOK_DST" "$OVERRIDE_PATH"
+  ok "Removed $OVERRIDE_PATH and the post-update hook."
+  local k; k="$(uname -r)"
+  case "$k" in
+    6.14.*) warn "Running 6.14; not regenerating this initrd." ;;
+    *)
+      log "Regenerating initrd for $k (stock, no override)..."
+      update-initramfs -u -k "$k"
+      ;;
+  esac
+  ok "Uninstalled. Reboot to revert to the firmware DSDT."
+}
+
+ensure_tools() {
+  if ! command -v iasl >/dev/null; then
+    log "Installing acpica-tools (iasl)..."
+    # Do not apt-get update: the Cursor apt repo is unsigned and fails the
+    # whole update. The Ubuntu cache is enough for acpica-tools.
+    apt-get install -y acpica-tools \
+      || die "Could not install acpica-tools. Fix apt (Cursor repo GPG) and retry."
+  fi
+  command -v iasl >/dev/null || die "iasl still missing after install."
+  command -v cpio >/dev/null || die "Missing cpio."
+  command -v update-initramfs >/dev/null || die "Missing update-initramfs."
+  [ -f "$HOOK_SRC" ] || die "hook source missing: $HOOK_SRC"
+  ok "Tooling present: iasl, cpio, update-initramfs."
+}
+
+check_machine() {
+  local model="" lockdown=""
+  [ -r /sys/class/dmi/id/product_name ] && model="$(cat /sys/class/dmi/id/product_name)"
+  log "Detected model: ${model:-unknown}"
+  case "$model" in
+    MacBook8,1) ok "Supported model." ;;
+    MacBook*) warn "Untested Mac model ($model). Continuing if SSDC exists." ;;
+    *) warn "Non-MacBook DMI ($model)." ;;
+  esac
+  lockdown="$(cat /sys/kernel/security/lockdown 2>/dev/null || true)"
+  # /sys/kernel/security/lockdown looks like: [none] integrity confidentiality
+  if [[ "$lockdown" == "[none]"* ]] || [[ -z "$lockdown" ]]; then
+    ok "Kernel lockdown is off."
+  else
+    die "Kernel lockdown is on ($lockdown). Initrd ACPI overrides are ignored."
+  fi
+}
+
+# Dump DSDT + SSDTs and decompile (SSDTs as externals so DSDT compiles clean).
+dump_and_decompile() {
+  WORK="$(mktemp -d)"
+  log "Dumping ACPI tables to $WORK ..."
+  [ -r /sys/firmware/acpi/tables/DSDT ] || die "Cannot read DSDT (need root)."
+  cp /sys/firmware/acpi/tables/DSDT "$WORK/dsdt.dat"
+
+  local i=0
+  local -a ssdts=()
+  for t in /sys/firmware/acpi/tables/SSDT*; do
+    [ -e "$t" ] || continue
+    cp "$t" "$WORK/ssdt_${i}.dat"
+    ssdts+=("ssdt_${i}.dat")
+    i=$((i + 1))
+  done
+  if [ "${#ssdts[@]}" -gt 0 ]; then
+    log "Decompiling DSDT with ${#ssdts[@]} SSDT(s) as externals..."
+    ( cd "$WORK" && iasl -e "${ssdts[@]}" -d dsdt.dat >/dev/null 2>&1 ) || true
+  else
+    ( cd "$WORK" && iasl -d dsdt.dat >/dev/null 2>&1 ) || true
+  fi
+  [ -f "$WORK/dsdt.dsl" ] || die "Decompilation failed (no dsdt.dsl)."
+  ok "Decompiled to dsdt.dsl"
+}
+
+# Patch Device (SSDC) so _STA returns Zero. Bump OEM Revision so the kernel
+# upgrades the firmware DSDT instead of ignoring an equal-revision table.
+# Patch logic from thomas-shirley/macbook8.1-bt-ssdc-fix.
+patch_dsdt() {
+  local dsl="$WORK/dsdt.dsl"
+
+  grep -q 'Device (SSDC)' "$dsl" \
+    || die "No Device (SSDC) in DSDT. Nothing to patch."
+
+  awk '
+    /Device \(SSDC\)/ { found=1 }
+    found {
+      print
+      n = gsub(/\{/, "{"); o = gsub(/\}/, "}")
+      depth += n - o
+      if (n > 0) started = 1
+      if (started && depth == 0) exit
+    }
+  ' "$dsl" > "$WORK/ssdc.block"
+
+  grep -iq 'apple-uart-ssdc' "$WORK/ssdc.block" \
+    || warn "SSDC block does not mention apple-uart-ssdc — patching anyway."
+
+  if grep -qE 'Method \(_STA|Name \(_STA' "$WORK/ssdc.block"; then
+    log "SSDC has an existing _STA; rewriting its return to Zero..."
+    awk '
+      !done && /Device \(SSDC\)/ { in_ssdc = 1 }
+      in_ssdc && !done && /Method \(_STA|Name \(_STA/ { in_sta = 1 }
+      {
+        if (in_sta && !done && sta_open == 1 && $0 ~ /Return \(/) {
+          sub(/Return \([^)]*\)/, "Return (Zero) /* disabled by mintbook bt-install */")
+          done = 1
+        }
+        print
+        n = gsub(/\{/, "{"); o = gsub(/\}/, "}")
+        if (in_sta) { sta_depth += n - o; if (n > 0) sta_open = 1; if (sta_open && sta_depth == 0) in_sta = 0 }
+        if (in_ssdc) { ssdc_depth += n - o; if (n > 0) ssdc_seen = 1; if (ssdc_seen && ssdc_depth == 0) in_ssdc = 0 }
+      }
+    ' "$dsl" > "$WORK/dsdt.patched.dsl"
+  else
+    log "Injecting _STA -> Zero into Device (SSDC)..."
+    awk '
+      !injected && /Device \(SSDC\)/ { insscd = 1 }
+      { print }
+      insscd && !injected && /\{/ {
+        print "            Method (_STA, 0, NotSerialized)"
+        print "            {"
+        print "                Return (Zero) /* disabled by mintbook bt-install */"
+        print "            }"
+        injected = 1; insscd = 0
+      }
+    ' "$dsl" > "$WORK/dsdt.patched.dsl"
+  fi
+
+  grep -q 'disabled by mintbook bt-install' "$WORK/dsdt.patched.dsl" \
+    || die "Patch failed (marker not found)."
+
+  local oldrev newrev
+  oldrev="$(grep -m1 'DefinitionBlock' "$WORK/dsdt.patched.dsl" \
+    | grep -oE '0x[0-9A-Fa-f]+[[:space:]]*\)' | grep -oE '0x[0-9A-Fa-f]+')"
+  [ -n "$oldrev" ] || die "Could not find OEM Revision in DefinitionBlock."
+  newrev="$(printf '0x%08X' "$((oldrev + 1))")"
+  sed -i -E "s/(DefinitionBlock[^)]*,[[:space:]]*)0x[0-9A-Fa-f]+([[:space:]]*\))/\1${newrev}\2/" \
+    "$WORK/dsdt.patched.dsl"
+  grep -q "${newrev})" "$WORK/dsdt.patched.dsl" \
+    || warn "OEM Revision bump may not have applied (wanted ${newrev})."
+  log "OEM Revision bumped ${oldrev} -> ${newrev}."
+
+  mv "$WORK/dsdt.patched.dsl" "$dsl"
+  ok "DSDT patched."
+}
+
+compile_dsdt() {
+  log "Recompiling patched DSDT..."
+  ( cd "$WORK" && iasl dsdt.dsl >/dev/null 2>&1 ) || {
+    warn "Clean compile failed; retrying with -f ..."
+    ( cd "$WORK" && iasl -f dsdt.dsl >/dev/null 2>&1 ) || true
+  }
+  [ -f "$WORK/dsdt.aml" ] || die "Compilation failed (no dsdt.aml). Try: cd $WORK && iasl dsdt.dsl"
+  ok "Compiled dsdt.aml"
+}
+
+build_override() {
+  log "Building uncompressed ACPI override cpio..."
+  local stage="$WORK/cpio/kernel/firmware/acpi"
+  mkdir -p "$stage"
+  cp "$WORK/dsdt.aml" "$stage/dsdt.aml"
+  ( cd "$WORK/cpio" && find kernel | cpio -H newc --create > "$WORK/$OVERRIDE_NAME" 2>/dev/null )
+  install -m 0644 "$WORK/$OVERRIDE_NAME" "$OVERRIDE_PATH"
+  ok "Installed $OVERRIDE_PATH"
+}
+
+save_backups() {
+  mkdir -p "$BACKUP_DIR"
+  cp "$WORK/dsdt.dsl" "$BACKUP_DIR/dsdt.dsl"
+  cp "$WORK/dsdt.aml" "$BACKUP_DIR/dsdt.aml"
+  cp "$WORK/ssdc.block" "$BACKUP_DIR/ssdc.block"
+  ok "Backups saved to $BACKUP_DIR"
+}
+
+install_hook() {
+  install -d /etc/initramfs/post-update.d
+  install -m 0755 "$HOOK_SRC" "$HOOK_DST"
+  ok "Installed $HOOK_DST"
+}
+
+rebuild_initrd() {
+  local k; k="$(uname -r)"
+  case "$k" in
+    6.14.*) die "Refusing to patch the 6.14 fallback initrd. Boot 7.0 and re-run." ;;
+  esac
+  log "Regenerating initrd for $k (hook prepends the override)..."
+  update-initramfs -u -k "$k"
+  if cpio -t < "/boot/initrd.img-$k" 2>/dev/null | grep -q 'kernel/firmware/acpi/dsdt.aml'; then
+    ok "initrd.img-$k starts with the ACPI override."
+  else
+    die "Override not visible at the start of initrd.img-$k."
+  fi
+}
+
+show_ssdc_block() {
+  awk '
+    /Device \(SSDC\)/ { f=1 }
+    f {
+      print "  " $0
+      n = gsub(/\{/, "{"); o = gsub(/\}/, "}")
+      depth += n - o
+      if (n > 0) started = 1
+      if (started && depth == 0) exit
+    }
+  ' "$WORK/dsdt.dsl"
+}
+
+main_install() {
+  require_root
+  check_machine
+  ensure_tools
+  dump_and_decompile
+  patch_dsdt
+  compile_dsdt
+  if [ "$MODE" = dry-run ]; then
+    echo
+    ok "Dry run OK: dumped, patched, and recompiled the DSDT."
+    ok "Nothing in /boot or initramfs was modified."
+    log "Patched SSDC block:"
+    show_ssdc_block
+    log "Re-run without --dry-run to install."
+    return 0
+  fi
+  build_override
+  save_backups
+  install_hook
+  rebuild_initrd
+  echo
+  ok "Done. Reboot into 7.0 to apply the DSDT override."
+  echo "Then run: bin/bt-diag"
+  echo "If 7.0 will not boot, pick 6.14 in OpenCanopy (its initrd is untouched)."
+}
+
+usage() {
+  cat <<EOF
+Usage: sudo $0 [--dry-run|--diagnose|--uninstall]
+EOF
+}
+
+case "${1:-}" in
+  --dry-run)    MODE=dry-run; main_install ;;
+  --diagnose)   require_root; diagnose ;;
+  --uninstall)  uninstall ;;
+  ""|--install) MODE=install; main_install ;;
+  -h|--help)    usage ;;
+  *)            usage >&2; exit 2 ;;
+esac

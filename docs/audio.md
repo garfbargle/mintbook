@@ -403,8 +403,8 @@ enabled via `~/.config/systemd/user/mb81-jack-switch.service.d/override.conf`:
 
 ACP still exposes IEC958 when the jack is unplugged — leave it unused.
 
-Bluetooth is a later session: there is no adapter
-(`/sys/class/bluetooth/` is empty). BCM4350 firmware, not this codec.
+Bluetooth audio needs `hci0`. That adapter is working on 7.0 after the
+SSDC/UART DSDT override — [bluetooth.md](bluetooth.md). Not this codec.
 
 ---
 

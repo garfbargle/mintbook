@@ -1,0 +1,23 @@
+#!/bin/sh
+# Prepend the SSDC-disable DSDT override to a freshly built initrd.
+# Called by update-initramfs as: $0 <kernel-version> <initrd-path>
+# See docs/bluetooth.md.
+#
+# 6.14 is the OpenCanopy fallback. Leave its initrd stock so a bad ACPI
+# override on 7.0 is still recoverable without macOS or a live USB.
+set -eu
+
+version="${1:-}"
+initrd="${2:-}"
+override=/boot/acpi_override_ssdc.img
+
+case "$version" in
+  6.14.*) exit 0 ;;
+esac
+
+[ -f "$override" ] || exit 0
+[ -n "$initrd" ] && [ -f "$initrd" ] || exit 0
+
+tmp="${initrd}.ssdc-prepend"
+cat "$override" "$initrd" > "$tmp"
+mv "$tmp" "$initrd"

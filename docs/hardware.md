@@ -21,7 +21,7 @@ What works, what does not, and what was measured. Regenerate the live parts with
 |---|---|---|
 | Display / HiDPI | **Working** | Needs manual scaling, see [display.md](display.md) |
 | Wi-Fi | **Working** | `brcmfmac`, associates and resolves normally |
-| **Bluetooth** | **Not present** | No adapter at all — see below |
+| **Bluetooth** | **Working on 7.0** | SSDC hidden via DSDT override on the 7.0 initrd — [bluetooth.md](bluetooth.md) |
 | Internal speakers | **Working on 7.0** | [audio.md](audio.md) — CS4208 TDM, clock latch fix |
 | Headphone jack | **Working** | The analog path in the codec is healthy |
 | Microphone | Working | `Mic=0x18`, `Internal Mic=0x19` |
@@ -30,21 +30,15 @@ What works, what does not, and what was measured. Regenerate the live parts with
 | Webcam | **Working on 7.0** | FaceTime HD `14e4:1570`, 848×588; `intel_iommu=off`; one client at a time — [camera.md](camera.md) |
 | Secure Boot | Not supported | Unsigned DKMS modules load without signing |
 
-## Bluetooth is absent, not broken
+## Bluetooth is hidden by SSDC, not missing
 
-Worth stating plainly — it is not a fallback if the built-in speakers or jack
-fail:
+The BCM4350 UART (`00:15.5`) has two ACPI serdev slaves. Linux binds
+`URT0.SSDC` (SSD debug) first; the real `URT0.BLTH` (`BCM2E7C`) never gets a
+device unless SSDC is hidden.
 
-```
-/sys/class/bluetooth/     empty
-rfkill list               only "phy0: Wireless LAN"
-bluetoothctl list         nothing
-```
-
-The `bluetooth`, `btbcm`, `btintel` and `hci_uart` modules are all loaded and the
-`bluetooth.service` is active — there is simply **no adapter for them to bind to**.
-The BCM4350's Bluetooth side needs Apple firmware that is not present. This is a
-known, separate MacBook-on-Linux problem and has not been attempted.
+**Working on 7.0** after a DSDT override prepended to the initrd —
+[bluetooth.md](bluetooth.md). `serial0-0` is `URT0.BLTH` / `hci_uart_bcm`,
+`hci0` is **BCM4350C0**.
 
 ## Battery
 

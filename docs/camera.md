@@ -8,14 +8,15 @@ SIF errors**. Chrome on the same box shows **848×588 at ~30 fps** via
 
 ---
 
-## Why this, not Bluetooth
+## Why camera was done first
 
 Bluetooth on this machine is not a missing firmware file. The BCM4350 UART is
 shared with an SSD debug port (`SSDC`). Linux serdev binds `SSDC` first and the
-real Bluetooth device never appears. The known fix is a DSDT override packaged
-as an early initrd — the published scripts wire that into **GRUB**, which is
-not on this boot path ([boot.md](boot.md)). Camera is a DKMS module plus one
-kernel argument that OpenLinuxBoot already knows how to read.
+real Bluetooth device never appears. The known fix is a DSDT override. The
+published scripts wire that into **GRUB**, which is not on this boot path
+([boot.md](boot.md)). Camera was a DKMS module plus one kernel argument that
+OpenLinuxBoot already knew how to read. The GRUB-free initrd path is now in
+[bluetooth.md](bluetooth.md).
 
 ## Hardware
 

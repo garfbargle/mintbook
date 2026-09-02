@@ -33,6 +33,12 @@ lspci -k 2>/dev/null | grep -A2 -i 'network controller' | grep -E 'Network|drive
 
 hr "BLUETOOTH"
 ls /sys/class/bluetooth/ 2>/dev/null | grep . || echo "NO ADAPTER PRESENT"
+echo "serial0-0: $(cat /sys/bus/serial/devices/serial0-0/firmware_node/path 2>/dev/null || echo missing)"
+if dmesg 2>/dev/null | grep -q 'Table Upgrade: override'; then
+  echo "ACPI override: yes (Table Upgrade)"
+else
+  echo "ACPI override: no"
+fi
 
 hr "WEBCAM"
 lspci -nnk -d 14e4:1570 2>/dev/null | sed 's/^/  /' || echo "  (no 14e4:1570)"

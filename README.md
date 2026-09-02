@@ -26,7 +26,7 @@ Full detail and the live report: [docs/hardware.md](docs/hardware.md).
 | HiDPI scaling | **Done** — [docs/display.md](docs/display.md) |
 | Wi-Fi, headphones, speakers, battery, display | **Working** — speakers need kernel **7.0**, see [docs/audio.md](docs/audio.md) |
 | **Keyboard/trackpad** | **Intermittent at boot — has a fix** — [docs/input.md](docs/input.md) |
-| **Bluetooth** | **No adapter present** |
+| **Bluetooth** | **Working on 7.0** — [docs/bluetooth.md](docs/bluetooth.md) |
 | **Webcam** | **Working on 7.0** — [docs/camera.md](docs/camera.md) |
 | Boot chain | **OpenCore loader; GRUB is inert** — [docs/boot.md](docs/boot.md) |
 
@@ -43,6 +43,7 @@ Read in this order if you are new to the machine:
 | [docs/desktop.md](docs/desktop.md) | The macOS look: top bar, dock, Spotlight, WM, panel indicators, and its gotchas |
 | [docs/audio.md](docs/audio.md) | CS4208 speakers — what was ruled out, the 7.0 DKMS fix, PipeWire routing |
 | [docs/camera.md](docs/camera.md) | FaceTime HD (`14e4:1570`) — 848×588 sensor, DKMS, `intel_iommu=off` |
+| [docs/bluetooth.md](docs/bluetooth.md) | BCM4350 UART — SSDC serdev conflict, DSDT override on the 7.0 initrd; **working** |
 
 ## Repo layout
 
@@ -52,6 +53,8 @@ bin/                    scripts; mirrors ~/.local/bin/
   camera-diag           FaceTime HD PCI/firmware/IOMMU state  (read-only)
   camera-install        firmware + facetimehd DKMS + iommu=off (root)
   camera-test           local page to preview the FaceTime HD camera
+  bt-diag               Bluetooth / SSDC-UART state           (read-only)
+  bt-install            DSDT override + 7.0 initrd prepend    (root)
   hw-report             live hardware status                  (read-only)
   input-check           SPI keyboard/trackpad PIO-vs-DMA check (read-only)
   hda-dump              HDA verb dump (root; historical)
@@ -65,6 +68,7 @@ bin/                    scripts; mirrors ~/.local/bin/
   panel-update          genmon update-manager indicator
   panel-wifi            genmon Wi-Fi indicator
   revert-mac-theme      restore XFCE config from the backup
+config/initramfs/       post-update hook that prepends the BT DSDT override
 config/pipewire/        WP 0.4 raw-speaker adapter (copy to ~/.config/pipewire/pipewire.conf.d/)
 config/plank/           dock launcher definitions
 config/rofi/            rofi config + Spotlight theme
