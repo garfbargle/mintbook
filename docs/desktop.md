@@ -264,10 +264,31 @@ Cmd-like key (Spotlight), so the macOS chords are the ones that work:
 | **Cmd+Shift+4** | drag a region (click, drag, release) | same |
 | **Cmd+Shift+5** | current window | same |
 
-They run [`bin/screenshot`](../bin/screenshot) → `xfce4-screenshooter -$mode -s $file`.
-Confirmed 2026-09-01: fullscreen write of a 2304×1440 PNG in under a second.
+They run [`bin/screenshot`](../bin/screenshot) → `xfce4-screenshooter -$mode -s $file`,
+then a **160ms full-screen white flash**. Confirmed 2026-09-01: fullscreen write
+of a 2304×1440 PNG in under a second, flash visible after the file exists.
 
 The old Print bindings stay in xfconf in case an external keyboard appears.
+
+#### The snap flash
+
+macOS-style camera blink so it is obvious a shot was taken. Implemented as a
+GTK3 window, not a compositor fade and not an xrandr brightness spike (the
+latter would cost heat on this fanless Core M).
+
+- **After the save**, so the white frame is not in the PNG. Region/window
+  modes flash only if the file exists (cancel → no flash).
+- **Override-redirect** + `NOTIFICATION` hint, skip-taskbar/pager, no focus.
+  `win.fullscreen()` was not used: xfwm4 would animate that in.
+- **160ms solid white**, then destroy. 90ms was too easy to miss at 60 Hz.
+  No opacity fade — `set_opacity` needs the compositor and was extra moving
+  parts for no gain.
+- Flash failures (`python3 … || true`) must not undo a successful save.
+- Geometry from `Gdk.Display.get_primary_monitor()`, not deprecated
+  `Gdk.Screen.get_width()`.
+
+No shutter sound. `xclip` is still not installed; nothing is copied to the
+clipboard.
 
 #### Why the first bind did nothing (two independent bugs)
 

@@ -67,9 +67,9 @@ Cmd+Shift+4   region
 Cmd+Shift+5   window
 ```
 
+A 160ms full-screen white flash follows a successful save (not in the PNG).
 Do not bind `<Super><Shift>3` in xfconf; XFCE looks up `numbersign` /
-`dollar` / `percent`. Do not pass `-s` a directory. Both were ruled out as
-the reason the first bind appeared dead.
+`dollar` / `percent`. Do not pass `-s` a directory. See [desktop.md](desktop.md).
 
 From a terminal, to check scaling:
 

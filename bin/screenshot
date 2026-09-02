@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# screenshot - save a png via xfce4-screenshooter, no dialog.
+# screenshot - save a png via xfce4-screenshooter, no dialog, then a white snap flash.
 # Usage: screenshot -f|-r|-w     (fullscreen / region / window)
 # See docs/desktop.md.
 #
 # -s must be a *file*, not a directory. Passing a directory makes
 # xfce4-screenshooter wait on the save dialog, which is the failure mode
 # that made the first keybind look dead on this panel.
+#
+# The flash runs *after* the file is written so it is not in the PNG.
 set -euo pipefail
 dir="$HOME/Pictures/Screenshots"
 mkdir -p "$dir"
@@ -15,4 +17,38 @@ case "$mode" in
   *) echo "usage: $0 -f|-r|-w" >&2; exit 1 ;;
 esac
 file="$dir/Screenshot_$(date +%Y-%m-%d_%H-%M-%S).png"
-exec xfce4-screenshooter "$mode" -s "$file"
+xfce4-screenshooter "$mode" -s "$file"
+[ -f "$file" ] || exit 1
+
+# Camera-style full-screen white flash. Override-redirect so xfwm4 does not
+# animate a fullscreen transition; 160ms then gone. Failures must not undo the save.
+python3 - <<'PY' || true
+import gi
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk, GLib, Gdk
+
+win = Gtk.Window()
+win.set_decorated(False)
+win.set_skip_taskbar_hint(True)
+win.set_skip_pager_hint(True)
+win.set_accept_focus(False)
+win.set_keep_above(True)
+win.set_type_hint(Gdk.WindowTypeHint.NOTIFICATION)
+css = Gtk.CssProvider()
+css.load_from_data(b"window { background-color: #ffffff; }")
+Gtk.StyleContext.add_provider_for_screen(
+    Gdk.Screen.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+)
+display = Gdk.Display.get_default()
+monitor = display.get_primary_monitor() or display.get_monitor(0)
+geo = monitor.get_geometry()
+win.resize(geo.width, geo.height)
+win.move(geo.x, geo.y)
+win.realize()
+gdk_win = win.get_window()
+if gdk_win is not None:
+    gdk_win.set_override_redirect(True)
+win.show_all()
+GLib.timeout_add(160, Gtk.main_quit)
+Gtk.main()
+PY

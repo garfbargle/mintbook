@@ -64,7 +64,7 @@ bin/                    scripts; mirrors ~/.local/bin/
   mb81-jack-switch      headphone jack auto-switch (user systemd override)
   codec-snapshot        capture codec state to diff
   spotlight             Cmd+Space launcher toggle
-  screenshot            save a png (no dialog); Cmd+Shift+3/4/5
+  screenshot            save a png, then a white snap flash; Cmd+Shift+3/4/5
   panel-cpu             genmon CPU sparkline
   panel-temp            genmon CPU temperature
   panel-wifi            genmon Wi-Fi indicator
