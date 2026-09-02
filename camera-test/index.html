@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FaceTime HD test</title>
+  <style>
+    :root {
+      --bg: #111214;
+      --panel: #1c1d20;
+      --line: #2c2d32;
+      --text: #f2f2f4;
+      --muted: #9a9ba3;
+      --ok: #3dd68c;
+      --bad: #ff6b6b;
+      --btn: #2e6bff;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 28px 20px 48px;
+    }
+    h1 {
+      font-size: 22px;
+      font-weight: 600;
+      margin: 0 0 4px;
+    }
+    .sub { color: var(--muted); margin: 0 0 20px; }
+    .stage {
+      background: #000;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      overflow: hidden;
+      aspect-ratio: 848 / 588;
+      display: grid;
+      place-items: center;
+    }
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: #000;
+      transform: scaleX(-1);
+    }
+    .placeholder { color: var(--muted); padding: 24px; text-align: center; }
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 16px 0;
+    }
+    button {
+      appearance: none;
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 16px;
+      font: inherit;
+      font-weight: 600;
+      color: #fff;
+      background: var(--btn);
+      cursor: pointer;
+    }
+    button.secondary { background: var(--panel); border: 1px solid var(--line); }
+    button:disabled { opacity: 0.45; cursor: default; }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 10px;
+    }
+    .stat {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px 14px;
+    }
+    .stat span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .stat strong { font-size: 18px; font-weight: 600; }
+    .ok { color: var(--ok); }
+    .bad { color: var(--bad); }
+    .err {
+      margin-top: 14px;
+      color: var(--bad);
+      white-space: pre-wrap;
+    }
+    .shots {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 16px;
+    }
+    .shots img {
+      width: 160px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      transform: scaleX(-1);
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>FaceTime HD test</h1>
+    <p class="sub">MacBook8,1 camera — expect 848×588 at ~30 fps, not 1280×720.</p>
+
+    <div class="stage">
+      <video id="preview" autoplay playsinline muted></video>
+      <div class="placeholder" id="placeholder">Camera idle</div>
+    </div>
+
+    <div class="row">
+      <button id="start" type="button">Start camera</button>
+      <button id="stop" class="secondary" type="button" disabled>Stop</button>
+      <button id="snap" class="secondary" type="button" disabled>Snapshot</button>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><span>Device</span><strong id="device">—</strong></div>
+      <div class="stat"><span>Resolution</span><strong id="res">—</strong></div>
+      <div class="stat"><span>Frame rate</span><strong id="fps">—</strong></div>
+      <div class="stat"><span>Verdict</span><strong id="verdict">—</strong></div>
+    </div>
+
+    <p class="err" id="err" hidden></p>
+    <div class="shots" id="shots"></div>
+  </main>
+
+  <script>
+    const video = document.getElementById("preview");
+    const placeholder = document.getElementById("placeholder");
+    const startBtn = document.getElementById("start");
+    const stopBtn = document.getElementById("stop");
+    const snapBtn = document.getElementById("snap");
+    const errEl = document.getElementById("err");
+    let stream = null;
+    let fpsTimer = 0;
+    let lastFrames = 0;
+    let lastStamp = 0;
+
+    function showError(msg) {
+      errEl.hidden = !msg;
+      errEl.textContent = msg || "";
+    }
+
+    function setLive(on) {
+      placeholder.hidden = on;
+      video.style.display = on ? "block" : "none";
+      startBtn.disabled = on;
+      stopBtn.disabled = !on;
+      snapBtn.disabled = !on;
+    }
+
+    async function listDevices() {
+      if (!navigator.mediaDevices?.enumerateDevices) return;
+      const cams = (await navigator.mediaDevices.enumerateDevices())
+        .filter((d) => d.kind === "videoinput");
+      if (!cams.length) {
+        document.getElementById("device").textContent = "none seen";
+        return;
+      }
+      document.getElementById("device").textContent =
+        cams.map((d) => d.label || d.deviceId.slice(0, 8)).join(", ");
+    }
+
+    function explain(err) {
+      if (err.name === "NotReadableError") {
+        return (
+          err.name + ": " + err.message +
+          "\n\nThis camera only allows one app at a time. The green LED means " +
+          "something else already opened it (often another tab, or Cursor's " +
+          "built-in browser). Close that, then press Start camera."
+        );
+      }
+      if (err.name === "NotAllowedError") {
+        return err.name + ": " + err.message + "\nChrome blocked the camera. Allow it for this site and retry.";
+      }
+      return err.name + ": " + err.message;
+    }
+
+    async function start() {
+      showError("");
+      await listDevices();
+      const tries = [
+        { audio: false, video: { width: { ideal: 848 }, height: { ideal: 588 }, frameRate: { ideal: 30 } } },
+        { audio: false, video: true },
+      ];
+      let lastErr = null;
+      for (const constraints of tries) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia(constraints);
+          lastErr = null;
+          break;
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+      if (lastErr) {
+        showError(explain(lastErr));
+        return;
+      }
+      video.srcObject = stream;
+      await video.play();
+      setLive(true);
+      const track = stream.getVideoTracks()[0];
+      document.getElementById("device").textContent = track.label || "camera";
+      updateStats();
+      lastFrames = 0;
+      lastStamp = performance.now();
+      if (video.requestVideoFrameCallback) {
+        const tick = (_now, meta) => {
+          if (!stream) return;
+          if (meta.presentedFrames != null) {
+            const dt = (performance.now() - lastStamp) / 1000;
+            if (dt >= 1) {
+              const fps = (meta.presentedFrames - lastFrames) / dt;
+              document.getElementById("fps").textContent = fps.toFixed(1);
+              lastFrames = meta.presentedFrames;
+              lastStamp = performance.now();
+            }
+          }
+          video.requestVideoFrameCallback(tick);
+        };
+        video.requestVideoFrameCallback(tick);
+      } else {
+        fpsTimer = setInterval(() => {
+          const q = video.getVideoPlaybackQuality && video.getVideoPlaybackQuality();
+          if (!q) return;
+          const dt = (performance.now() - lastStamp) / 1000;
+          if (dt >= 1) {
+            document.getElementById("fps").textContent =
+              ((q.totalVideoFrames - lastFrames) / dt).toFixed(1);
+            lastFrames = q.totalVideoFrames;
+            lastStamp = performance.now();
+          }
+        }, 250);
+      }
+      void settings;
+    }
+
+    function updateStats() {
+      const w = video.videoWidth;
+      const h = video.videoHeight;
+      const res = document.getElementById("res");
+      const verdict = document.getElementById("verdict");
+      res.textContent = w && h ? w + "×" + h : "—";
+      if (w === 848 && h === 588) {
+        verdict.textContent = "848×588 — good";
+        verdict.className = "ok";
+      } else if (w === 1280 && h === 720) {
+        verdict.textContent = "1280×720 — unpatched driver";
+        verdict.className = "bad";
+      } else if (w) {
+        verdict.textContent = "unexpected size";
+        verdict.className = "bad";
+      }
+    }
+
+    function stop() {
+      if (fpsTimer) clearInterval(fpsTimer);
+      fpsTimer = 0;
+      if (stream) stream.getTracks().forEach((t) => t.stop());
+      stream = null;
+      video.srcObject = null;
+      setLive(false);
+      document.getElementById("res").textContent = "—";
+      document.getElementById("fps").textContent = "—";
+      document.getElementById("verdict").textContent = "—";
+      document.getElementById("verdict").className = "";
+      listDevices();
+    }
+
+    function snap() {
+      const c = document.createElement("canvas");
+      c.width = video.videoWidth;
+      c.height = video.videoHeight;
+      c.getContext("2d").drawImage(video, 0, 0);
+      const img = document.createElement("img");
+      img.src = c.toDataURL("image/jpeg", 0.85);
+      img.alt = "snapshot";
+      document.getElementById("shots").prepend(img);
+    }
+
+    video.addEventListener("loadedmetadata", updateStats);
+    video.addEventListener("resize", updateStats);
+    startBtn.addEventListener("click", start);
+    stopBtn.addEventListener("click", stop);
+    snapBtn.addEventListener("click", snap);
+    video.style.display = "none";
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) stop();
+    });
+    window.addEventListener("pagehide", stop);
+    listDevices();
+    start();
+  </script>
+</body>
+</html>

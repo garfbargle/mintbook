@@ -27,7 +27,7 @@ What works, what does not, and what was measured. Regenerate the live parts with
 | Microphone | Working | `Mic=0x18`, `Internal Mic=0x19` |
 | Keyboard / trackpad | **Intermittent — fixable** | Boot race, hits **both** kernels, see [input.md](input.md) |
 | Battery | Working | ~84% of design capacity |
-| Webcam | Untested | |
+| Webcam | **Working on 7.0** | FaceTime HD `14e4:1570`, 848×588; `intel_iommu=off`; one client at a time — [camera.md](camera.md) |
 | Secure Boot | Not supported | Unsigned DKMS modules load without signing |
 
 ## Bluetooth is absent, not broken

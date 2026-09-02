@@ -87,13 +87,16 @@ OpenCore's own graphical picker.
 - **`update-grub` does nothing** for how this machine boots. Kernel entries come from
   OpenLinuxBoot scanning `/boot`, so a newly installed kernel appears automatically.
 - **Kernel selection is OpenCore's**, in the OpenCanopy picker.
-- **Kernel parameters are *probably* still taken from `/etc/default/grub`.** There is no
+- **Kernel parameters are taken from `/etc/default/grub`.** There is no
   `/etc/kernel/cmdline` and no `/boot/loader/entries/`, so OpenLinuxBoot is in
-  autodetect mode, where it falls back to reading `GRUB_CMDLINE_LINUX_DEFAULT` /
-  `GRUB_CMDLINE_LINUX`. Both are currently empty, which matches the bare command line
-  observed. **Unverified** — if you need a kernel argument, set it there, reboot, and
-  confirm it actually shows up in `/proc/cmdline` before trusting it. Prefer fixes that
-  need no kernel argument at all; see [input.md](input.md).
+  autodetect mode and reads `GRUB_CMDLINE_LINUX_DEFAULT` / `GRUB_CMDLINE_LINUX`
+  (documented by OpenLinuxBoot for Debian/Ubuntu with `/boot` on the root fs).
+  Both were empty, which matched the bare command line. **Confirmed
+  2026-09-01:** writing `intel_iommu=off` into
+  `GRUB_CMDLINE_LINUX_DEFAULT` (no `update-grub`) made it appear on
+  `/proc/cmdline` after reboot. The `config.plist` `autoopts` fallback was
+  not needed. Prefer fixes that need no kernel argument at all; see
+  [input.md](input.md).
 
 ### The bare `grub>` prompt
 
@@ -149,13 +152,17 @@ sudo ln -sfn initrd.img-6.14.0-37-generic /boot/initrd.img.old
 Do not conclude a kernel is broken from a single bad boot. Check `bin/input-check`
 first.
 
-### DKMS audio modules
+### DKMS modules
 
 `macbook12-audio/0.1` from [thomas-shirley/macbook8.1-speaker-driver](https://github.com/thomas-shirley/macbook8.1-speaker-driver)
 is installed for 7.0 (`dkms status`). It **must** be built against Ubuntu's
 `linux-hwe-7.0` `sound/hda` tree, not kernel.org — kernel.org structs panic at
 probe on this ABI (same trap as `leifliddy/macbook12-audio-driver`). See
 [audio.md](audio.md).
+
+`facetimehd/0.7.0.1` from [thomas-shirley/macbook8.1-camera](https://github.com/thomas-shirley/macbook8.1-camera)
+is also installed for 7.0. Needs `intel_iommu=off` on the cmdline (set in
+`/etc/default/grub`; OpenLinuxBoot reads it). See [camera.md](camera.md).
 
 ---
 

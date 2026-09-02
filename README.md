@@ -27,6 +27,7 @@ Full detail and the live report: [docs/hardware.md](docs/hardware.md).
 | Wi-Fi, headphones, speakers, battery, display | **Working** — speakers need kernel **7.0**, see [docs/audio.md](docs/audio.md) |
 | **Keyboard/trackpad** | **Intermittent at boot — has a fix** — [docs/input.md](docs/input.md) |
 | **Bluetooth** | **No adapter present** |
+| **Webcam** | **Working on 7.0** — [docs/camera.md](docs/camera.md) |
 | Boot chain | **OpenCore loader; GRUB is inert** — [docs/boot.md](docs/boot.md) |
 
 ## Documentation
@@ -41,12 +42,16 @@ Read in this order if you are new to the machine:
 | [docs/display.md](docs/display.md) | HiDPI scaling — why it is split between window scale and font DPI |
 | [docs/desktop.md](docs/desktop.md) | The macOS look: top bar, dock, Spotlight, WM, panel indicators, and its gotchas |
 | [docs/audio.md](docs/audio.md) | CS4208 speakers — what was ruled out, the 7.0 DKMS fix, PipeWire routing |
+| [docs/camera.md](docs/camera.md) | FaceTime HD (`14e4:1570`) — 848×588 sensor, DKMS, `intel_iommu=off` |
 
 ## Repo layout
 
 ```
 bin/                    scripts; mirrors ~/.local/bin/
   audio-diag            dump the full audio/codec state       (read-only)
+  camera-diag           FaceTime HD PCI/firmware/IOMMU state  (read-only)
+  camera-install        firmware + facetimehd DKMS + iommu=off (root)
+  camera-test           local page to preview the FaceTime HD camera
   hw-report             live hardware status                  (read-only)
   input-check           SPI keyboard/trackpad PIO-vs-DMA check (read-only)
   hda-dump              HDA verb dump (root; historical)
@@ -66,6 +71,7 @@ config/rofi/            rofi config + Spotlight theme
 config/xfce4-panel/     genmon rc files (genmon does NOT use xfconf)
 icons/                  icon generators (wifi, update)
 settings/               xfconf + dconf dumps (reference snapshots)
+camera-test/            local FaceTime HD browser preview (bin/camera-test)
 docs/                   see above
 ```
 

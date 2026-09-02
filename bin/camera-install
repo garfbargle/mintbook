@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# camera-install — firmware + DKMS for the MacBook8,1 FaceTime HD camera.
+# Must be run as root. See docs/camera.md.
+#
+# Does not reboot. intel_iommu=off is written to /etc/default/grub so
+# OpenLinuxBoot will pick it up on the next boot (GRUB itself is inert).
+set -euo pipefail
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "run as root: sudo $0" >&2
+  exit 1
+fi
+
+SRC="${CAMERA_SRC:-/home/cobo/src/macbook8.1-camera}"
+FW_DIR="$SRC/facetimehd-firmware"
+DRV_SRC="$SRC/bcwc_pcie"
+GRUB=/etc/default/grub
+PARAM=intel_iommu=off
+
+if [ ! -d "$DRV_SRC" ]; then
+  echo "driver source missing: $DRV_SRC" >&2
+  echo "clone https://github.com/thomas-shirley/macbook8.1-camera there first" >&2
+  exit 1
+fi
+
+VER=$(awk -F= '/^PACKAGE_VERSION=/{print $2}' "$DRV_SRC/dkms.conf")
+DKMS_DIR="/usr/src/facetimehd-$VER"
+
+echo "==> firmware"
+if [ ! -f "$FW_DIR/firmware.bin" ]; then
+  echo "    extracting from Apple's El Capitan camera driver..."
+  make -C "$FW_DIR"
+fi
+install -dm755 /lib/firmware/facetimehd
+install -m644 "$FW_DIR/firmware.bin" /lib/firmware/facetimehd/firmware.bin
+ls -l /lib/firmware/facetimehd/firmware.bin
+sha256sum /lib/firmware/facetimehd/firmware.bin
+
+echo "==> DKMS facetimehd $VER"
+dkms remove -m facetimehd -v "$VER" --all 2>/dev/null || true
+rm -rf "$DKMS_DIR"
+mkdir -p "$DKMS_DIR"
+cp -a "$DRV_SRC"/. "$DKMS_DIR"/
+make -C "$DKMS_DIR" clean >/dev/null 2>&1 || true
+dkms add -m facetimehd -v "$VER"
+dkms build -m facetimehd -v "$VER"
+dkms install -m facetimehd -v "$VER"
+dkms status facetimehd
+
+echo "==> $PARAM in $GRUB (OpenLinuxBoot reads this; update-grub is a no-op here)"
+if grep -qE '^GRUB_CMDLINE_LINUX_DEFAULT=.*\b'"$PARAM"'\b' "$GRUB"; then
+  echo "    already present"
+else
+  cp -a "$GRUB" "$GRUB.bak.$(date +%Y%m%d-%H%M%S)"
+  sed -i -E 's|^(GRUB_CMDLINE_LINUX_DEFAULT=")(.*)(")|\1\2 '"$PARAM"'\3|' "$GRUB"
+  sed -i -E 's|^(GRUB_CMDLINE_LINUX_DEFAULT=") +|\1|' "$GRUB"
+  echo "    added"
+fi
+grep -E '^GRUB_CMDLINE_LINUX_DEFAULT=' "$GRUB"
+
+echo "==> load attempt (IOMMU is still on until reboot)"
+modprobe -r bdc_pci 2>/dev/null || true
+modprobe facetimehd || echo "    modprobe failed (expected if the ISP DMA channel cannot talk with IOMMU on)"
+sleep 2
+echo "--- lsmod ---"
+lsmod | grep facetimehd || echo "(not loaded)"
+echo "--- /dev/video* ---"
+ls -l /dev/video* 2>&1 || true
+echo "--- dmesg ---"
+dmesg | grep -iE 'facetimehd|fthd|1570' | tail -25 || true
+
+echo
+echo "DONE. Reboot, then confirm /proc/cmdline contains $PARAM"
+echo "and run bin/camera-diag."

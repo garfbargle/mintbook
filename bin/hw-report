@@ -34,6 +34,12 @@ lspci -k 2>/dev/null | grep -A2 -i 'network controller' | grep -E 'Network|drive
 hr "BLUETOOTH"
 ls /sys/class/bluetooth/ 2>/dev/null | grep . || echo "NO ADAPTER PRESENT"
 
+hr "WEBCAM"
+lspci -nnk -d 14e4:1570 2>/dev/null | sed 's/^/  /' || echo "  (no 14e4:1570)"
+ls /dev/video* 2>/dev/null | sed 's/^/  /' || echo "  no /dev/video*"
+modinfo facetimehd 2>/dev/null | grep '^filename' || echo "  facetimehd: not installed"
+grep -qw intel_iommu=off /proc/cmdline && echo "  intel_iommu=off: yes" || echo "  intel_iommu=off: no"
+
 hr "AUDIO"
 cat /proc/asound/cards
 echo "(speakers are expected to be silent - see docs/audio.md)"
