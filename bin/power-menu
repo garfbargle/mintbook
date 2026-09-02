@@ -5,19 +5,22 @@ Genmon starts this with g_spawn_command_line_async — there is no Gdk event —
 so a Gtk.Menu vanishes immediately (xfwm4 rejects a grab at time 0). This is
 an override-redirect window at the pointer instead.
 
-pkexec mintbook-power-apply sets PPD + the intel_pstate cap. A charger event
-still restores the automatic AC/battery policy afterwards.
+The panel writes /run/mintbook-power/want; a root systemd path unit applies
+it. No pkexec — a genmon-spawned pkexec still prompted for a password.
+A charger event still restores the automatic AC/battery policy afterwards.
 """
 import os
 import signal
 import subprocess
 import sys
+import tempfile
+import time
 
 import gi
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, Gdk
 
-APPLY = '/usr/local/sbin/mintbook-power-apply'
+WANT = '/run/mintbook-power/want'
 PIDFILE = os.path.expanduser('~/.cache/mintbook/power-menu.pid')
 PROFILES = (
     ('power-saver', 'Power Saver', 'Cooler — CPU capped ~1.6 GHz'),
@@ -63,16 +66,31 @@ def pointer_xy():
 
 
 def apply(profile):
+    """Ask the root path unit to apply *profile* by writing the request file."""
     try:
-        r = subprocess.run(
-            ['pkexec', APPLY, profile],
-            capture_output=True, text=True, timeout=30)
-    except FileNotFoundError:
-        r = subprocess.CompletedProcess(['pkexec'], 127, '', 'pkexec missing')
+        d = os.path.dirname(WANT)
+        fd, tmp = tempfile.mkstemp(prefix='want.', dir=d)
+        try:
+            os.write(fd, (profile + '\n').encode())
+        finally:
+            os.close(fd)
+        os.replace(tmp, WANT)
+    except OSError as e:
+        return subprocess.CompletedProcess(
+            ['want'], 1, '',
+            f'{e}\nRe-run: pkexec /home/cobo/mintbook/bin/power-install')
+    for _ in range(25):
+        time.sleep(0.1)
+        if current() == profile:
+            break
     subprocess.run(
         ['xfce4-panel', '--plugin-event=genmon-22:refresh:bool:true'],
         capture_output=True)
-    return r
+    if current() != profile:
+        return subprocess.CompletedProcess(
+            ['want'], 1, '',
+            'profile did not change; is mintbook-power-request.path running?')
+    return subprocess.CompletedProcess(['want'], 0, '', '')
 
 
 def fail(msg):

@@ -1,0 +1,12 @@
+/* Allow the local sudo/admin user to pkexec mintbook-power-apply without a
+ * password. XML allow_active=yes is not enough for a process spawned from
+ * xfce4-genmon (polkit often does not treat that child as an "active"
+ * session, so pkexec falls through to the default exec action and prompts).
+ * The panel itself no longer uses pkexec — it writes /run/mintbook-power/want.
+ */
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.mintbook.power.apply" &&
+        subject.local && subject.isInGroup("sudo")) {
+        return polkit.Result.YES;
+    }
+});

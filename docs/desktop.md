@@ -214,10 +214,9 @@ canvas as wifi/bt.
 Runs [`bin/panel-power`](../bin/panel-power). Click opens [`bin/power-menu`](../bin/power-menu),
 an override-redirect popup (a Gtk.Menu dies immediately — genmon clicks have no
 Gdk event, so xfwm4 rejects the grab). **Power Saver / Balanced / Performance.**
-That calls `pkexec /usr/local/sbin/mintbook-power-apply <profile>` so the
-intel_pstate cap moves with the profile (Saver = 70%, the others = 100%). Polkit
-`allow_active=yes` so an active session is not prompted. Plug or unplug still
-runs the automatic AC/battery policy afterwards.
+That calls `mintbook-power-apply` via `/run/mintbook-power/want` (a root
+systemd path unit), so there is **no password**. Saver = 70% P-state, the
+others = 100%. Plug or unplug still runs the automatic AC/battery policy.
 
 The tooltip is the **current** profile and a one-line hint (what that profile
 does to the CPU), not two different modes. "Turbo allowed" means the 2.4 GHz

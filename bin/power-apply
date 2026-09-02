@@ -8,6 +8,8 @@
 #   mintbook-power-apply balanced     # EPB=6,  max_perf_pct=100
 #   mintbook-power-apply performance  # PPD performance, max_perf_pct=100
 #
+#   mintbook-power-apply --from-request  # profile from /run/mintbook-power/want
+#
 # PPD's profile alone does not cap frequency on this Broadwell-Y chip.
 set -euo pipefail
 
@@ -18,7 +20,16 @@ fi
 
 ADP=/sys/class/power_supply/ADP1/online
 PSTATE=/sys/devices/system/cpu/intel_pstate
+WANT=/run/mintbook-power/want
 MODE=${1:-auto}
+
+if [ "$MODE" = "--from-request" ]; then
+  if [ ! -r "$WANT" ]; then
+    echo "no $WANT" >&2
+    exit 1
+  fi
+  MODE=$(tr -d '[:space:]' < "$WANT")
+fi
 
 online=1
 if [ -r "$ADP" ]; then
@@ -49,7 +60,7 @@ case "$MODE" in
     pct=100
     ;;
   *)
-    echo "usage: $0 [auto|power-saver|balanced|performance]" >&2
+    echo "usage: $0 [auto|power-saver|balanced|performance|--from-request]" >&2
     exit 2
     ;;
 esac

@@ -3,6 +3,8 @@
 Running **Linux Mint on a 2015 12-inch MacBook** — making it look like macOS, and
 making the hardware work.
 
+![The desktop: translucent top bar and Plank dock on the 12-inch Retina panel](docs/images/desktop.jpg)
+
 This repo is the record of that work. It exists so a future session with **no prior
 context** can understand what was changed, why, what was already tried, and what was
 ruled out. Where something is unsolved it says so, with the evidence, so the same
@@ -30,6 +32,17 @@ Full detail and the live report: [docs/hardware.md](docs/hardware.md).
 | **Webcam** | **Working on 7.0** — [docs/camera.md](docs/camera.md) |
 | Thermals / battery policy | **Done** — power-saver + 70% P-state on battery; [docs/hardware.md](docs/hardware.md) |
 | Boot chain | **OpenCore loader; GRUB is inert** — [docs/boot.md](docs/boot.md) |
+
+## The look
+
+WhiteSur GTK and xfwm, a 52px glass top bar, Plank, and Cmd+Space Spotlight.
+How it is wired, and what was rejected: [docs/desktop.md](docs/desktop.md).
+
+![Thunar with traffic-light window buttons, mintbook repo](docs/images/files.jpg)
+
+![Spotlight (Cmd+Space) searching Settings](docs/images/spotlight.jpg)
+
+![Power profile menu on the top bar: Power Saver, Balanced, Performance](docs/images/power-menu.jpg)
 
 ## Documentation
 
@@ -80,9 +93,10 @@ bin/                    scripts; mirrors ~/.local/bin/
   revert-mac-theme      restore XFCE config from the backup
 config/initramfs/       post-update hook that prepends the BT DSDT override
 config/libinput/        local-overrides.quirks (DWT / palm size hint)
-config/systemd/         zram-generator.conf; mintbook-power.service
+config/systemd/         zram-generator.conf; mintbook-power.service; request path/unit
 config/udev/            99-mintbook-power.rules (ADP1 → power-apply)
-config/polkit/          org.mintbook.power.policy (panel pkexec, no password)
+config/tmpfiles.d/      mintbook-power.conf (/run/mintbook-power for the panel)
+config/polkit/          pkexec leftovers (panel does not use pkexec)
 config/pipewire/        WP 0.4 raw-speaker adapter (copy to ~/.config/pipewire/pipewire.conf.d/)
 config/plank/           dock launcher definitions
 config/rofi/            rofi config + Spotlight theme
@@ -91,6 +105,7 @@ icons/                  icon generators (wifi, bluetooth, power profile)
 settings/               xfconf + dconf dumps (reference snapshots)
 camera-test/            local FaceTime HD browser preview (bin/camera-test)
 docs/                   see above
+docs/images/            screenshots in this README
 ```
 
 `~/.local/bin` is on PATH via `~/.profile`, but only from the next login after it was

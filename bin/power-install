@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # power-install — udev + systemd hook so mintbook-power-apply runs at boot
-# and when the charger is plugged/unplugged. Must be run as root.
-# See docs/hardware.md.
+# and when the charger is plugged/unplugged, plus a request file the panel
+# can write without a password. Must be run as root. See docs/hardware.md.
 set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -16,10 +16,19 @@ UDEV_SRC="$ROOT/config/udev/99-mintbook-power.rules"
 UDEV_DST=/etc/udev/rules.d/99-mintbook-power.rules
 UNIT_SRC="$ROOT/config/systemd/mintbook-power.service"
 UNIT_DST=/etc/systemd/system/mintbook-power.service
+REQ_PATH_SRC="$ROOT/config/systemd/mintbook-power-request.path"
+REQ_PATH_DST=/etc/systemd/system/mintbook-power-request.path
+REQ_UNIT_SRC="$ROOT/config/systemd/mintbook-power-request.service"
+REQ_UNIT_DST=/etc/systemd/system/mintbook-power-request.service
+TMPFILES_SRC="$ROOT/config/tmpfiles.d/mintbook-power.conf"
+TMPFILES_DST=/etc/tmpfiles.d/mintbook-power.conf
 POLKIT_SRC="$ROOT/config/polkit/org.mintbook.power.policy"
 POLKIT_DST=/usr/share/polkit-1/actions/org.mintbook.power.policy
+RULES_SRC="$ROOT/config/polkit/10-mintbook-power.rules"
+RULES_DST=/etc/polkit-1/rules.d/10-mintbook-power.rules
 
-for f in "$APPLY_SRC" "$UDEV_SRC" "$UNIT_SRC" "$POLKIT_SRC"; do
+for f in "$APPLY_SRC" "$UDEV_SRC" "$UNIT_SRC" "$REQ_PATH_SRC" "$REQ_UNIT_SRC" \
+         "$TMPFILES_SRC" "$POLKIT_SRC" "$RULES_SRC"; do
   if [ ! -f "$f" ]; then
     echo "missing $f" >&2
     exit 1
@@ -34,18 +43,31 @@ echo "==> $UDEV_DST"
 install -m644 "$UDEV_SRC" "$UDEV_DST"
 udevadm control --reload-rules
 
+echo "==> $TMPFILES_DST"
+install -m644 "$TMPFILES_SRC" "$TMPFILES_DST"
+systemd-tmpfiles --create "$TMPFILES_DST"
+
 echo "==> $UNIT_DST"
 install -m644 "$UNIT_SRC" "$UNIT_DST"
+echo "==> $REQ_PATH_DST"
+install -m644 "$REQ_PATH_SRC" "$REQ_PATH_DST"
+echo "==> $REQ_UNIT_DST"
+install -m644 "$REQ_UNIT_SRC" "$REQ_UNIT_DST"
 systemctl daemon-reload
 systemctl enable mintbook-power.service
+systemctl enable --now mintbook-power-request.path
 systemctl start mintbook-power.service
 
 echo "==> $POLKIT_DST"
 install -m644 "$POLKIT_SRC" "$POLKIT_DST"
+echo "==> $RULES_DST"
+install -dm755 /etc/polkit-1/rules.d
+install -m644 "$RULES_SRC" "$RULES_DST"
 
 echo
 echo "applied. check with: $ROOT/bin/power-check"
-echo "undo: systemctl disable --now mintbook-power.service"
-echo "      rm -f $APPLY_DST $UDEV_DST $UNIT_DST $POLKIT_DST"
+echo "undo: systemctl disable --now mintbook-power.service mintbook-power-request.path"
+echo "      rm -f $APPLY_DST $UDEV_DST $UNIT_DST $REQ_PATH_DST $REQ_UNIT_DST \\"
+echo "            $TMPFILES_DST $POLKIT_DST $RULES_DST"
 echo "      echo 100 > /sys/devices/system/cpu/intel_pstate/max_perf_pct"
 echo "      powerprofilesctl set balanced"

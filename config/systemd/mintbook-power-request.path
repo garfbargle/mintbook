@@ -1,0 +1,12 @@
+# Watch /run/mintbook-power/want. The panel writes a profile name there;
+# this starts mintbook-power-request.service as root. See docs/hardware.md.
+[Unit]
+Description=Watch mintbook power-profile requests
+
+[Path]
+PathChanged=/run/mintbook-power/want
+PathModified=/run/mintbook-power/want
+Unit=mintbook-power-request.service
+
+[Install]
+WantedBy=multi-user.target

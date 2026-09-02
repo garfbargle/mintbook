@@ -1,0 +1,10 @@
+# Apply the profile written to /run/mintbook-power/want.
+# Started by mintbook-power-request.path. See docs/hardware.md.
+[Unit]
+Description=Apply mintbook power profile from request file
+After=power-profiles-daemon.service
+Wants=power-profiles-daemon.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/mintbook-power-apply --from-request

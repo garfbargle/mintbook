@@ -135,14 +135,21 @@ That copies:
   → `/etc/udev/rules.d/` (ADP1 `change` → `SYSTEMD_WANTS`)
 - [`config/systemd/mintbook-power.service`](../config/systemd/mintbook-power.service)
   → `/etc/systemd/system/` (oneshot at boot; udev runs it again on unplug/plug)
+- [`config/systemd/mintbook-power-request.path`](../config/systemd/mintbook-power-request.path)
+  + [`.service`](../config/systemd/mintbook-power-request.service) — panel writes
+  `/run/mintbook-power/want`, root applies it. **No password on click.**
+- [`config/tmpfiles.d/mintbook-power.conf`](../config/tmpfiles.d/mintbook-power.conf)
+  → `/etc/tmpfiles.d/` (`/run/mintbook-power` owned `root:cobo`, mode 0770)
 - [`config/polkit/org.mintbook.power.policy`](../config/polkit/org.mintbook.power.policy)
-  → `/usr/share/polkit-1/actions/` (panel click via `pkexec`, no password in an
-  active session)
+  + [`10-mintbook-power.rules`](../config/polkit/10-mintbook-power.rules) — leftover
+  `pkexec` from a terminal, not used by the panel
 
 The **panel icon** (genmon, left of the battery) is the switcher. XFCE Power
 Manager settings has no power-profiles UI in 4.18. Click the gauge icon for
-Power Saver / Balanced / Performance. Plug or unplug still reapplies auto. CLI:
-`powerprofilesctl get` / `pkexec mintbook-power-apply <profile>`.
+Power Saver / Balanced / Performance. Plug or unplug still reapplies auto. CLI
+from a root shell: `mintbook-power-apply <profile>`. The panel does **not**
+call `pkexec` — a genmon-spawned pkexec still asked for a password even with
+`allow_active=yes`.
 
 Confirmed 2026-09-01: `udevadm test --action=change` on ADP1 sets
 `SYSTEMD_WANTS=mintbook-power.service`; journal
@@ -155,11 +162,15 @@ bin/power-check
 Undo:
 
 ```bash
-sudo systemctl disable --now mintbook-power.service
+sudo systemctl disable --now mintbook-power.service mintbook-power-request.path
 sudo rm -f /usr/local/sbin/mintbook-power-apply \
            /etc/udev/rules.d/99-mintbook-power.rules \
            /etc/systemd/system/mintbook-power.service \
-           /usr/share/polkit-1/actions/org.mintbook.power.policy
+           /etc/systemd/system/mintbook-power-request.path \
+           /etc/systemd/system/mintbook-power-request.service \
+           /etc/tmpfiles.d/mintbook-power.conf \
+           /usr/share/polkit-1/actions/org.mintbook.power.policy \
+           /etc/polkit-1/rules.d/10-mintbook-power.rules
 echo 100 | sudo tee /sys/devices/system/cpu/intel_pstate/max_perf_pct
 powerprofilesctl set balanced
 ```
@@ -186,6 +197,10 @@ powerprofilesctl set balanced
   `g_spawn_command_line_async`, so there is no Gdk event. xfwm4 rejects a menu
   grab at time 0; the process sat in `Gtk.main()` with nothing on screen. The
   click is an override-redirect window instead (`bin/power-menu`).
+- **pkexec from the panel.** `allow_active=yes` still produced a password
+  dialog: a genmon-spawned process is not a polkit "active" session, so pkexec
+  falls through to the default exec action. The panel writes
+  `/run/mintbook-power/want`; a root path unit applies it.
 
 ## Swap (zram)
 
