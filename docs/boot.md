@@ -129,15 +129,22 @@ Arguments`. Dump it with `sudo cat /boot/efi/EFI/OC/config.plist`.
 
 | Kernel | Notes |
 |---|---|
-| `7.0.0-30-generic` | **Required.** Ubuntu HWE (`linux-hwe-7.0`). Speakers only work here. |
+| `7.0.0-30-generic` | **Daily driver.** Ubuntu HWE (`linux-hwe-7.0`). Speakers only work here. |
+| `6.14.0-37-generic` | **Fallback only.** Boots Linux if 7.0 is broken. Speakers will be silent. No headers, so the speaker DKMS does not build for it. |
 
-`6.14.0-37-generic` was removed 2026-09-01. It was fine for keyboard/trackpad (the
-input failure is a boot race on every kernel — [input.md](input.md)), but the
-working speaker stack is a 7.0 DKMS build against Ubuntu's `linux-hwe-7.0` HDA
-tree. OpenLinuxBoot scans `/boot`, so once the 6.14 `vmlinuz`/`initrd` are gone
-the picker stops offering it.
+Keeping the previous kernel is the normal Mint/Ubuntu safety net — OpenLinuxBoot
+lists everything in `/boot`. Daily use stays on 7.0. Keep
+`linux-image-generic-hwe-24.04` installed so apt stays on the 7.0 HWE line.
 
-Keep `linux-image-generic-hwe-24.04` installed so apt stays on the 7.0 HWE line.
+The generic `/boot/vmlinuz` symlink must point at **7.0**. Reinstalling 6.14
+flips it; put it back:
+
+```bash
+sudo ln -sfn vmlinuz-7.0.0-30-generic /boot/vmlinuz
+sudo ln -sfn initrd.img-7.0.0-30-generic /boot/initrd.img
+sudo ln -sfn vmlinuz-6.14.0-37-generic /boot/vmlinuz.old
+sudo ln -sfn initrd.img-6.14.0-37-generic /boot/initrd.img.old
+```
 
 Do not conclude a kernel is broken from a single bad boot. Check `bin/input-check`
 first.
@@ -154,9 +161,9 @@ probe on this ABI (same trap as `leifliddy/macbook12-audio-driver`). See
 
 ## Rollback safety
 
-Only 7.0 is installed, so a bad kernel is no longer recoverable from the OpenCanopy
-picker. macOS is still on `nvme0n1p2`. `timeshift` is installed; snapshot before
-anything touching kernels or modules:
+6.14 is the OpenCanopy fallback if 7.0 will not boot. macOS is still on
+`nvme0n1p2`. `timeshift` is installed; snapshot before anything touching kernels
+or modules:
 
 ```bash
 sudo timeshift --create --comments "before <change>"

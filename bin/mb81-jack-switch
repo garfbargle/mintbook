@@ -1,0 +1,129 @@
+#!/bin/bash
+# MacBook8,1 headphone-jack auto-switch, adapted for this machine.
+#
+# Upstream mb81-jack-switch assumes WirePlumber 0.5 raw-PCM node names
+# (alsa_output...playback.0.0) and that restarting WirePlumber recreates
+# MacBook_Speaker_Raw. Mint 22 is WP 0.4: ACP stays on, the analog headphone
+# sink is alsa_output...analog-stereo, and Raw is a static PipeWire adapter
+# that only comes back if pipewire itself restarts.
+#
+#   plugged   -> close Raw (frees the HDA stream tag), analog profile, HP sink
+#   unplugged -> restart PipeWire (recreates Raw + EQ), default = speaker EQ
+#
+# Overrides: MB81_CARD_ID MB81_HP_SINK MB81_SPK_SINK MB81_CARD_NAME MB81_HP_PROFILE
+
+set -u
+
+CARD_ID="${MB81_CARD_ID:-PCH}"
+HP_SINK="${MB81_HP_SINK:-alsa_output.pci-0000_00_1b.0.analog-stereo}"
+SPK_SINK="${MB81_SPK_SINK:-input.MacBook_Speaker}"
+CARD_NAME="${MB81_CARD_NAME:-alsa_card.pci-0000_00_1b.0}"
+HP_PROFILE="${MB81_HP_PROFILE:-output:analog-stereo+input:analog-stereo}"
+
+log() { printf 'mb81-jack-switch: %s\n' "$*"; }
+
+card_index() {
+    local d
+    for d in /sys/class/sound/card[0-9]*; do
+        [[ -f "$d/id" && "$(cat "$d/id")" == "$CARD_ID" ]] || continue
+        echo "${d##*card}"
+        return 0
+    done
+    return 1
+}
+
+jack_numid() {
+    amixer -c "$1" controls 2>/dev/null \
+        | sed -n "s/numid=\([0-9]*\).*name='Headphone Jack'.*/\1/p" | head -1
+}
+
+jack_state() {
+    amixer -c "$1" cget numid="$2" 2>/dev/null \
+        | sed -n 's/.*: values=\(on\|off\).*/\1/p' | head -1
+}
+
+set_default() {
+    pw-metadata -n default 0 default.configured.audio.sink \
+        "{ \"name\": \"$1\" }" >/dev/null 2>&1
+    pactl set-default-sink "$1" >/dev/null 2>&1 || true
+}
+
+node_exists() {
+    pw-cli ls Node 2>/dev/null | grep -q "node.name = \"$1\""
+}
+
+wait_node() {
+    local name="$1" i
+    for i in $(seq 1 32); do
+        node_exists "$name" && return 0
+        sleep 0.25
+    done
+    return 1
+}
+
+pw_node_id() {
+    pw-cli ls Node 2>/dev/null | awk -v n="$1" '
+        /^[[:space:]]*id / { id=$2; sub(",", "", id) }
+        $0 ~ "node.name = \"" n "\"" { print id; exit }
+    '
+}
+
+destroy_node() {
+    local id
+    id="$(pw_node_id "$1")"
+    [[ -n "$id" ]] && pw-cli destroy "$id" >/dev/null 2>&1 || true
+}
+
+move_clients() {
+    local dest="$1" in
+    while read -r in; do
+        [[ -z "${in:-}" ]] && continue
+        # Leave the EQ's 4ch DSP loopback (client "-") alone; move real apps.
+        pactl move-sink-input "$in" "$dest" >/dev/null 2>&1 || true
+    done < <(pactl list short sink-inputs 2>/dev/null | awk '$3 != "-" {print $1}')
+}
+
+apply() {
+    if [[ "$1" == on ]]; then
+        log "headphones plugged -> $HP_SINK"
+        # Raw holds converter 0x0a with pause-on-idle off; destroy it so the
+        # analog headphone DAC can take a clean stream tag.
+        destroy_node MacBook_Speaker_Raw
+        pactl set-card-profile "$CARD_NAME" "$HP_PROFILE" >/dev/null 2>&1 || true
+        if wait_node "$HP_SINK"; then
+            set_default "$HP_SINK"
+            move_clients "$HP_SINK"
+        else
+            log "headphone sink $HP_SINK did not appear"
+        fi
+    else
+        log "headphones unplugged -> recreate speaker + $SPK_SINK"
+        systemctl --user restart pipewire pipewire-pulse wireplumber
+        if wait_node "$SPK_SINK"; then
+            set_default "$SPK_SINK"
+        else
+            log "speaker sink $SPK_SINK did not appear"
+        fi
+    fi
+}
+
+CARD="$(card_index)" || { log "CS4208 card ($CARD_ID) not found; exiting"; exit 1; }
+NUMID="$(jack_numid "$CARD")"
+[[ -z "$NUMID" ]] && { log "Headphone Jack control not found on card $CARD; exiting"; exit 1; }
+log "watching card $CARD 'Headphone Jack' (numid=$NUMID)"
+
+last="$(jack_state "$CARD" "$NUMID")"
+case "$last" in
+    on) log "startup: headphones present -> $HP_SINK"; apply on ;;
+    *)  log "startup: speakers -> $SPK_SINK"; set_default "$SPK_SINK" ;;
+esac
+
+alsactl monitor "hw:$CARD" 2>/dev/null | while read -r _; do
+    s="$(jack_state "$CARD" "$NUMID")"
+    [[ -z "$s" || "$s" == "$last" ]] && continue
+    last="$s"
+    apply "$s"
+done
+
+log "alsactl monitor exited"
+exit 1

@@ -4,8 +4,9 @@
 [thomas-shirley/macbook8.1-speaker-driver](https://github.com/thomas-shirley/macbook8.1-speaker-driver)
 (`macbook12-audio/0.1` DKMS). `coef 0x1f = 0` (clock locked). Play through
 **MacBook Speaker (EQ)** (`input.MacBook_Speaker`) — Chrome/YouTube included.
-Headphone jack switching is still described as wonky upstream. Kernel 6.14 was
-removed; this stack does not exist there.
+Headphone jack auto-switch uses [`bin/mb81-jack-switch`](../bin/mb81-jack-switch)
+(overrides the upstream unit). Kernel 6.14 is a boot fallback only — no speaker
+DKMS there.
 
 ---
 
@@ -319,7 +320,8 @@ is a four-part DKMS stack for this exact machine (`0x10134208` / `0x106b6400`):
 4. `snd-hda-codec-generic` — skip input-path / `init_digital` (those re-latch `0x1f`)
 
 Cloned at `~/macbook8.1-speaker-driver`. DKMS name is still `macbook12-audio/0.1`.
-Installed for **7.0.0-30-generic** only. `6.14` was removed 2026-09-01.
+Installed for **7.0.0-30-generic** only. `6.14` is kept as a boot fallback
+(image + modules, no headers) so DKMS does not build for it.
 
 ### Build against Ubuntu HDA, not kernel.org
 
@@ -383,13 +385,26 @@ pactl get-default-sink   # input.MacBook_Speaker
 
 `coef 0x1f` absent from a nonzero dump means `0` (locked). Bad is `0x400`.
 
-Known leftover: headphone jack auto-switch is still wonky upstream. ACP still
-exposes IEC958 because analog-stereo is marked unavailable with the jack
-unplugged — leave it unused.
+### Headphone jack auto-switch
 
-**Bluetooth audio is not an option.** There is no Bluetooth adapter present at all —
-`/sys/class/bluetooth/` is empty and `rfkill` lists only the WLAN device. That is a
-separate BCM4350 firmware problem.
+The CS4208 headphone DAC (`0x02`) and the TDM speaker converter (`0x0a`) share
+an HDA stream tag. The speaker Raw node is pinned open, so a normal unplug
+leaves the speakers silent. Upstream ships `mb81-jack-switch.service`; it
+assumes WirePlumber 0.5 raw-PCM names and that restarting WirePlumber recreates
+Raw. Neither is true here.
+
+This machine's watcher is [`bin/mb81-jack-switch`](../bin/mb81-jack-switch),
+enabled via `~/.config/systemd/user/mb81-jack-switch.service.d/override.conf`:
+
+- **plug** — destroy `MacBook_Speaker_Raw`, switch the card to analog-stereo,
+  default sink `alsa_output.pci-0000_00_1b.0.analog-stereo`
+- **unplug** — `systemctl --user restart pipewire pipewire-pulse wireplumber`,
+  default sink `input.MacBook_Speaker`
+
+ACP still exposes IEC958 when the jack is unplugged — leave it unused.
+
+Bluetooth is a later session: there is no adapter
+(`/sys/class/bluetooth/` is empty). BCM4350 firmware, not this codec.
 
 ---
 

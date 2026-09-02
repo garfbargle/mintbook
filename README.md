@@ -52,6 +52,7 @@ bin/                    scripts; mirrors ~/.local/bin/
   hda-dump              HDA verb dump (root; historical)
   hda-enable-digen      enable CS4208 Digital Convert (root; historical)
   hda-gpio-sweep        GPIO/DigEn sweep during playback (root; ruled out)
+  mb81-jack-switch      headphone jack auto-switch (user systemd override)
   codec-snapshot        capture codec state to diff
   spotlight             Cmd+Space launcher toggle
   panel-cpu             genmon CPU sparkline
@@ -83,9 +84,10 @@ first created.
 
 ## Before changing anything risky
 
-Only kernel **7.0** is installed (speakers need it). OpenLinuxBoot, not GRUB, is
-the picker — see [docs/boot.md](docs/boot.md). For anything touching modules or
-packages, snapshot first:
+Daily kernel is **7.0** (speakers need it). **6.14** stays installed as the
+normal fallback if 7.0 will not boot — speakers are silent there. OpenLinuxBoot,
+not GRUB, is the picker — see [docs/boot.md](docs/boot.md). For anything
+touching modules or packages, snapshot first:
 
 ```bash
 sudo timeshift --create --comments "before <change>"
