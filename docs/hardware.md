@@ -114,4 +114,4 @@ is installed as a `.deb` and bundles its own runtime under
 
 Screenshot tooling is **`xfce4-screenshooter` only** — no `scrot`, `maim` or `import`.
 This keyboard has no Print key; the bindings are **Cmd+Shift+3 / 4 / 5**
-([desktop.md](desktop.md)).
+(saved under `~/Pictures/Screenshots/`, see [desktop.md](desktop.md)).

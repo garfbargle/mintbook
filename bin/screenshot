@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# screenshot - save a png via xfce4-screenshooter, no dialog.
+# Usage: screenshot -f|-r|-w     (fullscreen / region / window)
+# See docs/desktop.md.
+#
+# -s must be a *file*, not a directory. Passing a directory makes
+# xfce4-screenshooter wait on the save dialog, which is the failure mode
+# that made the first keybind look dead on this panel.
+set -euo pipefail
+dir="$HOME/Pictures/Screenshots"
+mkdir -p "$dir"
+mode=${1:--f}
+case "$mode" in
+  -f|-r|-w) ;;
+  *) echo "usage: $0 -f|-r|-w" >&2; exit 1 ;;
+esac
+file="$dir/Screenshot_$(date +%Y-%m-%d_%H-%M-%S).png"
+exec xfce4-screenshooter "$mode" -s "$file"

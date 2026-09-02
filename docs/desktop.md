@@ -242,11 +242,11 @@ centred, 46% wide, 14% from the top, translucent dark, rounded 16px, fuzzy match
 ### Keyboard
 
 ```
-/commands/custom/Super_L              = /bin/true              # frees the Super key
-/commands/custom/<Super>space         = ~/.local/bin/spotlight
-/commands/custom/<Super><Shift>3      = xfce4-screenshooter -f  # fullscreen
-/commands/custom/<Super><Shift>4      = xfce4-screenshooter -r  # region
-/commands/custom/<Super><Shift>5      = xfce4-screenshooter -w  # window
+/commands/custom/Super_L                    = /bin/true              # frees the Super key
+/commands/custom/<Super>space               = ~/.local/bin/spotlight
+/commands/custom/<Shift><Super>numbersign   = ~/.local/bin/screenshot -f  # Cmd+Shift+3
+/commands/custom/<Shift><Super>dollar       = ~/.local/bin/screenshot -r  # Cmd+Shift+4
+/commands/custom/<Shift><Super>percent      = ~/.local/bin/screenshot -w  # Cmd+Shift+5
 ```
 
 Copy/paste is deliberately unchanged: **Ctrl+C / Ctrl+V** everywhere,
@@ -258,15 +258,25 @@ This keyboard has **no Print key**, so the stock XFCE `Print` /
 `Shift+Print` / `Alt+Print` bindings are unreachable. Super is already the
 Cmd-like key (Spotlight), so the macOS chords are the ones that work:
 
-| Chord | What |
-|---|---|
-| **Cmd+Shift+3** | whole screen |
-| **Cmd+Shift+4** | drag a region |
-| **Cmd+Shift+5** | current window |
+| Chord | What | Saved as |
+|---|---|---|
+| **Cmd+Shift+3** | whole screen | `~/Pictures/Screenshots/` |
+| **Cmd+Shift+4** | drag a region | same |
+| **Cmd+Shift+5** | current window | same |
 
-Each opens xfce4-screenshooter's save/copy dialog after capture. The old Print
-bindings are still in xfconf in case an external keyboard appears. There is no
-`scrot` / `maim` / `import` — see [display.md](display.md).
+They run [`bin/screenshot`](../bin/screenshot), which calls xfce4-screenshooter
+with `-s` so there is **no save/copy dialog**. That dialog is why the first bind
+looked dead: `xfce4-screenshooter -f` with no `-s` waits on a GTK window that
+does not reliably appear on this panel.
+
+**The xfconf key names are not `3` / `4` / `5`.** XFCE's grabber translates
+Shift+3 to keyval `numbersign` and then *keeps* Shift in the modifier mask
+(libxfce4ui bug #8744 workaround). The event it looks up is
+`<Shift><Super>numbersign`, not `<Super><Shift>3`. Binding the latter is a
+no-op — X receives the grab, the filter does not match, nothing runs. Same
+for `dollar` (4) and `percent` (5).
+
+The old Print bindings stay in xfconf in case an external keyboard appears.
 
 ---
 

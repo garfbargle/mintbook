@@ -16,14 +16,14 @@
 /commands/custom/<Primary><Shift>Escape    xfce4-taskmanager
 /commands/custom/Print                     xfce4-screenshooter
 /commands/custom/<Shift>Print              xfce4-screenshooter -r
+/commands/custom/<Shift><Super>dollar      /home/cobo/.local/bin/screenshot -r
+/commands/custom/<Shift><Super>numbersign  /home/cobo/.local/bin/screenshot -f
+/commands/custom/<Shift><Super>percent     /home/cobo/.local/bin/screenshot -w
 /commands/custom/<Super>e                  thunar
 /commands/custom/Super_L                   /bin/true
 /commands/custom/<Super>p                  xfce4-display-settings --minimal
 /commands/custom/<Super>r                  xfce4-appfinder -c
 /commands/custom/<Super>r/startup-notify   true
-/commands/custom/<Super><Shift>3           xfce4-screenshooter -f
-/commands/custom/<Super><Shift>4           xfce4-screenshooter -r
-/commands/custom/<Super><Shift>5           xfce4-screenshooter -w
 /commands/custom/<Super>space              /home/cobo/.local/bin/spotlight
 /commands/custom/XF86Display               xfce4-display-settings --minimal
 /commands/custom/XF86Mail                  exo-open --launch MailReader

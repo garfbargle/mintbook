@@ -59,7 +59,7 @@ DPI was tuned by eye in stages: 96 (too small) → 144 (still too small) → **1
 
 `xfce4-screenshooter` is the only screenshot tool installed (no `scrot`, `maim`, or
 `import`). This keyboard has **no Print key** — use the Super (Cmd) chords in
-[desktop.md](desktop.md):
+[desktop.md](desktop.md). Files land in `~/Pictures/Screenshots/`:
 
 ```
 Cmd+Shift+3   fullscreen
