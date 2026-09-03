@@ -1,0 +1,213 @@
+#!/usr/bin/env python3
+"""Popup to pick night-light mode. Bound as the genmon click for panel-night.
+
+Same override-redirect pattern as bin/power-menu — genmon clicks have no Gdk
+event, so a Gtk.Menu is rejected by xfwm4.
+"""
+import os
+import signal
+import subprocess
+import sys
+
+import gi
+gi.require_version('Gtk', '3.0')
+from gi.repository import Gtk, Gdk
+
+APPLY = os.path.expanduser('~/.local/bin/night-apply')
+MODE_FILE = os.path.expanduser('~/.config/mintbook/night.mode')
+PIDFILE = os.path.expanduser('~/.cache/mintbook/night-menu.pid')
+MODES = (
+    ('auto', 'Auto', 'Sunset to sunrise'),
+    ('on', 'On', 'Stay at night temperature'),
+    ('off', 'Off', 'Daylight'),
+)
+
+
+def current():
+    try:
+        m = open(MODE_FILE).read().strip()
+    except OSError:
+        return 'auto'
+    return m if m in {k for k, *_ in MODES} else 'auto'
+
+
+def kill_previous():
+    try:
+        with open(PIDFILE) as f:
+            pid = int(f.read().strip())
+    except (OSError, ValueError):
+        return
+    if pid == os.getpid():
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        pass
+
+
+def write_pid():
+    os.makedirs(os.path.dirname(PIDFILE), exist_ok=True)
+    with open(PIDFILE, 'w') as f:
+        f.write(str(os.getpid()))
+
+
+def pointer_xy():
+    display = Gdk.Display.get_default()
+    seat = display.get_default_seat()
+    pointer = seat.get_pointer()
+    _screen, x, y = pointer.get_position()
+    return int(x), int(y)
+
+
+def apply(mode):
+    return subprocess.run([APPLY, mode], capture_output=True, text=True)
+
+
+def fail(msg):
+    d = Gtk.MessageDialog(
+        message_type=Gtk.MessageType.ERROR,
+        buttons=Gtk.ButtonsType.OK,
+        text='Could not change night light',
+    )
+    d.format_secondary_text(msg)
+    d.run()
+    d.destroy()
+
+
+def main():
+    kill_previous()
+    write_pid()
+    cur = current()
+
+    win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
+    win.set_decorated(False)
+    win.set_skip_taskbar_hint(True)
+    win.set_skip_pager_hint(True)
+    win.set_keep_above(True)
+    win.set_resizable(False)
+    win.set_accept_focus(True)
+    win.set_type_hint(Gdk.WindowTypeHint.POPUP_MENU)
+
+    css = Gtk.CssProvider()
+    css.load_from_data(b"""
+        window {
+            background-color: #212124;
+        }
+        button {
+            color: #ffffff;
+            background-image: none;
+            background-color: transparent;
+            border: none;
+            border-radius: 10px;
+            padding: 8px 14px;
+            box-shadow: none;
+        }
+        button:hover {
+            background-color: rgba(255,255,255,0.12);
+        }
+        button.current {
+            background-color: rgba(255,255,255,0.18);
+        }
+        label.title { font-weight: 600; }
+        label.sub { color: rgba(255,255,255,0.55); font-size: 11px; }
+    """)
+    Gtk.StyleContext.add_provider_for_screen(
+        Gdk.Screen.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+    box.set_margin_top(10)
+    box.set_margin_bottom(10)
+    box.set_margin_start(10)
+    box.set_margin_end(10)
+    win.add(box)
+
+    def quit(*_):
+        Gtk.main_quit()
+        return False
+
+    def pick(_btn, mode):
+        if mode != cur:
+            r = apply(mode)
+            if r.returncode != 0:
+                msg = (r.stderr or r.stdout or f'exit {r.returncode}').strip()
+                fail(msg or 'night-apply failed')
+        quit()
+
+    for key, title, sub in MODES:
+        btn = Gtk.Button()
+        inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        t = Gtk.Label(label=title, xalign=0)
+        t.get_style_context().add_class('title')
+        s = Gtk.Label(label=sub, xalign=0)
+        s.get_style_context().add_class('sub')
+        inner.pack_start(t, False, False, 0)
+        inner.pack_start(s, False, False, 0)
+        btn.add(inner)
+        if key == cur:
+            btn.get_style_context().add_class('current')
+        btn.connect('clicked', pick, key)
+        box.pack_start(btn, False, False, 0)
+
+    def on_key(_w, event):
+        if event.keyval == Gdk.KEY_Escape:
+            quit()
+            return True
+        return False
+
+    win.connect('key-press-event', on_key)
+    win.connect('destroy', quit)
+
+    px, py = pointer_xy()
+    win.realize()
+    gdk_win = win.get_window()
+    if gdk_win is not None:
+        gdk_win.set_override_redirect(True)
+
+    win.show_all()
+    alloc = win.get_allocation()
+    w, h = max(alloc.width, 260), max(alloc.height, 1)
+    display = Gdk.Display.get_default()
+    monitor = display.get_monitor_at_point(px, py) or display.get_primary_monitor()
+    geo = monitor.get_geometry()
+    x = min(max(px - 20, geo.x + 8), geo.x + geo.width - w - 8)
+    y = py + 8
+    if py < 64:
+        y = 56
+    if y + h > geo.y + geo.height - 8:
+        y = geo.y + geo.height - h - 8
+    win.move(x, y)
+    win.present()
+
+    if gdk_win is not None:
+        seat = display.get_default_seat()
+        seat.grab(
+            gdk_win, Gdk.SeatCapabilities.POINTER, True,
+            None, None, None)
+
+        def on_press(_w, event):
+            if event.window != gdk_win:
+                return False
+            if event.x < 0 or event.y < 0 or event.x > w or event.y > h:
+                quit()
+                return True
+            return False
+
+        win.connect('button-press-event', on_press)
+
+    Gtk.main()
+    try:
+        os.remove(PIDFILE)
+    except OSError:
+        pass
+
+
+if __name__ == '__main__':
+    Gdk.set_program_class('mintbook-night')
+    try:
+        main()
+    finally:
+        try:
+            os.remove(PIDFILE)
+        except OSError:
+            pass
+    sys.exit(0)

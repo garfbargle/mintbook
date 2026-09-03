@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Night Light
+Comment=Sunset-to-sunrise colour temperature (redshift)
+Exec=/home/cobo/.local/bin/night-apply
+Hidden=false
+X-GNOME-Autostart-enabled=true

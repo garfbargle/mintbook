@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""Night-light indicator for xfce4-genmon-plugin.
+
+redshift-gtk's XApp tray is ~20px and stuck in plugin-10 with mintUpdate.
+This is the 30px moon; click opens bin/night-menu. See docs/desktop.md.
+"""
+import os
+import subprocess
+import sys
+
+DIR = os.path.expanduser('~/.local/share/mintbook/night')
+MENU = os.path.expanduser('~/.local/bin/night-menu')
+MODE_FILE = os.path.expanduser('~/.config/mintbook/night.mode')
+CONF = os.path.expanduser('~/.config/redshift.conf')
+
+LABELS = {
+    'auto': 'Auto',
+    'on': 'On',
+    'off': 'Off',
+}
+
+
+def mode():
+    try:
+        m = open(MODE_FILE).read().strip()
+    except OSError:
+        return 'auto'
+    return m if m in LABELS else 'auto'
+
+
+def redshift_status():
+    """Period and colour temperature from redshift -p. None if it fails."""
+    try:
+        out = subprocess.check_output(
+            ['redshift', '-p', '-c', CONF],
+            text=True, timeout=2, stderr=subprocess.DEVNULL)
+    except Exception:
+        return None, None
+    period = temp = None
+    for line in out.splitlines():
+        if line.startswith('Period:'):
+            period = line.split(':', 1)[1].strip()
+        elif line.startswith('Color temperature:'):
+            temp = line.split(':', 1)[1].strip()
+    return period, temp
+
+
+def warm(m, period):
+    if m == 'on':
+        return True
+    if m == 'off':
+        return False
+    return period in ('Night', 'Transition')
+
+
+def main():
+    print(f'<click>{MENU}</click>')
+    print(f'<iconclick>{MENU}</iconclick>')
+    m = mode()
+    period, temp = redshift_status()
+    icon = 'night-on' if warm(m, period) else 'night-off'
+    print(f'<img>{DIR}/{icon}.svg</img>')
+    title = LABELS[m]
+    bits = [f'Night Light · {title}']
+    if m == 'auto' and period:
+        bits.append(period + (f' · {temp}' if temp else ''))
+    elif m == 'on' and temp:
+        bits.append(temp)
+    elif m == 'off':
+        bits.append('Daylight')
+    bits.append('Click to change')
+    print('<tool>' + '\n'.join(bits) + '</tool>')
+
+
+if __name__ == '__main__':
+    main()
+    sys.exit(0)

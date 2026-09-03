@@ -28,7 +28,7 @@ From the Mint repos:
 ```
 plank rofi xdotool sassc libglib2.0-dev-bin libxml2-utils fonts-inter
 xfce4-cpugraph-plugin xfce4-sensors-plugin xfce4-genmon-plugin
-lm-sensors gnome-system-monitor btop
+lm-sensors gnome-system-monitor btop redshift
 ```
 
 From GitHub (cloned to `~/src/`):
@@ -77,18 +77,20 @@ Plugin order (`plugin-ids`), left to right:
 | 17 | genmon | CPU temperature |
 | 18 | genmon | Wi-Fi |
 | 21 | genmon | Bluetooth |
+| 23 | genmon | night light |
 | 12 | pulseaudio | volume |
 | 22 | genmon | power profile (Power Saver / Balanced / Performance) |
 | 11 | power-manager-plugin | battery |
 | 13 | clock | ` %a %-d %b  %H:%M  `, Inter 11, `digital-layout=3` (time only) |
 
-Right-to-left: **date/time, battery, power profile, volume, bluetooth, wifi,
-temperature, CPU, then the rest.** This follows the macOS convention — the clock
-is furthest right with the battery beside it, then the power mode, then volume,
-then Wi-Fi / Bluetooth. Informational items (temp, CPU) sit inboard of the system
-status group, and anything unrecognised accumulates right-to-left from the far
-left of the group. mintUpdate's own icon appears in the xapp group (plugin-10)
-only when there are updates.
+Right-to-left: **date/time, battery, power profile, volume, night light,
+bluetooth, wifi, temperature, CPU, then the rest.** This follows the macOS
+convention — the clock is furthest right with the battery beside it, then the
+power mode, then volume, then night light with Wi-Fi / Bluetooth. Informational
+items (temp, CPU) sit inboard of the system status group, and anything
+unrecognised accumulates right-to-left from the far left of the group.
+mintUpdate's own icon appears in the xapp group (plugin-10) only when there
+are updates.
 
 **Reordering panel items:** XFCE has no macOS-style hold-a-key-and-drag. The
 equivalents are right-click any item → **Move** (then drag it along the bar), or
@@ -226,6 +228,45 @@ Icons from [`icons/generate-power-genmon.py`](../icons/generate-power-genmon.py)
 (Adwaita `power-profile-*-symbolic` paths, baked `#ffffff`).
 
 CLI is still `powerprofilesctl get` / `pkexec mintbook-power-apply …`.
+
+### Night light (`plugin-23`, genmon)
+
+Sunset-to-sunrise colour temperature. **redshift** writes the RandR LUT;
+**redshift-gtk** was tried first and rejected (XApp lightbulb at ~20px in
+plugin-10, stock menu). The indicator is a 30px moon, same canvas as wifi/bt,
+immediately left of volume.
+
+```
+sudo apt install redshift
+bin/night-install
+```
+
+Config is [`config/redshift.conf`](../config/redshift.conf) → `~/.config/redshift.conf`:
+
+| | |
+|---|---|
+| Location | San José **9.93 N, 84.08 W** (manual; Costa Rica is small enough) |
+| Day | 6500 K |
+| Night | 3500 K |
+| Method | RandR gamma on `eDP-1` |
+
+Click opens [`bin/night-menu`](../bin/night-menu) (override-redirect, same
+reason as the power menu). Three modes:
+
+| | |
+|---|---|
+| **Auto** | Follow the sun. Default. |
+| **On** | Lock night temperature (`redshift -t 3500:3500`) |
+| **Off** | Kill redshift, `redshift -x` |
+
+Mode is `~/.config/mintbook/night.mode`. Autostart is
+[`config/autostart/mintbook-night.desktop`](../config/autostart/mintbook-night.desktop)
+→ `night-apply` with the saved mode. The moon is full white while the warm LUT
+is on, 35% when it is not (off, or auto during the day). Tooltip is the mode
+and the current period/temperature from `redshift -p`.
+
+Do **not** launch the Redshift app from the menu — that is redshift-gtk, and
+its tray would come back next to mintUpdate.
 
 ### Dock (Plank)
 
@@ -480,6 +521,8 @@ WM. It does **not** revert the icon theme files — originals for those are in
 - **Claude's tray icon** is a black XEmbed bitmap designed for a light menu bar, so it
   reads as a hole on the dark bar. User said to leave it. The real fix would be
   switching the bar to light with WhiteSur's `--black` panel-font option.
+- ~~**Night light.**~~ **Done 2026-09-02.** Stock redshift-gtk rejected (size,
+  placement, menu). genmon moon is plugin-23, redshift is the engine.
 - ~~**Thermals / battery.**~~ **Done 2026-09-01.** Fanless; unrestricted Electron still
   82–93 °C on AC (full turbo, by design). On battery: `power-saver` +
   `max_perf_pct=70` (~77 °C / ~5.8 W package under the same load).

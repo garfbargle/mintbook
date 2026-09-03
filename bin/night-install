@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# night-install — genmon night light on the top bar. No root.
+# Hides redshift-gtk, installs the moon indicator as plugin-23 (between
+# Bluetooth and volume), and starts Auto mode. See docs/desktop.md.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+BIN="$HOME/.local/bin"
+PANEL_RC="$HOME/.config/xfce4/panel"
+AUTOSTART="$HOME/.config/autostart"
+PLUGIN=23
+
+if [ "${DISPLAY:-}" = '' ]; then
+  echo "DISPLAY is unset" >&2
+  exit 1
+fi
+
+echo "==> icons"
+python3 "$ROOT/icons/generate-night-genmon.py"
+
+echo "==> $BIN"
+install -dm755 "$BIN"
+install -m755 "$ROOT/bin/night-apply" "$BIN/night-apply"
+install -m755 "$ROOT/bin/night-menu" "$BIN/night-menu"
+install -m755 "$ROOT/bin/panel-night" "$BIN/panel-night"
+
+echo "==> redshift.conf"
+install -m644 "$ROOT/config/redshift.conf" "$HOME/.config/redshift.conf"
+
+echo "==> genmon-$PLUGIN.rc"
+install -dm755 "$PANEL_RC"
+install -m644 "$ROOT/config/xfce4-panel/genmon-23.rc" "$PANEL_RC/genmon-23.rc"
+
+echo "==> autostart"
+install -dm755 "$AUTOSTART"
+install -m644 "$ROOT/config/autostart/mintbook-night.desktop" \
+  "$AUTOSTART/mintbook-night.desktop"
+rm -f "$AUTOSTART/redshift-gtk.desktop"
+
+echo "==> panel plugin $PLUGIN"
+# Running plugins write xfconf on shutdown, so stop first.
+xfce4-panel -q 2>/dev/null || true
+sleep 0.4
+
+xfconf-query -c xfce4-panel -p /plugins/plugin-$PLUGIN -n -t string -s genmon
+
+# Between Bluetooth (21) and volume (12).
+xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids \
+  --force-array \
+  -t int -s 1 -t int -s 7 -t int -s 8 -t int -s 10 \
+  -t int -s 19 -t int -s 17 -t int -s 18 -t int -s 21 \
+  -t int -s $PLUGIN \
+  -t int -s 12 -t int -s 22 -t int -s 11 -t int -s 13
+
+nohup xfce4-panel >/dev/null 2>&1 &
+sleep 0.8
+
+echo "==> apply auto"
+"$BIN/night-apply" auto
+
+echo
+echo "night light is plugin-$PLUGIN, Auto. click the moon: Auto / On / Off"
+echo "undo the icon: xfce4-panel -q; xfconf-query -c xfce4-panel -p /plugins/plugin-$PLUGIN -r -R"
+echo "               then restore plugin-ids without $PLUGIN and start xfce4-panel"
