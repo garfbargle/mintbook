@@ -54,6 +54,8 @@ DPI was tuned by eye in stages: 96 (too small) → 144 (still too small) → **1
   from rendering under the bar. See [desktop.md](desktop.md).
 - Some applications keep their own scaling and will not follow xsettings — **Firefox**
   (`layout.css.devPixelsPerPx`) and **Electron apps** in particular.
+  **Chrome does follow it**: a `chrome://gpu` export reports `scale=1.75` and a
+  1317x823 work area, which is 168/96 and 2304x1440 divided by it. Verified 2026-09-04.
 
 ## Video decode
 
@@ -64,6 +66,11 @@ part has no encode entrypoint at all. `i965` is the right driver here and is for
 Neither driver decodes **VP9 or AV1**; Broadwell has no such silicon. Sites that
 default to those codecs still decode on the CPU, and this chip is fanless, so that is
 felt as heat rather than as dropped frames.
+
+Chrome's own `chrome://gpu` confirms this from the other side: its hardware decode list
+is h264 baseline/main/high and vp8, and nothing else. Decode was **already hardware
+accelerated before** the driver change — see [hardware.md](hardware.md), What Chrome
+actually does. Encode was not.
 
 ## Screenshots
 

@@ -312,6 +312,43 @@ Selected by [`config/environment.d/90-mintbook-libva.conf`](../config/environmen
 > chip that is felt. The driver swap does not fix that; only serving H.264 does.
 > Whether Chrome picks up VA-API at all is a separate question: check `chrome://gpu`.
 
+### What Chrome actually does (2026-09-04)
+
+From a `chrome://gpu` export, Chrome 152, **taken while iHD was still the live
+driver** — the session predated the `environment.d` file, so this is the *before*
+picture, not the i965 one.
+
+| | |
+|---|---|
+| Video Decode | **Hardware accelerated** |
+| Decode profiles | h264 baseline / main / high, vp8 — 16x16 to 4096x4096 |
+| Video Encode | **Software only. Hardware acceleration disabled** |
+| Encode profiles | *(empty)* |
+| Canvas / Compositing / Rasterization / WebGL | hardware accelerated |
+| GL path | `gl=egl-angle, angle=opengl`, ozone x11 |
+| GPU process crashes | 0 |
+
+**Decode was already working.** The open question from the session that forced i965
+— whether Chrome used VA-API at all — is answered: it does, and it did so before the
+driver change. There is no decode win to collect here.
+
+**No VP9 and no AV1 in that list.** This is the empirical confirmation of the
+Broadwell limit, not just the spec claim: YouTube's default codecs decode on the CPU,
+and on a fanless chip that is the heat. The only lever is making sites serve H.264.
+
+**Encode is off, and the export cannot say why.** Chrome reports it as "disabled,
+either via blocklist, about:flags or the command line". Two candidate causes and this
+dump does not separate them:
+
+1. iHD exposes **no encode entrypoint at all** on this part — true at the time of the
+   export, and sufficient on its own to explain an empty encode list.
+2. Chrome's own gate on VA-API encode under Linux.
+
+i965 does have `VAEntrypointEncSlice`, so **re-export `chrome://gpu` after the next
+login** — that is the discriminator. If encode is still software-only with i965 live,
+the cause is (2) and it needs a Chrome feature flag, not a driver. Worth chasing only
+if you do video calls or screen recording; it does nothing for playback.
+
 ## Housekeeping
 
 - **Journal was uncapped.** Stock `journald.conf` is empty, so the default is 10% of
