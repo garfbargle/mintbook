@@ -369,8 +369,33 @@ dump does not separate them:
 
 i965 does have `VAEntrypointEncSlice`, so **re-export `chrome://gpu` after the next
 login** — that is the discriminator. If encode is still software-only with i965 live,
-the cause is (2) and it needs a Chrome feature flag, not a driver. Worth chasing only
-if you do video calls or screen recording; it does nothing for playback.
+the cause is (2) and it needs a Chrome flag, not a driver. Worth chasing only if you
+do video calls or screen recording; it does nothing for playback.
+
+> **Restarting Chrome is not enough, and a second export proved it.** A dump taken at
+> 05:09 UTC from a Chrome whose GPU process started at 23:10 local — well after the
+> `environment.d` file was written — was byte-for-byte the same verdict. Reading
+> `/proc/<pid>/environ` for the running Chrome showed **no `LIBVA_DRIVER_NAME` at
+> all**. `/etc/environment.d` is read by the *session* at login; a process started
+> later in the same session never sees it. Check the process environment, not the
+> clock, before believing a dump is the "after" picture.
+
+To test it **without logging out**, launch one Chrome with the variable set by hand
+and open `chrome://gpu` in that window:
+
+```bash
+LIBVA_DRIVER_NAME=i965 google-chrome-stable --user-data-dir=/tmp/cr-i965
+```
+
+There is no scripted version of this. `chrome://gpu` fills itself in from the GPU
+process after load, so `--headless=new --dump-dom` returns the empty template — tried
+under both drivers, 101116 bytes each, no `accelerated` anywhere in the output.
+
+If it does turn out to need a Chrome flag (`--enable-features=VaapiVideoEncoder`),
+note that **Google Chrome's `.deb` wrapper reads no flags file**. `/usr/bin/google-chrome-stable`
+is a symlink to `/opt/google/chrome/google-chrome`, which sources nothing — the
+`chrome-flags.conf` convention is a Chromium packaging thing, not this. The flag would
+have to go on the `Exec=` line of the desktop entry.
 
 ## Housekeeping
 
