@@ -15,12 +15,12 @@ MENU = os.path.expanduser('~/.local/bin/power-menu')
 LABELS = {
     'power-saver': 'Power Saver',
     'balanced': 'Balanced',
-    'performance': 'Performance',
+    'performance': 'Sustained',
 }
 HINTS = {
     'power-saver': 'Battery default — CPU capped ~1.6 GHz',
     'balanced': 'AC default — turbo allowed',
-    'performance': 'Prefer speed — turbo allowed',
+    'performance': 'Long compiles — ~20% more work, same heat',
 }
 
 

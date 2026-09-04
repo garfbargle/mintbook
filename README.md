@@ -23,7 +23,7 @@ No Apple logo. No blur. A 52px glass bar, a dock, and Cmd+Space.
 </p>
 
 <p align="center">
-  <img src="docs/images/power-menu.jpg" alt="Power Saver, Balanced, Performance" width="420">
+  <img src="docs/images/power-menu.jpg" alt="Power Saver, Balanced, Sustained" width="420">
 </p>
 
 Cmd+Shift+3 takes a screenshot. On battery it stays cool. Plug in, and it opens up.

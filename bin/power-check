@@ -31,7 +31,8 @@ got_pct=$(cat $PSTATE/max_perf_pct 2>/dev/null || echo '')
 got_profile=$(powerprofilesctl get 2>/dev/null || echo '')
 case "$got_profile" in
   power-saver) expect_pct=70 ;;
-  balanced|performance) expect_pct=100 ;;
+  balanced) expect_pct=100 ;;
+  performance) expect_pct=75 ;;   # "Sustained" — see docs/hardware.md
   *) expect_pct= ;;
 esac
 

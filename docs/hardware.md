@@ -150,7 +150,30 @@ execution, which is why this table has a work column and the ones above do not.
 
 This is a real trade-off, not a free win: the sprint is useful for short interactive
 bursts (app launch, page render) that finish before they hit the wall. A blanket AC
-cap would trade that away to speed up long compiles. **Not installed** — see Ruled out.
+cap would trade that away to speed up long compiles, so it is **not the default** —
+see Ruled out. It is on the panel instead, as **Sustained**, for when you know the
+job is long. Auto still reclaims it on the next charger event.
+
+### The three profiles
+
+`powerprofilesctl` supplies EPB; `max_perf_pct` is ours. Measured on battery
+2026-09-04 through the panel's own request-file path:
+
+| Panel | PPD profile | EPB | `max_perf_pct` | For |
+|---|---|---|---|---|
+| Power Saver | `power-saver` | 15 | 70 | battery default — coolest, ~1.6 GHz |
+| Balanced | `balanced` | 8 | 100 | AC default — short bursts finish before the wall |
+| **Sustained** | `performance` | 0 | **75** | long jobs — ~20–25% more work, same heat |
+
+**"Performance" used to mean EPB=0 and `max_perf_pct=100`, and that was a placebo
+pointing the wrong way.** It differed from Balanced only in EPB, and 100 is the
+*worst* ceiling for sustained work on this chassis (see the sweep above). Renamed to
+**Sustained** and repointed at 75 on 2026-09-04, which is the setting that actually
+gets more done. The PPD key is still `performance`, so the icon filenames and
+`powerprofilesctl get` parsing are unchanged.
+
+> Recorded EPB for `balanced` was 6; it read **8** when re-measured on battery
+> 2026-09-04. Both are PPD's number, not ours. Do not treat 6 as a constant.
 
 ### Policy (installed)
 
@@ -179,7 +202,7 @@ That copies:
 
 The **panel icon** (genmon, left of the battery) is the switcher. XFCE Power
 Manager settings has no power-profiles UI in 4.18. Click the gauge icon for
-Power Saver / Balanced / Performance. Plug or unplug still reapplies auto. CLI
+Power Saver / Balanced / **Sustained**. Plug or unplug still reapplies auto. CLI
 from a root shell: `mintbook-power-apply <profile>`. The panel does **not**
 call `pkexec` — a genmon-spawned pkexec still asked for a password even with
 `allow_active=yes`.

@@ -6,7 +6,7 @@
 #   mintbook-power-apply auto
 #   mintbook-power-apply power-saver  # EPB=15, max_perf_pct=70
 #   mintbook-power-apply balanced     # EPB=6,  max_perf_pct=100
-#   mintbook-power-apply performance  # PPD performance, max_perf_pct=100
+#   mintbook-power-apply performance  # "Sustained": EPB=0, max_perf_pct=75
 #
 #   mintbook-power-apply --from-request  # profile from /run/mintbook-power/want
 #
@@ -56,8 +56,12 @@ case "$MODE" in
     pct=100
     ;;
   performance)
+    # "Sustained" in the UI. max_perf_pct=75, not 100 — measured 2026-09-03:
+    # on this thermally-saturated fanless chassis 100 sprints into the wall and
+    # eats throttle stalls, and 75 completes ~20-25% more work at the same
+    # ~90 C and ~7.4 W. See docs/hardware.md.
     profile=performance
-    pct=100
+    pct=75
     ;;
   *)
     echo "usage: $0 [auto|power-saver|balanced|performance|--from-request]" >&2

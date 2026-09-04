@@ -79,7 +79,7 @@ Plugin order (`plugin-ids`), left to right:
 | 21 | genmon | Bluetooth |
 | 23 | genmon | night light |
 | 12 | pulseaudio | volume |
-| 22 | genmon | power profile (Power Saver / Balanced / Performance) |
+| 22 | genmon | power profile (Power Saver / Balanced / Sustained) |
 | 11 | power-manager-plugin | battery |
 | 13 | clock | ` %a %-d %b  %H:%M  `, Inter 11, `digital-layout=3` (time only) |
 
@@ -215,7 +215,7 @@ canvas as wifi/bt.
 
 Runs [`bin/panel-power`](../bin/panel-power). Click opens [`bin/power-menu`](../bin/power-menu),
 an override-redirect popup (a Gtk.Menu dies immediately — genmon clicks have no
-Gdk event, so xfwm4 rejects the grab). **Power Saver / Balanced / Performance.**
+Gdk event, so xfwm4 rejects the grab). **Power Saver / Balanced / Sustained.**
 That calls `mintbook-power-apply` via `/run/mintbook-power/want` (a root
 systemd path unit), so there is **no password**. Saver = 70% P-state, the
 others = 100%. Plug or unplug still runs the automatic AC/battery policy.

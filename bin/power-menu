@@ -25,7 +25,7 @@ PIDFILE = os.path.expanduser('~/.cache/mintbook/power-menu.pid')
 PROFILES = (
     ('power-saver', 'Power Saver', 'Cooler — CPU capped ~1.6 GHz'),
     ('balanced', 'Balanced', 'AC default — turbo allowed'),
-    ('performance', 'Performance', 'Prefer speed — turbo allowed'),
+    ('performance', 'Sustained', 'Long jobs — ~20% more work'),
 )
 
 
