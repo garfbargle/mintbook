@@ -372,13 +372,22 @@ login** — that is the discriminator. If encode is still software-only with i96
 the cause is (2) and it needs a Chrome flag, not a driver. Worth chasing only if you
 do video calls or screen recording; it does nothing for playback.
 
-> **Restarting Chrome is not enough, and a second export proved it.** A dump taken at
-> 05:09 UTC from a Chrome whose GPU process started at 23:10 local — well after the
-> `environment.d` file was written — was byte-for-byte the same verdict. Reading
-> `/proc/<pid>/environ` for the running Chrome showed **no `LIBVA_DRIVER_NAME` at
-> all**. `/etc/environment.d` is read by the *session* at login; a process started
-> later in the same session never sees it. Check the process environment, not the
-> clock, before believing a dump is the "after" picture.
+> **Restarting Chrome is not enough.** `/etc/environment.d` is read by the *session*
+> at login, so a process started later in the same session never sees the variable.
+> A dump from a Chrome started an hour after the file was written is still the
+> "before" picture.
+>
+> **Check which driver is mapped — not the environment.** The reliable test:
+>
+> ```bash
+> grep -oE "(i965|iHD)_drv_video\.so" /proc/<gpu-process-pid>/maps | sort -u
+> ```
+>
+> `/proc/<pid>/environ` is a snapshot taken at `execve`, and using it here produced a
+> **false negative**: it reported no `LIBVA_DRIVER_NAME` for a Chrome that
+> demonstrably had `i965_drv_video.so` mapped. A test was called invalid on the
+> strength of that and it was not. The mapped library is what the process loaded;
+> believe it over the environment.
 
 To test it **without logging out**, launch one Chrome with the variable set by hand
 and open `chrome://gpu` in that window:
