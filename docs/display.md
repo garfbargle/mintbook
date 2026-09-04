@@ -55,6 +55,16 @@ DPI was tuned by eye in stages: 96 (too small) → 144 (still too small) → **1
 - Some applications keep their own scaling and will not follow xsettings — **Firefox**
   (`layout.css.devPixelsPerPx`) and **Electron apps** in particular.
 
+## Video decode
+
+The GPU is Gen8 Broadwell and libva auto-selects the Gen9+ `iHD` driver, which on this
+part has no encode entrypoint at all. `i965` is the right driver here and is forced via
+`/etc/environment.d/` — see [hardware.md](hardware.md) Graphics / VA-API.
+
+Neither driver decodes **VP9 or AV1**; Broadwell has no such silicon. Sites that
+default to those codecs still decode on the CPU, and this chip is fanless, so that is
+felt as heat rather than as dropped frames.
+
 ## Screenshots
 
 `xfce4-screenshooter` is the only screenshot tool installed (no `scrot`, `maim`, or

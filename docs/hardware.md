@@ -30,6 +30,8 @@ What works, what does not, and what was measured. Regenerate the live parts with
 | Battery | Working | ~84% of design capacity; 149 cycles |
 | Power policy | **Working** | battery: `power-saver` + `max_perf_pct=70`; AC: `balanced` + full turbo — see Thermals |
 | Webcam | **Working on 7.0** | FaceTime HD `14e4:1570`, 848×588; `intel_iommu=off`; one client at a time — [camera.md](camera.md) |
+| VA-API | **i965** | Broadwell driver forced; iHD has no encode. No VP9/AV1 in hardware |
+| Swap | **zram + sysctls** | zstd, half of RAM, `swappiness=180` `page-cluster=0` |
 | Secure Boot | Not supported | Unsigned DKMS modules load without signing |
 
 ## Bluetooth is hidden by SSDC, not missing
@@ -119,6 +121,37 @@ on this chip.
 After install, on AC (intended: full turbo): package **83 °C**, 2.0 GHz,
 `balanced` / EPB=6 / `max_perf_pct=100`. Matches the unrestricted baseline.
 
+### max_perf_pct on AC under sustained load (2026-09-03)
+
+Measured with [`bin/thermal-sweep`](../bin/thermal-sweep) — 4 all-core awk workers,
+60 s soak per step, 30 s sample, temp/MHz averaged across the window. The sweep runs
+**down and back up** because the desktop load drifts; if the two `100` rows disagree
+the run is contaminated and the middle rows mean nothing. They agreed on both runs.
+
+| `max_perf_pct` | pkg °C | skin (TC0P) °C | RAPL W | avg MHz | **work/s** |
+|---|---|---|---|---|---|
+| 100 | 89.6 / 90.6 / 90.4 / 90.2 | 66–67 | 7.1–7.5 | 1728–1950 | **2.43–2.80** |
+| 85 | 90.2 / 90.7 | 66 | 7.5–8.1 | 1819–1931 | 2.80–2.83 |
+| 75 | 89.8 / 90.1 / 90.4 | 66–67 | 7.3–7.6 | 1717–1789 | **3.13–3.33** |
+
+Two results, and the second one was not expected:
+
+**A cap does not cool this machine under sustained load.** Every step sits at ~90 °C
+and ~7.4 W. The chassis is power-saturated either way and thermald holds the budget
+constant, so the heat is the same whatever the ceiling says. The battery win recorded
+above (`max_perf_pct=70` → 77 °C) came under *bursty* Cursor+Chrome load, where the
+cap prevents sprints. It does not transfer to a saturated all-core load.
+
+**Capping to 75 does ~20–25% more work for the same heat.** Six samples, clean
+separation, no overlap. At 100 the chip sprints at the thermal wall and eats hard
+throttle stalls; at 75 it holds ~1.75 GHz and finishes more chunks. `avg MHz` is
+*higher* at 100 while work is lower — the reported frequency is hiding stalled
+execution, which is why this table has a work column and the ones above do not.
+
+This is a real trade-off, not a free win: the sprint is useful for short interactive
+bursts (app launch, page render) that finish before they hit the wall. A blanket AC
+cap would trade that away to speed up long compiles. **Not installed** — see Ruled out.
+
 ### Policy (installed)
 
 On **battery**: `power-saver` (EPB=15) and `intel_pstate` `max_perf_pct=70`
@@ -177,6 +210,12 @@ powerprofilesctl set balanced
 
 ### Ruled out
 
+- **A blanket `max_perf_pct` cap on AC.** Measured 2026-09-03 (above). It buys
+  **no** temperature and **no** watts under sustained load — the chassis is
+  power-saturated at ~90 °C / ~7.4 W from 75 through 100. It would only change
+  bursty behaviour, and there it costs responsiveness. If you want the throughput
+  win for a long compile, set it for that compile
+  (`mintbook-power-apply` from a root shell), do not make it the default.
 - **`power-saver` as the only change.** EPB=15, still 2.0 GHz, still 83–93 °C.
 - **RAPL PL1 as a persistent cap.** `constraint_0_power_limit_uw` accepts 5–7 W
   then returns to 24.5 W / 49 W within ~25 s (thermald and/or this Mac’s RAPL
@@ -233,8 +272,85 @@ sudo systemctl start dev-zram0.swap
 The setup unit only formats `/dev/zram0`. `dev-zram0.swap` is the generated unit
 that actually calls `swapon`. Both come back on boot via `swap.target`.
 
+### The sysctl half (2026-09-03)
+
+Creating the device is only half of it. The stock VM tunables are spinning-disk
+defaults and left zram nearly unused — **2.4 GB in use and 8 KB on a 3.8 GB zram
+device**. [`config/sysctl.d/99-mintbook-zram.conf`](../config/sysctl.d/99-mintbook-zram.conf),
+installed by [`bin/tune-install`](../bin/tune-install):
+
+| | stock | set | why |
+|---|---|---|---|
+| `vm.swappiness` | 60 | **180** | swapping into RAM costs a compress, not a seek — push pages out *before* the OOM killer, which is the reason zram is here |
+| `vm.page-cluster` | 3 | **0** | zram is random-access; faulting in 8 pages to use 1 is 7 wasted decompressions |
+| `vm.vfs_cache_pressure` | 100 | **50** | keep dentries/inodes; this machine re-walks a lot of small files and has no disk swap to fall back on |
+
+These only bite under memory pressure — `swapon --show` will still read ~0 used on a
+quiet desktop. That is expected and is not evidence they did nothing.
+
 `swapon --show` should list `/dev/zram0` (~3.8 G, zstd, prio 100). Confirmed
 2026-09-01. To undo: delete the conf file and reboot.
+
+## Graphics / VA-API
+
+libva auto-selects **`iHD`** (`intel-media-va-driver`), which targets Gen9+. This is
+Gen8 Broadwell, and on this part iHD exposes decode only. **`i965`** is the Broadwell
+driver and strictly dominates it here:
+
+| | iHD (auto) | i965 |
+|---|---|---|
+| H.264 / MPEG2 / VP8 / JPEG decode | ✓ | ✓ |
+| VC1, H.264 MultiviewHigh / StereoHigh | — | ✓ |
+| **H.264 hardware encode** (`VAEntrypointEncSlice`) | **none** | ✓ |
+
+Selected by [`config/environment.d/90-mintbook-libva.conf`](../config/environment.d/90-mintbook-libva.conf)
+(`LIBVA_DRIVER_NAME=i965`), installed by [`bin/tune-install`](../bin/tune-install).
+**Takes effect at the next login**, not immediately — `bin/doctor` warns until then.
+
+> **Neither driver can decode VP9 or AV1.** Broadwell has no such silicon. Sites that
+> default to VP9/AV1 — YouTube among them — still decode on the CPU, and on a fanless
+> chip that is felt. The driver swap does not fix that; only serving H.264 does.
+> Whether Chrome picks up VA-API at all is a separate question: check `chrome://gpu`.
+
+## Housekeeping
+
+- **Journal was uncapped.** Stock `journald.conf` is empty, so the default is 10% of
+  the filesystem; it had reached 302 MB. Capped to 100 MB by
+  [`config/systemd/journald-mintbook.conf`](../config/systemd/journald-mintbook.conf)
+  → `/etc/systemd/journald.conf.d/mintbook.conf`. Now 96 MB.
+- **`casper-md5check.service` was enabled and failing on every boot.** It verifies a
+  live ISO's checksums; there is no ISO when booting from disk. Masked.
+  `systemctl --failed` is now empty, which is the point — it is only a useful signal
+  if it is normally clean.
+- **`evolution-data-server` started four processes at every login** (alarm-notify,
+  source-registry, calendar-factory, addressbook-factory) with no Evolution installed.
+  Disabled with a `Hidden=true` override in `~/.config/autostart/`, the same pattern
+  already used for `nm-applet` — see [desktop.md](desktop.md).
+- `fstrim.timer` was already enabled. `nm-applet`'s user autostart entry is a
+  deliberate `Hidden=true` override, not a stray duplicate — leave it.
+
+## bin/doctor
+
+The pieces that keep this hardware alive are scattered across `/etc/udev`,
+`/etc/systemd`, `/etc/modprobe.d`, `/etc/libinput`, `/usr/local/sbin`,
+`/lib/firmware`, two DKMS modules and a DSDT override inside the initrd. A kernel or
+Mint update is exactly what quietly removes one of them, and the symptom shows up as
+"the speakers stopped working" weeks later.
+
+```bash
+bin/doctor
+```
+
+Read-only, no sudo, exits non-zero on any FAIL. It checks the running kernel, the
+power policy and its units, live thermals, zram and its sysctls, the VA-API driver,
+the CS4208 codec and its DKMS module, the camera firmware + DKMS + `intel_iommu=off`,
+the Bluetooth DSDT override and `hci0`, the SPI input quirks, panel size vs
+`xfwm4 margin_top`, the genmon plugins, failed units, the journal cap and battery
+health. **Run it after every kernel update.**
+
+> Do not put `set -o pipefail` in it. `grep -q` exits on first match, the writer gets
+> SIGPIPE, and the pipeline reports 141 — which reads as a hardware failure. That is
+> what the first version of the CS4208 check did.
 
 ## Base toolchain
 

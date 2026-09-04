@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Events and Tasks Reminders
+Comment=Disabled — no Evolution on this machine. See docs/desktop.md.
+Exec=/usr/libexec/evolution-data-server/evolution-alarm-notify
+Hidden=true
+X-GNOME-Autostart-enabled=false

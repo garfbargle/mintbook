@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# thermal-sweep — measure package temp, power and *work done* against
+# intel_pstate max_perf_pct under a repeatable all-core load. Root only;
+# restores the auto policy on exit. See docs/hardware.md.
+#
+#   pkexec bin/thermal-sweep [pct ...]     # default: 100 85 75
+#
+# The point is the work column. "Cooler" is meaningless without knowing what
+# the cap cost, and avg MHz is only a proxy for that.
+set -euo pipefail
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "run as root: pkexec $0" >&2
+  exit 1
+fi
+
+PSTATE=/sys/devices/system/cpu/intel_pstate
+RAPL=/sys/class/powercap/intel-rapl:0
+SOAK=${SOAK:-60}     # seconds at the new cap before sampling
+WINDOW=${WINDOW:-30} # sample window
+NPROC=$(nproc)
+STEPS=("$@")
+# Down and back up: the background desktop load drifts, and a one-way sweep
+# cannot tell a cap's effect from that drift. If the two 100 rows disagree,
+# the run is contaminated and the middle rows mean nothing.
+[ ${#STEPS[@]} -eq 0 ] && STEPS=(100 85 75 85 100)
+
+WORKDIR=$(mktemp -d)
+PIDS=()
+
+cleanup() {
+  for p in "${PIDS[@]-}"; do kill "$p" 2>/dev/null || true; done
+  wait 2>/dev/null || true
+  rm -rf "$WORKDIR"
+  echo
+  echo "restoring auto policy"
+  /usr/local/sbin/mintbook-power-apply auto || true
+}
+trap cleanup EXIT INT TERM
+
+pkg_temp() {
+  for h in /sys/class/hwmon/hwmon*; do
+    [ "$(cat "$h/name" 2>/dev/null || true)" = coretemp ] || continue
+    for t in "$h"/temp*_label; do
+      [ "$(cat "$t")" = "Package id 0" ] || continue
+      awk '{printf "%.0f", $1/1000}' "${t%_label}_input"; return
+    done
+  done
+  echo '?'
+}
+skin_temp() { # TC0P — the palm-rest sensor, the number you actually feel
+  sensors 2>/dev/null | awk '/^TC0P:/{gsub(/[+°C]/,"",$2); printf "%.0f", $2}'
+}
+mhz() { awk -F: '/cpu MHz/{s+=$2;n++} END{if(n) printf "%.0f", s/n; else print "?"}' /proc/cpuinfo; }
+
+# one worker: fixed-size arithmetic chunk, one tick per completed chunk
+worker() {
+  local cnt=$1
+  while :; do
+    awk 'BEGIN{for(i=0;i<3000000;i++) x=x+i*1.000001}'
+    printf '.' >> "$cnt"
+  done
+}
+
+echo "load: $NPROC workers, soak ${SOAK}s, sample ${WINDOW}s per step"
+for i in $(seq 1 "$NPROC"); do
+  : > "$WORKDIR/w$i"
+  worker "$WORKDIR/w$i" &
+  PIDS+=($!)
+done
+
+printf '\n%-6s %-8s %-8s %-9s %-9s %s\n' pct pkgC skinC rapl_W avg_MHz work/s
+for pct in "${STEPS[@]}"; do
+  echo "$pct" > "$PSTATE/max_perf_pct"
+  sleep "$SOAK"
+
+  e0=$(cat "$RAPL/energy_uj"); c0=0
+  for i in $(seq 1 "$NPROC"); do c0=$((c0 + $(wc -c < "$WORKDIR/w$i"))); done
+
+  # average across the window; a single read of either is noise
+  tsum=0 msum=0 ssum=0 n=0
+  end=$((SECONDS + WINDOW))
+  while [ $SECONDS -lt $end ]; do
+    tsum=$((tsum + $(pkg_temp)))
+    ssum=$((ssum + $(skin_temp)))
+    msum=$((msum + $(mhz)))
+    n=$((n + 1))
+    sleep 2
+  done
+
+  e1=$(cat "$RAPL/energy_uj"); c1=0
+  for i in $(seq 1 "$NPROC"); do c1=$((c1 + $(wc -c < "$WORKDIR/w$i"))); done
+
+  elapsed=$((WINDOW))
+  watts=$(awk -v a="$e0" -v b="$e1" -v w="$elapsed" 'BEGIN{printf "%.2f",(b-a)/w/1000000}')
+  work=$(awk -v a="$c0" -v b="$c1" -v w="$elapsed" 'BEGIN{printf "%.2f",(b-a)/w}')
+  printf '%-6s %-8s %-8s %-9s %-9s %s\n' "$pct" \
+    "$(awk -v s=$tsum -v n=$n 'BEGIN{printf "%.1f",s/n}')" \
+    "$(awk -v s=$ssum -v n=$n 'BEGIN{printf "%.1f",s/n}')" \
+    "$watts" \
+    "$(awk -v s=$msum -v n=$n 'BEGIN{printf "%.0f",s/n}')" \
+    "$work"
+done

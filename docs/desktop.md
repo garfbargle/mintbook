@@ -513,11 +513,34 @@ WM. It does **not** revert the icon theme files — originals for those are in
 
 ---
 
+## Autostart
+
+Login starts a set of things this machine has no use for. The pattern for turning one
+off, already used for `nm-applet`, is a same-named file in `~/.config/autostart/` with
+`Hidden=true` — a user override of the entry in `/etc/xdg/autostart/`. It does not
+touch the package, so an update cannot undo it and `apt` never fights you for it.
+
+| Entry | State | Why |
+|---|---|---|
+| `nm-applet` | disabled (pre-existing) | the bar uses [`bin/panel-wifi`](../bin/panel-wifi) genmon instead |
+| `org.gnome.Evolution-alarm-notify` | **disabled 2026-09-03** | started four `evolution-data-server` processes at every login with no Evolution installed |
+
+Override kept in [`config/autostart/`](../config/autostart/). `bin/doctor` checks it.
+
+> `nm-applet`'s user entry is a **disable override, not a stray duplicate**. It looks
+> like the same file twice. Do not "clean it up".
+
+Still autostarted and left alone: `onboard` and `orca` (both exit immediately when not
+needed), `blueman`, `xiccd`, `warpinator`, `light-locker`.
+
 ## Open / not done
 
 - ~~Wifi icon size parity~~ — **solved** by moving wifi out of xapp into genmon.
   The old symbolic icons under `~/.icons/WhiteSur-light/` are now unused by the panel
   but left in place; `icons/generate-wifi-icons.py` still regenerates them.
+- ~~**Autostart cruft.**~~ **Done 2026-09-03.** Evolution's four idle processes
+  disabled; `casper-md5check` masked; journal capped. See Autostart above and
+  [hardware.md](hardware.md) Housekeeping.
 - **Claude's tray icon** is a black XEmbed bitmap designed for a light menu bar, so it
   reads as a hole on the dark bar. User said to leave it. The real fix would be
   switching the bar to light with WhiteSur's `--black` panel-font option.

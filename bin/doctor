@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+# doctor — verify every piece mintbook installs is still in place. Read-only, no sudo.
+#
+# This machine keeps working hardware alive through files scattered across
+# /etc, /usr/local/sbin, /lib/firmware, DKMS and the initrd. A kernel or Mint
+# update is exactly what quietly removes one of them. Run this after any update.
+# See docs/hardware.md.
+set -u
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PASS=0 WARN=0 FAIL=0
+
+section() { printf '\n\033[1m%s\033[0m\n' "$1"; }
+ok()   { printf '  \033[32mok\033[0m    %-28s %s\n' "$1" "${2-}"; PASS=$((PASS+1)); }
+warn() { printf '  \033[33mwarn\033[0m  %-28s %s\n' "$1" "${2-}"; WARN=$((WARN+1)); }
+bad()  { printf '  \033[31mFAIL\033[0m  %-28s %s\n' "$1" "${2-}"; FAIL=$((FAIL+1)); }
+
+# check <label> <detail> <test...>  — ok if the test succeeds, FAIL if not
+check() { local l=$1 d=$2; shift 2; if "$@" >/dev/null 2>&1; then ok "$l" "$d"; else bad "$l" "$d"; fi; }
+have()  { [ -e "$1" ]; }
+
+printf '\033[1mmintbook doctor\033[0m — %s\n' "$(date '+%Y-%m-%d %H:%M')"
+
+section "Kernel"
+KREL=$(uname -r)
+case "$KREL" in
+  7.*) ok "running kernel" "$KREL" ;;
+  6.14*) warn "running kernel" "$KREL — fallback: speakers, camera and BT are dead here" ;;
+  *) warn "running kernel" "$KREL — untested; 7.0 is the working kernel" ;;
+esac
+check "headers for this kernel" "/usr/src/linux-headers-$KREL" have "/usr/src/linux-headers-$KREL"
+
+section "Power policy"
+check "apply script" "/usr/local/sbin/mintbook-power-apply" have /usr/local/sbin/mintbook-power-apply
+check "udev rule" "99-mintbook-power.rules" have /etc/udev/rules.d/99-mintbook-power.rules
+check "boot unit enabled" "mintbook-power.service" systemctl is-enabled mintbook-power.service
+check "request path unit" "mintbook-power-request.path" systemctl is-active mintbook-power-request.path
+check "tmpfiles" "/etc/tmpfiles.d/mintbook-power.conf" have /etc/tmpfiles.d/mintbook-power.conf
+AC=$(cat /sys/class/power_supply/ADP1/online 2>/dev/null || echo 1)
+PCT=$(cat /sys/devices/system/cpu/intel_pstate/max_perf_pct 2>/dev/null || echo '?')
+PROF=$(powerprofilesctl get 2>/dev/null || echo '?')
+if [ "$AC" = 1 ]; then WANT_PCT=100 WANT_PROF=balanced; else WANT_PCT=70 WANT_PROF=power-saver; fi
+if [ "$PCT" = "$WANT_PCT" ] && [ "$PROF" = "$WANT_PROF" ]; then
+  ok "live policy" "ac=$AC $PROF max_perf_pct=$PCT"
+else
+  warn "live policy" "ac=$AC $PROF max_perf_pct=$PCT (auto wants $WANT_PROF/$WANT_PCT — manual override is fine)"
+fi
+
+section "Thermals"
+PKG=$(sensors 2>/dev/null | awk '/Package id 0/{gsub(/[+°C]/,"",$4); print int($4)}')
+if [ -z "${PKG:-}" ]; then warn "package temp" "sensors gave nothing"
+elif [ "$PKG" -ge 93 ]; then bad  "package temp" "${PKG}C — at the 95C throttle point"
+elif [ "$PKG" -ge 85 ]; then warn "package temp" "${PKG}C — hot; fanless, throttles at 95C"
+else ok "package temp" "${PKG}C"; fi
+check "thermald" "95C backstop" systemctl is-active thermald
+
+section "Memory / zram"
+check "zram-generator conf" "/etc/systemd/zram-generator.conf" have /etc/systemd/zram-generator.conf
+if swapon --show=NAME --noheadings 2>/dev/null | grep -q zram0; then
+  ok "zram swap" "$(swapon --show=NAME,SIZE,PRIO --noheadings | tr -s ' ')"
+else
+  bad "zram swap" "/dev/zram0 is not swapped on"
+fi
+SW=$(sysctl -n vm.swappiness 2>/dev/null); PC=$(sysctl -n vm.page-cluster 2>/dev/null)
+if [ "${SW:-0}" -ge 100 ] && [ "${PC:-9}" = 0 ]; then
+  ok "zram sysctls" "swappiness=$SW page-cluster=$PC"
+else
+  warn "zram sysctls" "swappiness=$SW page-cluster=$PC — expected >=100 and 0; run pkexec bin/tune-install"
+fi
+
+section "Graphics"
+check "i965 env file" "/etc/environment.d/90-mintbook-libva.conf" have /etc/environment.d/90-mintbook-libva.conf
+VADRV=$(vainfo 2>/dev/null | sed -n 's/.*Driver version: Intel \(\w*\).*/\1/p' | head -1)
+case "$VADRV" in
+  i965) ok "VA-API driver" "i965 (Broadwell, has H.264 encode)" ;;
+  iHD)  warn "VA-API driver" "iHD — Gen9+ driver, no encode on this chip; log out to pick up i965" ;;
+  *)    warn "VA-API driver" "could not read vainfo" ;;
+esac
+
+section "Audio"
+if grep -q '^snd_hda_codec_cs420x ' /proc/modules; then ok "CS4208 codec module" "snd_hda_codec_cs420x"; else bad "CS4208 codec module" "not loaded"; fi
+if aplay -l 2>/dev/null | grep -qi 'CS4208\|MacBook'; then ok "playback device" "$(aplay -l 2>/dev/null | grep -m1 -i 'CS4208\|MacBook' | cut -c1-60)"; else warn "playback device" "no CS4208 card in aplay -l"; fi
+check "macbook12-audio dkms" "built for $KREL" bash -c "dkms status macbook12-audio 2>/dev/null | grep -q \"$KREL.*installed\""
+
+section "Camera"
+check "firmware" "/lib/firmware/facetimehd/firmware.bin" have /lib/firmware/facetimehd/firmware.bin
+check "facetimehd dkms" "built for $KREL" bash -c "dkms status facetimehd 2>/dev/null | grep -q \"$KREL.*installed\""
+if grep -q 'intel_iommu=off' /proc/cmdline; then ok "intel_iommu=off" "on the running cmdline"; else bad "intel_iommu=off" "missing — the ISP cannot DMA"; fi
+if [ -e /dev/video0 ]; then ok "video node" "/dev/video0"; else warn "video node" "no /dev/video0 (module may be unloaded)"; fi
+
+section "Bluetooth"
+check "DSDT override image" "/boot/acpi_override_ssdc.img" have /boot/acpi_override_ssdc.img
+check "initramfs re-apply hook" "post-update.d/zz-acpi-ssdc-override" have /etc/initramfs/post-update.d/zz-acpi-ssdc-override
+if [ -e /sys/class/bluetooth/hci0 ]; then
+  ok "hci0" "$(hciconfig hci0 2>/dev/null | sed -n 2p | tr -s ' ' | cut -c1-40 || echo present)"
+else
+  bad "hci0" "no adapter — SSDC is probably binding the UART again"
+fi
+
+section "Keyboard / trackpad"
+check "DMA blacklist" "/etc/modprobe.d/blacklist-dw-dmac.conf" have /etc/modprobe.d/blacklist-dw-dmac.conf
+check "libinput quirk" "/etc/libinput/local-overrides.quirks" have /etc/libinput/local-overrides.quirks
+if [ -e /sys/class/leds/spi::kbd_backlight ]; then ok "keyboard backlight" "spi::kbd_backlight"; else warn "keyboard backlight" "led node missing"; fi
+
+section "Desktop"
+DPI=$(xfconf-query -c xsettings -p /Xft/DPI 2>/dev/null || echo '?')
+PSZ=$(xfconf-query -c xfce4-panel -p /panels/panel-1/size 2>/dev/null || echo '?')
+MTOP=$(xfconf-query -c xfwm4 -p /general/margin_top 2>/dev/null || echo '?')
+[ "$DPI" = 168 ] && ok "Xft/DPI" "$DPI" || warn "Xft/DPI" "$DPI (expected 168)"
+if [ "$PSZ" = "$MTOP" ]; then
+  ok "panel size / margin_top" "$PSZ — maximized windows clear the bar"
+else
+  bad "panel size / margin_top" "panel=$PSZ margin_top=$MTOP — they must match"
+fi
+for p in 17 18 19 21 22 23; do
+  [ -e "$HOME/.config/xfce4/panel/genmon-$p.rc" ] || MISSING="${MISSING-} $p"
+done
+[ -z "${MISSING-}" ] && ok "genmon panel plugins" "17 18 19 21 22 23" || warn "genmon panel plugins" "missing:${MISSING}"
+check "night light autostart" "mintbook-night.desktop" have "$HOME/.config/autostart/mintbook-night.desktop"
+if [ -f "$HOME/.config/autostart/org.gnome.Evolution-alarm-notify.desktop" ]; then
+  ok "evolution autostart" "disabled"
+else
+  warn "evolution autostart" "enabled — 4 idle processes, no Evolution installed"
+fi
+
+section "Housekeeping"
+if systemctl --failed --no-legend --no-pager 2>/dev/null | grep -q .; then
+  bad "failed units" "$(systemctl --failed --no-legend --no-pager | awk '{print $1}' | tr '\n' ' ')"
+else
+  ok "failed units" "none"
+fi
+check "fstrim timer" "weekly NVMe trim" systemctl is-enabled fstrim.timer
+JD=$(journalctl --disk-usage 2>/dev/null | grep -o '[0-9.]*[MG]' | head -1)
+check "journal cap" "/etc/systemd/journald.conf.d/mintbook.conf ($JD)" have /etc/systemd/journald.conf.d/mintbook.conf
+FREE=$(df --output=pcent / | tail -1 | tr -dc 0-9)
+[ "$FREE" -lt 90 ] && ok "root filesystem" "${FREE}% used" || warn "root filesystem" "${FREE}% used"
+BATH=$(upower -i /org/freedesktop/UPower/devices/battery_BAT0 2>/dev/null | awk '/capacity:/{print int($2)}')
+if [ -n "${BATH:-}" ]; then
+  [ "$BATH" -ge 70 ] && ok "battery health" "${BATH}% of design" || warn "battery health" "${BATH}% of design"
+fi
+
+printf '\n%d ok, %d warn, %d FAIL\n' "$PASS" "$WARN" "$FAIL"
+[ "$FAIL" -eq 0 ]

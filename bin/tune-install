@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# tune-install — system tuning for MacBook8,1: zram sysctls, the Broadwell VA-API
+# driver, a capped journal, and the live-ISO leftover unit. Must be run as root.
+# See docs/hardware.md. Nothing here touches audio, camera, Bluetooth or input.
+set -euo pipefail
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "run as root: pkexec $0" >&2
+  exit 1
+fi
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SYSCTL_SRC="$ROOT/config/sysctl.d/99-mintbook-zram.conf"
+SYSCTL_DST=/etc/sysctl.d/99-mintbook-zram.conf
+LIBVA_SRC="$ROOT/config/environment.d/90-mintbook-libva.conf"
+LIBVA_DST=/etc/environment.d/90-mintbook-libva.conf
+JOURNAL_SRC="$ROOT/config/systemd/journald-mintbook.conf"
+JOURNAL_DST=/etc/systemd/journald.conf.d/mintbook.conf
+
+for f in "$SYSCTL_SRC" "$LIBVA_SRC" "$JOURNAL_SRC"; do
+  if [ ! -f "$f" ]; then
+    echo "missing $f" >&2
+    exit 1
+  fi
+done
+
+echo "==> $SYSCTL_DST"
+install -m644 "$SYSCTL_SRC" "$SYSCTL_DST"
+sysctl -p "$SYSCTL_DST"
+
+echo "==> $LIBVA_DST"
+install -dm755 /etc/environment.d
+install -m644 "$LIBVA_SRC" "$LIBVA_DST"
+echo "    (takes effect at next login)"
+
+echo "==> $JOURNAL_DST"
+install -dm755 /etc/systemd/journald.conf.d
+install -m644 "$JOURNAL_SRC" "$JOURNAL_DST"
+systemctl restart systemd-journald
+journalctl --vacuum-size=100M >/dev/null 2>&1 || true
+
+# casper-md5check verifies a live ISO's checksums. It is enabled on every Mint
+# install and fails on every boot from disk, because there is no ISO to check.
+if systemctl is-enabled casper-md5check.service >/dev/null 2>&1; then
+  echo "==> masking casper-md5check.service (live-ISO leftover)"
+  systemctl disable casper-md5check.service >/dev/null 2>&1 || true
+  systemctl mask casper-md5check.service
+  systemctl reset-failed casper-md5check.service >/dev/null 2>&1 || true
+fi
+
+echo
+echo "applied. check with: $ROOT/bin/doctor"
+echo "undo:"
+echo "  rm -f $SYSCTL_DST $LIBVA_DST $JOURNAL_DST"
+echo "  sysctl -w vm.swappiness=60 vm.page-cluster=3 vm.vfs_cache_pressure=100"
+echo "  systemctl restart systemd-journald"
+echo "  systemctl unmask casper-md5check.service"

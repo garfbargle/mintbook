@@ -38,6 +38,10 @@ Speakers, camera, and Bluetooth want kernel **7.0**. **6.14** is the fallback if
 
 `bin/hw-report` is live. Read-only. No sudo.
 
+After a kernel update, run `bin/doctor`. It checks every piece this machine needs —
+firmware, DKMS modules, the DSDT override, udev and systemd units, the panel — and
+tells you which one an update took away.
+
 [Hardware](docs/hardware.md) · [Input](docs/input.md) · [Audio](docs/audio.md) · [Camera](docs/camera.md) · [Bluetooth](docs/bluetooth.md) · [Boot](docs/boot.md)
 
 ## Before you touch it
@@ -47,5 +51,7 @@ sudo timeshift --create --comments "before <change>"
 ```
 
 `bin/revert-mac-theme` puts the original XFCE desktop back.
+
+Every install script prints its own undo. So does `bin/tune-install`.
 
 The docs record what was tried, and what was not.
