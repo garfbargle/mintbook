@@ -1,0 +1,30 @@
+# -*- sh -*-
+# VA-API driver for the Broadwell HD 5300 on MacBook8,1.
+# Installed to /etc/X11/Xsession.d/56mintbook-libva. See docs/display.md.
+#
+# This file is sourced by Xsession(5), not executed.
+#
+# The same variable is also in /etc/environment.d/90-mintbook-libva.conf, and
+# that file alone does not work. environment.d is read by `systemd --user`, and
+# only reaches processes systemd itself starts. The desktop does not come from
+# systemd: lightdm runs Xsession, Xsession starts xfce4-session, and everything
+# launched from the panel, the dock or Whisker inherits *that* environment.
+# Apps that land in a systemd *scope* (Chrome does) do not help either — a
+# scope adopts a process that was already forked by the session, so it keeps
+# the session's environment, not the manager's.
+#
+# Measured 2026-09-04: Cursor's /proc/<pid>/environ had GTK_MODULES, which ships
+# in both /etc/X11/Xsession.d/90atk-adaptor and /etc/environment.d, but no
+# LIBVA_DRIVER_NAME, which shipped only in environment.d. Same session, same
+# two mechanisms, and only the Xsession.d one arrived. Chrome, Cursor and
+# Claude Desktop all had iHD_drv_video mapped.
+#
+# Left unset so a value in ~/.xsessionrc (sourced earlier, at 40) still wins.
+# 95dbus_update-activation-env runs after this and pushes the whole environment
+# into dbus-daemon and systemd --user, so nothing else is needed here.
+#
+# Undo: delete this file and log out.
+if [ -z "$LIBVA_DRIVER_NAME" ]; then
+  LIBVA_DRIVER_NAME=i965
+  export LIBVA_DRIVER_NAME
+fi

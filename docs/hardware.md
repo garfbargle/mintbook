@@ -381,9 +381,13 @@ driver and strictly dominates it here:
 | VC1, H.264 MultiviewHigh / StereoHigh | — | ✓ |
 | **H.264 hardware encode** (`VAEntrypointEncSlice`) | **none** | ✓ |
 
-Selected by [`config/environment.d/90-mintbook-libva.conf`](../config/environment.d/90-mintbook-libva.conf)
-(`LIBVA_DRIVER_NAME=i965`), installed by [`bin/tune-install`](../bin/tune-install).
+Selected by [`config/X11/56mintbook-libva`](../config/X11/56mintbook-libva) →
+`/etc/X11/Xsession.d/`, installed by [`bin/tune-install`](../bin/tune-install).
 **Takes effect at the next login**, not immediately — `bin/doctor` warns until then.
+
+[`config/environment.d/90-mintbook-libva.conf`](../config/environment.d/90-mintbook-libva.conf)
+is still installed, and on its own it did nothing for a year of apps. See
+[Why environment.d never reached anything](#why-environmentd-never-reached-anything-2026-09-04).
 
 > **Neither driver can decode VP9 or AV1.** Broadwell has no such silicon. Sites that
 > default to VP9/AV1 — YouTube among them — still decode on the CPU, and on a fanless
@@ -427,10 +431,10 @@ login** — that is the discriminator. If encode is still software-only with i96
 the cause is (2) and it needs a Chrome flag, not a driver. Worth chasing only if you
 do video calls or screen recording; it does nothing for playback.
 
-> **Restarting Chrome is not enough.** `/etc/environment.d` is read by the *session*
-> at login, so a process started later in the same session never sees the variable.
-> A dump from a Chrome started an hour after the file was written is still the
-> "before" picture.
+> **Restarting Chrome is not enough** — but the reason given here was wrong, and
+> logging out would not have fixed it either. `/etc/environment.d` is not read by
+> the session at all. See
+> [Why environment.d never reached anything](#why-environmentd-never-reached-anything-2026-09-04).
 >
 > **Check which driver is mapped — not the environment.** The reliable test:
 >
@@ -438,11 +442,16 @@ do video calls or screen recording; it does nothing for playback.
 > grep -oE "(i965|iHD)_drv_video\.so" /proc/<gpu-process-pid>/maps | sort -u
 > ```
 >
-> `/proc/<pid>/environ` is a snapshot taken at `execve`, and using it here produced a
-> **false negative**: it reported no `LIBVA_DRIVER_NAME` for a Chrome that
-> demonstrably had `i965_drv_video.so` mapped. A test was called invalid on the
-> strength of that and it was not. The mapped library is what the process loaded;
-> believe it over the environment.
+> `/proc/<pid>/environ` produced a **false negative** here: it reported no
+> `LIBVA_DRIVER_NAME` for a Chrome that demonstrably had `i965_drv_video.so`
+> mapped. A test was called invalid on the strength of that and it was not.
+>
+> The mechanism, confirmed 2026-09-04: Chrome and Electron **overwrite** that
+> memory region to set their process titles, so `/proc/<pid>/environ` reads back
+> as blank entries — 1643 bytes of nothing for Chrome, nothing for Claude
+> Desktop. Cursor happens not to scrub it, which is why it could be used as the
+> probe below. The mapped library is what the process loaded; believe it over
+> the environment.
 
 To test it **without logging out**, launch one Chrome with the variable set by hand
 and open `chrome://gpu` in that window:
@@ -460,6 +469,57 @@ note that **Google Chrome's `.deb` wrapper reads no flags file**. `/usr/bin/goog
 is a symlink to `/opt/google/chrome/google-chrome`, which sources nothing — the
 `chrome-flags.conf` convention is a Chromium packaging thing, not this. The flag would
 have to go on the `Exec=` line of the desktop entry.
+
+### Why environment.d never reached anything (2026-09-04)
+
+`bin/doctor` had been warning `iHD` since the file was written, and the standing
+explanation was "log out to pick it up". That was wrong. Logging out would not
+have helped, because **nothing in the desktop ever reads `/etc/environment.d`.**
+
+`environment.d` is read by `systemd --user`, and applies to processes
+`systemd --user` starts. The desktop is not one of them:
+
+```
+lightdm  ->  /etc/X11/Xsession  ->  55xfce4-session  ->  xfce4-session
+```
+
+Everything launched from the panel, the dock or Whisker inherits *that*
+environment. Apps that end up in a systemd **scope** are not an exception —
+Chrome sits in `app-com.google.Chrome-<pid>.scope`, but a scope adopts a process
+that the session already forked, so it keeps the session's environment, not the
+manager's.
+
+The proof is a variable that ships in *both* places. `GTK_MODULES` is set by
+`/etc/X11/Xsession.d/90atk-adaptor` **and** `/etc/environment.d/90atk-adaptor.conf`:
+
+```
+$ tr '\0' '\n' < /proc/$(pgrep -x cursor | head -1)/environ | grep -E 'GTK_MODULES|LIBVA'
+GTK_MODULES=gail:atk-bridge
+```
+
+Same session, same two mechanisms, and only the `Xsession.d` one arrived.
+`LIBVA_DRIVER_NAME`, which shipped only in `environment.d`, is absent. Chrome,
+Cursor and Claude Desktop all had `iHD_drv_video` mapped; `systemctl --user
+show-environment` had `LIBVA_DRIVER_NAME=i965` the whole time, which is exactly
+the trap — the variable was set somewhere real, just not anywhere the
+applications would look.
+
+The driver was never the problem: `i965-va-driver` is installed, and
+`LIBVA_DRIVER_NAME=i965 vainfo` reports `Intel i965 driver for Intel(R)
+Broadwell - 2.4.1` with the encode entrypoints. It was only ever the plumbing.
+
+Fixed by [`config/X11/56mintbook-libva`](../config/X11/56mintbook-libva) →
+`/etc/X11/Xsession.d/56mintbook-libva`, which runs before
+`95dbus_update-activation-env` — so the variable also lands in `dbus-daemon` and
+`systemd --user` on the way through. It leaves an existing value alone, so
+`~/.xsessionrc` (sourced earlier, at 40) still wins.
+
+`environment.d` is kept: it is still the right place for `systemd --user`
+services, which genuinely do read it. It was never the wrong file, only the
+wrong file *on its own*.
+
+**Not yet confirmed on a real login.** `doctor` now checks the driver a running
+app has mapped, which is the test that cannot lie.
 
 ## Housekeeping
 

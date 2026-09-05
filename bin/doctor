@@ -109,12 +109,26 @@ else
 fi
 
 section "Graphics"
+check "i965 Xsession.d file" "/etc/X11/Xsession.d/56mintbook-libva" have /etc/X11/Xsession.d/56mintbook-libva
 check "i965 env file" "/etc/environment.d/90-mintbook-libva.conf" have /etc/environment.d/90-mintbook-libva.conf
 VADRV=$(vainfo 2>/dev/null | sed -n 's/.*Driver version: Intel \(\w*\).*/\1/p' | head -1)
 case "$VADRV" in
-  i965) ok "VA-API driver" "i965 (Broadwell, has H.264 encode)" ;;
-  iHD)  warn "VA-API driver" "iHD — Gen9+ driver, no encode on this chip; log out to pick up i965" ;;
-  *)    warn "VA-API driver" "could not read vainfo" ;;
+  i965) ok "VA-API in this shell" "i965 — the session exports it" ;;
+  iHD)  warn "VA-API in this shell" "iHD — LIBVA_DRIVER_NAME is not in the session env; log out" ;;
+  *)    warn "VA-API in this shell" "could not read vainfo" ;;
+esac
+# Ground truth: the driver a running app actually mapped. Not vainfo, which
+# only says what doctor's own shell would pick, and not /proc/<pid>/environ —
+# Chrome and Electron overwrite that region, so it reads back blank. See
+# docs/display.md.
+MAPPED=$(for p in $(pgrep -f 'chrome|cursor|claude-desktop|firefox' 2>/dev/null); do
+           grep -ohE '(i965|iHD)_drv_video' "/proc/$p/maps" 2>/dev/null
+         done | sort -u | tr '\n' ' ')
+case "$MAPPED" in
+  '')                      warn "VA-API in use" "no browser or Electron app running to check" ;;
+  *i965*iHD*|*iHD*i965*)   warn "VA-API in use" "both mapped ($MAPPED) — some apps predate the fix; restart them" ;;
+  *i965*)                  ok   "VA-API in use" "i965 (Broadwell, has H.264 encode)" ;;
+  *iHD*)                   warn "VA-API in use" "iHD — Gen9+ driver, no encode on this chip; log out to pick up i965" ;;
 esac
 
 section "Audio"

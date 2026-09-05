@@ -15,10 +15,12 @@ SYSCTL_SRC="$ROOT/config/sysctl.d/99-mintbook-zram.conf"
 SYSCTL_DST=/etc/sysctl.d/99-mintbook-zram.conf
 LIBVA_SRC="$ROOT/config/environment.d/90-mintbook-libva.conf"
 LIBVA_DST=/etc/environment.d/90-mintbook-libva.conf
+XSESSION_SRC="$ROOT/config/X11/56mintbook-libva"
+XSESSION_DST=/etc/X11/Xsession.d/56mintbook-libva
 JOURNAL_SRC="$ROOT/config/systemd/journald-mintbook.conf"
 JOURNAL_DST=/etc/systemd/journald.conf.d/mintbook.conf
 
-for f in "$SYSCTL_SRC" "$LIBVA_SRC" "$JOURNAL_SRC"; do
+for f in "$SYSCTL_SRC" "$LIBVA_SRC" "$XSESSION_SRC" "$JOURNAL_SRC"; do
   if [ ! -f "$f" ]; then
     echo "missing $f" >&2
     exit 1
@@ -32,7 +34,14 @@ sysctl -p "$SYSCTL_DST"
 echo "==> $LIBVA_DST"
 install -dm755 /etc/environment.d
 install -m644 "$LIBVA_SRC" "$LIBVA_DST"
-echo "    (takes effect at next login)"
+
+# The one that actually reaches applications. environment.d is read only by
+# `systemd --user`; the desktop comes from lightdm -> Xsession, which never
+# sees it. See docs/display.md.
+echo "==> $XSESSION_DST"
+install -dm755 /etc/X11/Xsession.d
+install -m644 "$XSESSION_SRC" "$XSESSION_DST"
+echo "    (takes effect at next login — a Chrome restart is not enough)"
 
 echo "==> $JOURNAL_DST"
 install -dm755 /etc/systemd/journald.conf.d
@@ -68,7 +77,7 @@ fi
 echo
 echo "applied. check with: $ROOT/bin/doctor"
 echo "undo:"
-echo "  rm -f $SYSCTL_DST $LIBVA_DST $JOURNAL_DST"
+echo "  rm -f $SYSCTL_DST $LIBVA_DST $XSESSION_DST $JOURNAL_DST"
 echo "  sysctl -w vm.swappiness=60 vm.page-cluster=3 vm.vfs_cache_pressure=100"
 echo "  systemctl restart systemd-journald"
 echo "  systemctl unmask casper-md5check.service"

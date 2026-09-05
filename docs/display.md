@@ -61,7 +61,9 @@ DPI was tuned by eye in stages: 96 (too small) → 144 (still too small) → **1
 
 The GPU is Gen8 Broadwell and libva auto-selects the Gen9+ `iHD` driver, which on this
 part has no encode entrypoint at all. `i965` is the right driver here and is forced via
-`/etc/environment.d/` — see [hardware.md](hardware.md) Graphics / VA-API.
+`/etc/X11/Xsession.d/56mintbook-libva` — see [hardware.md](hardware.md) Graphics / VA-API.
+It was previously forced only via `/etc/environment.d/`, which the desktop never
+reads; that is why `doctor` reported `iHD` for so long.
 
 Neither driver decodes **VP9 or AV1**; Broadwell has no such silicon. Sites that
 default to those codecs still decode on the CPU, and this chip is fanless, so that is
