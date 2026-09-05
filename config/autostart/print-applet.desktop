@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Print Queue Applet
+Comment=Disabled — no printer configured, and bin/service-trim masks CUPS. See docs/desktop.md.
+Exec=/usr/bin/python3 /usr/share/system-config-printer/applet.py
+Hidden=true
+X-GNOME-Autostart-enabled=false

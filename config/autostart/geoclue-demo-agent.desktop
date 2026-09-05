@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Geoclue Demo Agent
+Comment=Disabled — nothing on this machine asks for location. See docs/desktop.md.
+Exec=/usr/libexec/geoclue-2.0/demos/agent
+Hidden=true
+X-GNOME-Autostart-enabled=false

@@ -189,10 +189,18 @@ for p in 17 18 19 21 22 23; do
 done
 [ -z "${MISSING-}" ] && ok "genmon panel plugins" "17 18 19 21 22 23" || warn "genmon panel plugins" "missing:${MISSING}"
 check "night light autostart" "mintbook-night.desktop" have "$HOME/.config/autostart/mintbook-night.desktop"
-if [ -f "$HOME/.config/autostart/org.gnome.Evolution-alarm-notify.desktop" ]; then
-  ok "evolution autostart" "disabled"
+# Hidden=true user overrides of entries in /etc/xdg/autostart. An override is
+# only meaningful while the system entry it shadows still exists, so check both
+# — a stale override that shadows nothing is just a confusing file.
+MISSING_AS=""
+for e in org.gnome.Evolution-alarm-notify print-applet geoclue-demo-agent; do
+  [ -f "/etc/xdg/autostart/$e.desktop" ] || continue
+  [ -f "$HOME/.config/autostart/$e.desktop" ] || MISSING_AS="$MISSING_AS $e"
+done
+if [ -z "$MISSING_AS" ]; then
+  ok "autostart overrides" "evolution, print-applet, geoclue all disabled"
 else
-  warn "evolution autostart" "enabled — 4 idle processes, no Evolution installed"
+  warn "autostart overrides" "still autostarting:$MISSING_AS — see docs/desktop.md"
 fi
 
 section "Housekeeping"
@@ -202,6 +210,22 @@ else
   ok "failed units" "none"
 fi
 check "fstrim timer" "weekly NVMe trim" systemctl is-enabled fstrim.timer
+# Services bin/service-trim masks. Reported, not asserted: an update can
+# re-enable one, and a printer or modem appearing is a legitimate reason for
+# one to come back. service-trim --check re-runs the probes and says which.
+TRIM=""
+for u in ModemManager.service cups.service cups.socket cups.path \
+         cups-browsed.service switcheroo-control.service rsyslog.service \
+         kerneloops.service casper.service casper-md5check.service; do
+  systemctl list-unit-files "$u" >/dev/null 2>&1 || continue
+  [ "$(systemctl is-enabled "$u" 2>/dev/null || true)" = masked ] && continue
+  TRIM="$TRIM ${u%.service}"
+done
+if [ -n "$TRIM" ]; then
+  warn "trimmable services" "still enabled:$TRIM — $ROOT/bin/service-trim --check"
+else
+  ok "trimmable services" "all masked"
+fi
 JD=$(journalctl --disk-usage 2>/dev/null | grep -o '[0-9.]*[MG]' | head -1)
 check "journal cap" "/etc/systemd/journald.conf.d/mintbook.conf ($JD)" have /etc/systemd/journald.conf.d/mintbook.conf
 FREE=$(df --output=pcent / | tail -1 | tr -dc 0-9)

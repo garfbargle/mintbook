@@ -542,6 +542,44 @@ app has mapped, which is the test that cannot lie.
   source-registry, calendar-factory, addressbook-factory) with no Evolution installed.
   Disabled with a `Hidden=true` override in `~/.config/autostart/`, the same pattern
   already used for `nm-applet` — see [desktop.md](desktop.md).
+### Services this machine has no use for (2026-09-04)
+
+[`bin/service-trim`](../bin/service-trim) masks them. **Every entry is behind a
+probe** — nothing is masked because a list said so. Run it with `--check` first;
+that needs no root and changes nothing.
+
+| Masked | Probe |
+|---|---|
+| `ModemManager` | no `/dev/cdc-wdm*`, no `/dev/ttyACM*`, no modem-class PCI device. It probes serial ports on every device event |
+| `cups`, `cups.socket`, `cups.path`, `cups-browsed` | `lpstat -p` has no destinations and `printers.conf` is empty. The socket and path units re-activate CUPS on demand, so masking the service alone does nothing |
+| `switcheroo-control` | one GPU. `lspci` counts a single `[0300]` |
+| `casper`, `casper-md5check` | `/` is not an `overlay` mount, so this is not a live boot |
+| `rsyslog` | `/var/log/journal` exists, so journald already stores this. Syslog was a second copy of the same lines |
+| `kerneloops` | opt-in crash-signature upload |
+
+Deliberately **left running**, and the reason matters more than the list:
+
+- **`iio-sensor-proxy`** — this machine has a real ambient light sensor.
+  `monitor-sensor` reports `Has ambient light sensor` and live lux values. It is
+  doing work; a debloat list would have killed it.
+- **`avahi-daemon`** — `nsswitch.conf` has `mdns4_minimal`. Masking it breaks
+  `.local` name resolution and Warpinator discovery.
+- **`light-locker`** — the screen locker.
+- **`mintUpdate`** — this machine needs kernel 7.0 specifically. Losing update
+  notifications on it is not a trade worth making for 88 MB.
+
+Undo is per-unit: `systemctl unmask --now <unit>`. `bin/doctor` reports which of
+the set are still enabled rather than asserting they are gone, because an update
+can re-enable one and a printer appearing is a legitimate reason for CUPS to
+come back.
+
+> A `systemctl is-enabled X | grep -q masked` test is wrong under
+> `set -o pipefail`. `is-enabled` exits non-zero for a masked unit *while
+> printing* `masked`, and pipefail propagates that over grep's success. It cost
+> a real bug here: `power-check` reported a masked thermald as "not running",
+> and `service-trim` offered to mask units that were already masked. Capture it
+> instead: `[ "$(systemctl is-enabled X 2>/dev/null || true)" = masked ]`.
+
 - `fstrim.timer` was already enabled. `nm-applet`'s user autostart entry is a
   deliberate `Hidden=true` override, not a stray duplicate — leave it.
 

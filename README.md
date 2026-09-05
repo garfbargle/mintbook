@@ -42,6 +42,10 @@ wired in, **not yet confirmed on a real wake**. See [input](docs/input.md).
 
 `bin/hw-report` is live. Read-only. No sudo.
 
+`bin/service-trim --check` lists the services this machine has no hardware or
+no use for, and why. It needs no root and changes nothing until you run it
+without `--check`.
+
 After a kernel update, run `bin/doctor`. It checks every piece this machine needs —
 firmware, DKMS modules, the DSDT override, udev and systemd units, the panel — and
 tells you which one an update took away.

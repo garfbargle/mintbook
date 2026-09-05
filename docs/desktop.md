@@ -660,6 +660,8 @@ touch the package, so an update cannot undo it and `apt` never fights you for it
 |---|---|---|
 | `nm-applet` | disabled (pre-existing) | the bar uses [`bin/panel-wifi`](../bin/panel-wifi) genmon instead |
 | `org.gnome.Evolution-alarm-notify` | **disabled 2026-09-03** | started four `evolution-data-server` processes at every login with no Evolution installed |
+| `print-applet` | **disabled 2026-09-04** | 35 MB of Python watching a print queue that does not exist — `lpstat -p` has no destinations, and [`bin/service-trim`](../bin/service-trim) masks CUPS |
+| `geoclue-demo-agent` | **disabled 2026-09-04** | a location agent, on a machine where nothing asks for location |
 
 Override kept in [`config/autostart/`](../config/autostart/). `bin/doctor` checks it.
 
@@ -667,7 +669,11 @@ Override kept in [`config/autostart/`](../config/autostart/). `bin/doctor` check
 > like the same file twice. Do not "clean it up".
 
 Still autostarted and left alone: `onboard` and `orca` (both exit immediately when not
-needed), `blueman`, `xiccd`, `warpinator`, `light-locker`.
+needed), `blueman` (it is the BlueZ pairing agent — only its *tray icon* is hidden,
+see the Bluetooth indicator above), `xiccd`, `warpinator`, `light-locker` (the screen
+locker).
+
+Takes effect at the next login; the processes already running stay until then.
 
 ## Open / not done
 

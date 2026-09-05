@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# service-trim — mask system services this machine has no hardware or no use
+# for. Must be run as root. Idempotent. See docs/hardware.md.
+#
+#   service-trim            # apply
+#   service-trim --check    # show what it would do, change nothing (no root)
+#
+# Every entry is behind a probe. Nothing here is masked because a list said so
+# — if the printer, the modem or the second GPU is actually there, the probe
+# finds it and the service is left alone. That is the difference between this
+# and pasting someone's "debloat" list into a terminal.
+#
+# Deliberately NOT here:
+#   iio-sensor-proxy  — this machine has a real ambient light sensor. It reports
+#                       lux (`monitor-sensor`), so it is doing work.
+#   avahi-daemon      — nsswitch.conf has mdns4_minimal; masking it breaks
+#                       .local name resolution and Warpinator discovery.
+#   light-locker      — the screen locker.
+#   mintUpdate        — this machine needs kernel 7.0 specifically; losing
+#                       update notifications on it is not a trade worth making.
+#   bluetooth         — see docs/bluetooth.md for what it took to get it.
+set -uo pipefail
+
+CHECK=0
+[ "${1-}" = "--check" ] && CHECK=1
+
+if [ "$CHECK" -eq 0 ] && [ "$(id -u)" -ne 0 ]; then
+  echo "run as root: pkexec $0    (or $0 --check to preview)" >&2
+  exit 1
+fi
+
+did=0 skipped=0
+
+# mask <reason> <unit...>
+mask() {
+  local reason=$1; shift
+  local u
+  for u in "$@"; do
+    systemctl list-unit-files "$u" >/dev/null 2>&1 || continue
+    # Captured, not piped: is-enabled exits non-zero for a masked unit even
+    # while printing "masked", and pipefail propagates that over grep's
+    # success. Piped, this skip never fired and already-masked units were
+    # reported as still to do.
+    [ "$(systemctl is-enabled "$u" 2>/dev/null || true)" = masked ] && continue
+    if [ "$CHECK" -eq 1 ]; then
+      printf '  would mask  %-26s %s\n' "$u" "$reason"
+    else
+      printf '  mask        %-26s %s\n' "$u" "$reason"
+      systemctl disable --now "$u" >/dev/null 2>&1
+      systemctl mask "$u" >/dev/null 2>&1
+      systemctl reset-failed "$u" >/dev/null 2>&1
+    fi
+    did=$((did+1))
+  done
+}
+keep() { printf '  keep        %-26s %s\n' "$1" "$2"; skipped=$((skipped+1)); }
+
+echo "no modem hardware?"
+if [ -n "$(ls /dev/cdc-wdm* /dev/ttyACM* 2>/dev/null)" ] || \
+   lspci -nn 2>/dev/null | grep -qiE '\[0d00\]|modem' ; then
+  keep ModemManager.service "modem hardware present"
+else
+  mask "no modem, and it probes serial ports on every device event" ModemManager.service
+fi
+
+echo "no printer configured?"
+if [ -s /etc/cups/printers.conf ] || lpstat -p 2>/dev/null | grep -q .; then
+  keep cups.service "a printer is configured"
+else
+  # The socket and path units re-activate cups on demand, so masking the
+  # service alone achieves nothing.
+  mask "no printer configured" cups.service cups.socket cups.path cups-browsed.service
+fi
+
+echo "single GPU?"
+if [ "$(lspci -nn 2>/dev/null | grep -cE '\[030[02]\]')" -gt 1 ]; then
+  keep switcheroo-control.service "more than one GPU"
+else
+  mask "one Intel iGPU; nothing to switch between" switcheroo-control.service
+fi
+
+echo "booted from disk, not a live ISO?"
+if [ "$(findmnt -n -o FSTYPE / 2>/dev/null)" = overlay ]; then
+  keep casper.service "this is a live boot"
+else
+  mask "live-ISO leftover; there is no ISO when booting from disk" \
+       casper.service casper-md5check.service
+fi
+
+echo "journal is persistent, so rsyslog is duplicating it?"
+if [ -d /var/log/journal ]; then
+  mask "journald already stores this persistently; syslog is a second copy" rsyslog.service
+else
+  keep rsyslog.service "journald is volatile — syslog is the only durable log"
+fi
+
+echo "crash upload"
+mask "opt-in crash-signature upload" kerneloops.service
+
+echo
+if [ "$CHECK" -eq 1 ]; then
+  echo "$did would be masked, $skipped kept. Run as root to apply:"
+  echo "  pkexec $(cd "$(dirname "$0")/.." && pwd)/bin/service-trim"
+  exit 0
+fi
+echo "$did masked, $skipped kept. check with: $(cd "$(dirname "$0")/.." && pwd)/bin/doctor"
+echo "undo (any subset — masking is per-unit and reversible):"
+echo "  systemctl unmask --now ModemManager.service"
+echo "  systemctl unmask --now cups.service cups.socket cups.path cups-browsed.service"
+echo "  systemctl unmask --now switcheroo-control.service rsyslog.service"
+echo "  systemctl unmask kerneloops.service casper.service casper-md5check.service"

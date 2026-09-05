@@ -66,7 +66,11 @@ fi
 
 # thermald writes max_perf_pct but finds no zones or sensors on this machine
 # (see docs/hardware.md), so unmasked it can only fight this policy.
-if systemctl is-enabled thermald.service 2>/dev/null | grep -q masked; then
+#
+# Captured, not piped: `systemctl is-enabled` exits non-zero for a masked unit
+# even while printing "masked", and under `set -o pipefail` that exit status
+# wins over grep's. Piping here reported a masked thermald as "not running".
+if [ "$(systemctl is-enabled thermald.service 2>/dev/null || true)" = masked ]; then
   echo "thermald:          masked (it manages nothing here)"
 elif systemctl is-active thermald.service >/dev/null 2>&1; then
   echo "thermald:          RUNNING — it also writes max_perf_pct; pkexec bin/tune-install masks it"
