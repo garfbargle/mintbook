@@ -1,56 +1,41 @@
-#!/usr/bin/env python3
-"""Power-profile indicator for xfce4-genmon-plugin.
+#!/usr/bin/env bash
+# Power-profile indicator for xfce4-genmon-plugin.
+#
+# xfce4-power-manager 4.18 has no power-profiles-daemon UI. The battery plugin
+# is charge only. Click opens a menu (bin/power-menu) that sets PPD + the
+# intel_pstate cap. See docs/hardware.md and docs/desktop.md.
+#
+# This was Python calling `powerprofilesctl get`, which cost 350 ms a run: a
+# Python interpreter to start (53 ms) so it could fork a *second* Python
+# interpreter, because powerprofilesctl is itself a Python program. At the old
+# 3 s period that was 401 s of CPU in a two-hour session — half of everything
+# the status bar spent. The value is one D-Bus string property; busctl reads it
+# in 15 ms and bash starts in 7. See docs/desktop.md.
+DIR="$HOME/.local/share/mintbook/power"
+MENU="$HOME/.local/bin/power-menu"
 
-xfce4-power-manager 4.18 has no power-profiles-daemon UI. The battery plugin
-is charge only. Click opens a menu (bin/power-menu) that sets PPD + the
-intel_pstate cap. See docs/hardware.md and docs/desktop.md.
-"""
-import os
-import subprocess
-import sys
+# emitted on every path, including the fallback below
+printf '<click>%s</click>\n<iconclick>%s</iconclick>\n' "$MENU" "$MENU"
 
-DIR = os.path.expanduser('~/.local/share/mintbook/power')
-MENU = os.path.expanduser('~/.local/bin/power-menu')
+# busctl prints `s "power-saver"` for a string property.
+p=$(busctl --system get-property net.hadess.PowerProfiles \
+      /net/hadess/PowerProfiles net.hadess.PowerProfiles ActiveProfile 2>/dev/null)
+p=${p#s \"}
+p=${p%\"}
 
-LABELS = {
-    'power-saver': 'Power Saver',
-    'balanced': 'Balanced',
-    'performance': 'Sustained',
-}
-HINTS = {
-    'power-saver': 'Battery default — CPU capped ~1.6 GHz',
-    'balanced': 'AC default — turbo allowed',
-    'performance': 'Long compiles — ~20% more work, same heat',
-}
+case "$p" in
+  power-saver) label='Power Saver'; hint='Battery default — CPU capped ~1.6 GHz' ;;
+  performance) label='Sustained';   hint='Long compiles — ~20% more work, same heat' ;;
+  # Anything unreadable falls back to balanced, the same as the Python did:
+  # a missing icon would leave a hole in the bar.
+  *) p=balanced; label='Balanced'; hint='AC default — turbo allowed' ;;
+esac
 
+ac='unknown'
+case "$(cat /sys/class/power_supply/ADP1/online 2>/dev/null)" in
+  1) ac='plugged in' ;;
+  0) ac='on battery' ;;
+esac
 
-def profile():
-    try:
-        out = subprocess.check_output(
-            ['powerprofilesctl', 'get'], text=True, timeout=2)
-        p = out.strip()
-        return p if p in LABELS else 'balanced'
-    except Exception:
-        return 'balanced'
-
-
-def main():
-    p = profile()
-    print(f'<click>{MENU}</click>')
-    print(f'<iconclick>{MENU}</iconclick>')
-    print(f'<img>{DIR}/{p}.svg</img>')
-    ac = 'unknown'
-    try:
-        with open('/sys/class/power_supply/ADP1/online') as f:
-            ac = 'plugged in' if f.read().strip() == '1' else 'on battery'
-    except OSError:
-        pass
-    print(
-        f'<tool>{LABELS[p]} ({ac})\n{HINTS[p]}\n'
-        f'Click to choose a profile</tool>'
-    )
-
-
-if __name__ == '__main__':
-    main()
-    sys.exit(0)
+printf '<img>%s/%s.svg</img>\n' "$DIR" "$p"
+printf '<tool>%s (%s)\n%s\nClick to choose a profile</tool>\n' "$label" "$ac" "$hint"

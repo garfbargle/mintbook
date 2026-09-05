@@ -1,52 +1,66 @@
-#!/usr/bin/env python3
-"""Bluetooth indicator for xfce4-genmon-plugin.
+#!/usr/bin/env bash
+# Bluetooth indicator for xfce4-genmon-plugin.
+#
+# Blueman's tray icon lives in the systray plugin with everything else (Claude),
+# so it cannot be placed next to wifi on its own. This renders a matching-size
+# icon via genmon <img> and opens blueman-manager on click. The blueman applet
+# stays running as the BlueZ agent; only its tray icon is hidden.
+#
+# This was Python importing gi.repository. That import alone costs 190 ms on
+# this chip — the whole script ran in 197 ms, so essentially all of it was
+# loading GObject introspection to make one D-Bus call. dbus-send makes the
+# same call in 10 ms and prints something awk can read. See docs/desktop.md.
+DIR="$HOME/.local/share/mintbook/bt"
 
-Blueman's tray icon lives in the systray plugin with everything else (Claude),
-so it cannot be placed next to wifi on its own. This renders a matching-size
-icon via genmon <img> and opens blueman-manager on click. The blueman applet
-stays running as the BlueZ agent; only its tray icon is hidden.
-"""
-import os
-import sys
+# emitted on every path, including the early exits below
+printf '<click>blueman-manager</click>\n'
 
-DIR = os.path.expanduser('~/.local/share/mintbook/bt')
+emit() { printf '<img>%s/%s.svg</img>\n<tool>%b</tool>\n' "$DIR" "$1" "$2"; exit 0; }
 
-print('<click>blueman-manager</click>')
+# No adapter at all is a sysfs question, and answering it here keeps the whole
+# script under 10 ms when the SSDC regression has eaten hci0 again.
+shopt -s nullglob
+adapters=(/sys/class/bluetooth/hci*)
+shopt -u nullglob
+[ ${#adapters[@]} -eq 0 ] && emit bt-off 'No Bluetooth adapter'
 
-def emit(icon, tool):
-    print(f'<img>{DIR}/{icon}.svg</img>')
-    print(f'<tool>{tool}</tool>')
-    sys.exit(0)
+objs=$(dbus-send --system --print-reply --dest=org.bluez / \
+         org.freedesktop.DBus.ObjectManager.GetManagedObjects 2>/dev/null) \
+  || emit bt-off 'Bluetooth status unknown'
+[ -z "$objs" ] && emit bt-off 'Bluetooth status unknown'
 
-try:
-    from gi.repository import Gio
-    bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
-    proxy = Gio.DBusProxy.new_sync(
-        bus, Gio.DBusProxyFlags.NONE, None,
-        'org.bluez', '/', 'org.freedesktop.DBus.ObjectManager', None)
-    objs = proxy.call_sync(
-        'GetManagedObjects', None, Gio.DBusCallFlags.NONE, 2000, None
-    ).unpack()[0]
-except Exception:
-    emit('bt-off', 'Bluetooth status unknown')
+# One pass over dbus-send's reply. Properties arrive as a `string "Name"` line
+# followed by a `variant <type> <value>` line, nested under a `string
+# "<interface>"` line, nested under an `object path` line. Interface names are
+# the only keys here that start with "org.", which is what tells the two apart.
+#
+# Alias and Connected are separate lines and BlueZ does not promise an order,
+# so each object is buffered and flushed when the next `object path` arrives.
+read -r powered names < <(awk '
+  function flush() {
+    if (dev_conn && dev_alias != "") { conn = conn sep dev_alias; sep = "\\n" }
+    dev_conn = 0; dev_alias = ""
+  }
+  /^ *object path "/     { flush(); iface = ""; next }
+  /^ *string "org\./     { iface = $0; sub(/^ *string "/, "", iface); sub(/".*$/, "", iface); prop = ""; next }
+  /^ *string "/          { prop = $0; sub(/^ *string "/, "", prop); sub(/".*$/, "", prop); next }
+  /^ *variant/ {
+    val = $0
+    sub(/^ *variant  */, "", val)   # strip the keyword
+    sub(/^[a-z]+  */, "", val)      # strip the type word (boolean/string/...)
+    gsub(/^"|"$/, "", val)
+    if (iface == "org.bluez.Adapter1" && prop == "Powered" && val == "true") powered = 1
+    if (iface == "org.bluez.Device1") {
+      if (prop == "Connected" && val == "true") dev_conn = 1
+      # Alias is always populated by BlueZ; Name and Address are the fallbacks
+      # the old Python used, and are only reached if Alias is genuinely absent.
+      if (prop == "Alias" || (dev_alias == "" && (prop == "Name" || prop == "Address"))) dev_alias = val
+    }
+    next
+  }
+  END { flush(); print (powered ? 1 : 0), conn }
+' <<< "$objs")
 
-powered = False
-have_adapter = False
-connected = []
-for _path, ifaces in objs.items():
-    adapter = ifaces.get('org.bluez.Adapter1')
-    if adapter:
-        have_adapter = True
-        powered = bool(adapter.get('Powered'))
-    dev = ifaces.get('org.bluez.Device1')
-    if dev and dev.get('Connected'):
-        connected.append(dev.get('Alias') or dev.get('Name') or dev.get('Address'))
-
-if not have_adapter:
-    emit('bt-off', 'No Bluetooth adapter')
-if not powered:
-    emit('bt-off', 'Bluetooth off')
-if connected:
-    names = '\n'.join(connected)
-    emit('bt-on', f'Bluetooth on\n{names}')
-emit('bt-on', 'Bluetooth on\nNo devices connected')
+[ "$powered" = 1 ] || emit bt-off 'Bluetooth off'
+[ -n "$names" ] && emit bt-on "Bluetooth on\n$names"
+emit bt-on 'Bluetooth on\nNo devices connected'

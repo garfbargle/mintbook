@@ -119,9 +119,23 @@ The tooltip is wrapped in `<span font_family="monospace">`. This is required, no
 cosmetic: GTK tooltips render in a proportional font, so space-padded columns do not
 line up without it.
 
-State (previous jiffies + history + per-process times) lives in
-`~/.cache/mintbook/cpu.state`, written via a temp file and `os.replace` so a
-half-written file is never read.
+State lives in `~/.cache/mintbook/`, written via a temp file and `os.replace`
+so a half-written file is never read. It is **two** files, and the split is the
+point:
+
+- `cpu.state` — previous jiffies, the history, the tick counter and the cached
+  top-5 rows. ~320 bytes, rewritten every tick.
+- `cpu.procs` — the per-process time table and the `/proc/stat` total it was
+  taken against. ~5.6 KB, rewritten every **third** tick (`PROC_EVERY`).
+
+The sparkline reads two numbers out of `/proc/stat`, which is cheap. The tooltip
+opens `/proc/<pid>/stat` for every process on the machine, which is not — it was
+running at 2 s alongside a 5.9 KB rewrite of the whole table. Because the
+process delta is measured against the total stored *next to the table* rather
+than against the previous tick, the percentages stay correct over the longer
+interval. The tooltip's `CPU` header is still live every tick; only the
+per-process rows can be up to 6 s old, and nothing reads them until the pointer
+is over the plugin.
 
 > GTK tooltips are not interactive, so a *button* inside the hover is not possible —
 > hence click-to-open. Task Manager remains on its existing **Ctrl+Shift+Esc** binding.
@@ -203,6 +217,13 @@ indicator sits immediately left of volume / right of wifi; click opens
 `blueman-manager`. Polls BlueZ over D-Bus every 5s. Dim icon when powered off;
 full white when on; tooltip lists connected devices.
 
+It is a bash script that reads one `dbus-send` reply with awk. It used to be
+Python importing `gi.repository`, and that import alone was 190 ms of the
+script's 197 ms — essentially the whole cost was loading GObject introspection
+in order to make a single call. "No adapter" is answered from
+`/sys/class/bluetooth/hci*` before D-Bus is touched at all, which is also the
+state this machine lands in when the SSDC regression eats hci0.
+
 blueman-applet stays running (pairing / secret agent). Only its tray icon is hidden,
 via `/plugins/plugin-8/hidden-items = blueman`.
 
@@ -217,8 +238,10 @@ Runs [`bin/panel-power`](../bin/panel-power). Click opens [`bin/power-menu`](../
 an override-redirect popup (a Gtk.Menu dies immediately — genmon clicks have no
 Gdk event, so xfwm4 rejects the grab). **Power Saver / Balanced / Sustained.**
 That calls `mintbook-power-apply` via `/run/mintbook-power/want` (a root
-systemd path unit), so there is **no password**. Saver = 70% P-state, the
-others = 100%. Plug or unplug still runs the automatic AC/battery policy.
+systemd path unit), so there is **no password**. `max_perf_pct` is 70 for Saver,
+100 for Balanced and **75** for Sustained — see
+[hardware.md](hardware.md#the-three-profiles) for why Sustained is not 100.
+Plug or unplug still runs the automatic AC/battery policy.
 
 The tooltip is the **current** profile and a one-line hint (what that profile
 does to the CPU), not two different modes. "Turbo allowed" means the 2.4 GHz
@@ -227,7 +250,16 @@ ceiling is unlocked; it is not a fourth profile.
 Icons from [`icons/generate-power-genmon.py`](../icons/generate-power-genmon.py)
 (Adwaita `power-profile-*-symbolic` paths, baked `#ffffff`).
 
-CLI is still `powerprofilesctl get` / `pkexec mintbook-power-apply …`.
+The indicator is a bash script reading `ActiveProfile` with `busctl`. It used
+to be Python shelling out to `powerprofilesctl get`, which meant starting a
+Python interpreter in order to start a *second* Python interpreter —
+`powerprofilesctl` is itself Python. That was 350 ms a run, at a 3 s period.
+
+CLI is still `powerprofilesctl get` / `pkexec mintbook-power-apply …`. The
+period stays at 3 s: `power-menu` already forces an immediate refresh with
+`xfce4-panel --plugin-event=genmon-22:refresh:bool:true` after a click, so the
+period only governs how fast the icon notices a charger, and stretching it
+would buy a few seconds of CPU an hour in exchange for a laggy icon.
 
 ### Night light (`plugin-23`, genmon)
 
@@ -267,6 +299,75 @@ and the current period/temperature from `redshift -p`.
 
 Do **not** launch the Redshift app from the menu — that is redshift-gtk, and
 its tray would come back next to mintUpdate.
+
+### What the bar costs (2026-09-04)
+
+The status bar was the single most expensive piece of software running on this
+machine. Summed from `cutime` on the six genmon wrappers, it had spent **800
+seconds of CPU in a 1 h 55 m session — 11.6% of one core, continuously**, to
+draw six glyphs.
+
+| plugin | period | CPU in that session |
+|---|---|---|
+| `panel-power` | 3 s | **401 s** |
+| `panel-cpu` | 2 s | 159 s |
+| `panel-bt` | 5 s | 152 s |
+| `panel-wifi` | 5 s | 38 s |
+| `panel-night` | 15 s | 28 s |
+| `panel-temp` | 30 s | 23 s |
+
+Two causes, both avoidable, and neither one about how often the plugins ran:
+
+- **`panel-power` started two Python interpreters per tick.** It was Python, and
+  it shelled out to `powerprofilesctl`, which is *also* Python. 350 ms to read
+  one D-Bus string.
+- **`panel-bt` imported `gi.repository`** to make a single D-Bus call. That
+  import is 190 ms of a 197 ms script.
+
+Measured costs on this chip, which is what the rewrites were chosen from:
+
+| | cost |
+|---|---|
+| `bash -c :` | 7 ms |
+| `python3 -c pass` | 50–53 ms |
+| `cat` a sysfs file | 5 ms |
+| `dbus-send` one call | 10 ms |
+| `busctl get-property` | 15 ms |
+| `import gi.repository` | 190 ms |
+| `powerprofilesctl get` | 264 ms |
+
+So `panel-power` and `panel-bt` became bash, reading `busctl` and `dbus-send`.
+Both emit byte-identical output to the Python they replaced. `panel-cpu` has to
+stay Python — it generates the SVG — so instead its `/proc` walk moved to every
+third tick.
+
+Interleaved A/B, same load, per invocation:
+
+| | before | after | |
+|---|---|---|---|
+| `panel-power` | 367 ms | **29 ms** | 12.7x |
+| `panel-bt` | 236 ms | **23 ms** | 10.3x |
+| `panel-cpu` | 79 ms | **65 ms** | 1.2x |
+
+At the unchanged periods that is **23.2% → 7.8% of one core, a 3x cut**, with no
+change to what the bar shows or how fast it reacts.
+
+> Measuring this needs care. A straight before/after of the genmon wrappers
+> reads 11.6% → 7.8%, which *understates* the win: the second window was ~1.8x
+> busier than the first. The three plugins that were not touched are the proof
+> and the control — `panel-night` went 0.41% → 0.94% and `panel-wifi` 0.56% →
+> 0.92% while their code did not change at all. Per-invocation A/B under one
+> load is the number to trust.
+
+**The periods were left alone.** Stretching `panel-power` from 3 s to 10 s would
+save about 20 s of CPU across a two-hour session and cost up to 10 s of lag
+before the icon notices a charger. After the rewrite the period is no longer
+where the cost is. `power-menu` already forces an immediate refresh on click.
+
+What is left is mostly `python3` starting up: `panel-cpu` is now roughly half of
+the bar's remaining cost, and 50 of its 65 ms is the interpreter. Getting that
+back means not being Python, which for the SVG renderer is a bigger change than
+it is worth today.
 
 ### Dock (Plank)
 
