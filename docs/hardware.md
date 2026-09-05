@@ -369,6 +369,60 @@ quiet desktop. That is expected and is not evidence they did nothing.
 `swapon --show` should list `/dev/zram0` (~3.8 G, zstd, prio 100). Confirmed
 2026-09-01. To undo: delete the conf file and reboot.
 
+## Storage — one command at a time
+
+The obvious tuning advice for an NVMe SSD is "set the scheduler to `none`; the
+device has 64 queues and 1023 tags, an elevator only adds CPU work". Ubuntu ships
+`mq-deadline` here, and that looks like a bug worth fixing.
+
+**It is not. Do not change it.** This controller is not a normal NVMe:
+
+```
+$ bin/io-probe
+  model                 APPLE SSD AP0256H
+  quirks                qdepth_one single_vector
+  queue_count           2   (1 admin + 1 I/O)
+  sqsize                1   (0-based, so 2 entries)
+  usable tags           1   <- commands in flight
+```
+
+Apple's S1X controller (`106b:2001`) carries the kernel's **`qdepth_one`**
+quirk. One I/O queue, one usable tag: **one command in flight, ever.** There is
+no parallelism for `none` to preserve, and the only lever left is getting more
+work into each command — which is exactly what the scheduler does:
+
+```
+  reads       54543  merged     17710  (25% of requests merged away)
+  writes      55855  merged     60628  (52% of requests merged away)
+```
+
+A quarter of reads and half of writes never became a separate round-trip. On a
+queue-depth-1 device each merge is a round-trip saved. `none` does only the
+limited plug-list merging, so switching would give most of that back.
+
+Baseline, cold cache via `POSIX_FADV_DONTNEED`:
+
+```
+  read_ahead_kb=128      seq   223.2 MB/s   rand4k   3821 IOPS (0.26 ms each)
+```
+
+0.26 ms per 4K random read is the whole story: every request waits for the last
+one to finish.
+
+`bin/io-probe` is read-only and needs no sudo. `--sweep` (root) walks
+`read_ahead_kb` through 64/128/256/512/1024 and restores the original value
+afterwards — the open question is whether 256 beats 128, since `max_sectors_kb`
+is 256 and a readahead larger than that splits into commands that *cannot*
+overlap on this device. Not yet measured.
+
+`bin/doctor` records the queue depth, and warns if the scheduler is ever set to
+`none`, so this does not get "fixed" later.
+
+> Retracted here: an earlier pass through this machine flagged `mq-deadline` as
+> wrong and recommended `none`, reasoning from what NVMe hardware normally is.
+> The recommendation was not checked against this device before being made.
+> `nr_hw_queues=1` and `nr_requests=2` were visible the whole time.
+
 ## Graphics / VA-API
 
 libva auto-selects **`iHD`** (`intel-media-va-driver`), which targets Gen9+. This is

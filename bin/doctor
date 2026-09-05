@@ -94,6 +94,24 @@ if [ -n "$THR" ]; then
   fi
 fi
 
+section "Storage"
+# Recorded so the scheduler does not get "fixed" later. The obvious advice for
+# an NVMe -- set the scheduler to none -- is wrong on this controller. See
+# docs/hardware.md, and bin/io-probe for the numbers.
+NVQ=$(cat /sys/class/nvme/nvme0/quirks 2>/dev/null | tr '\n' ' ')
+TAGS=$(cat /sys/block/nvme0n1/mq/0/nr_tags 2>/dev/null || echo '?')
+case "$NVQ" in
+  *qdepth_one*) ok "nvme queue depth" "qdepth_one quirk, $TAGS tag — merging matters, keep a scheduler" ;;
+  *)            ok "nvme queue depth" "$TAGS tags, quirks: ${NVQ:-none}" ;;
+esac
+SCHED=$(sed -n 's/.*\[\(.*\)\].*/\1/p' /sys/block/nvme0n1/queue/scheduler 2>/dev/null)
+case "$SCHED:$NVQ" in
+  none:*qdepth_one*) warn "io scheduler" "none on a queue-depth-1 device — it was merging 25% of reads and 52% of writes away; bin/io-probe" ;;
+  '':*)              warn "io scheduler" "could not read" ;;
+  *)                 ok   "io scheduler" "$SCHED" ;;
+esac
+check "fstrim timer" "weekly NVMe trim" systemctl is-enabled fstrim.timer
+
 section "Memory / zram"
 check "zram-generator conf" "/etc/systemd/zram-generator.conf" have /etc/systemd/zram-generator.conf
 if swapon --show=NAME --noheadings 2>/dev/null | grep -q zram0; then
@@ -209,7 +227,6 @@ if systemctl --failed --no-legend --no-pager 2>/dev/null | grep -q .; then
 else
   ok "failed units" "none"
 fi
-check "fstrim timer" "weekly NVMe trim" systemctl is-enabled fstrim.timer
 # Services bin/service-trim masks. Reported, not asserted: an update can
 # re-enable one, and a printer or modem appearing is a legitimate reason for
 # one to come back. service-trim --check re-runs the probes and says which.

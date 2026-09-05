@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+"""io-probe — what the storage on this machine can actually do.
+
+Read-only. No sudo needed to measure. See docs/hardware.md.
+
+    bin/io-probe                 # constraints + a cold-cache read benchmark
+    bin/io-probe --sweep         # also sweep read_ahead_kb (needs root)
+
+This exists because the obvious tuning advice for "an NVMe SSD" is wrong here.
+The Apple S1X controller in this machine carries the kernel's `qdepth_one`
+quirk: one I/O queue, submission queue size 2, one usable tag. **One command in
+flight, ever.** Advice written for a normal NVMe — 64 queues, 1023 tags — does
+not transfer, so measure instead of assuming. Nothing here writes to the disk.
+"""
+import os
+import sys
+import time
+
+DEV = 'nvme0n1'
+QUEUE = f'/sys/block/{DEV}/queue'
+CTRL = '/sys/class/nvme/nvme0'
+SEQ_BYTES = 96 << 20          # 96 MB sequential
+RAND_READS = 400              # 4K random reads
+BLOCK = 1 << 20
+
+
+def read1(path, default='?'):
+    """One sysfs value, flattened — `quirks` is newline-separated."""
+    try:
+        with open(path) as f:
+            return ' '.join(f.read().split())
+    except OSError:
+        return default
+
+
+def pick_file():
+    """Largest readable regular file we can find, without writing one."""
+    best, best_sz = None, 0
+    for root in ('/usr/lib', '/opt', '/usr/share'):
+        for dirpath, _dirs, files in os.walk(root):
+            for n in files:
+                p = os.path.join(dirpath, n)
+                try:
+                    st = os.lstat(p)
+                except OSError:
+                    continue
+                if st.st_mode & 0o170000 != 0o100000:
+                    continue
+                if st.st_size > best_sz:
+                    best, best_sz = p, st.st_size
+            if best_sz > 256 << 20:
+                return best, best_sz
+    return best, best_sz
+
+
+def cold(fd, size):
+    """Drop this file's pages. POSIX_FADV_DONTNEED needs no privileges."""
+    os.posix_fadvise(fd, 0, size, os.POSIX_FADV_DONTNEED)
+
+
+def bench_seq(path, size):
+    n = min(SEQ_BYTES, size)
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        cold(fd, size)
+        t0 = time.perf_counter()
+        got = 0
+        while got < n:
+            b = os.pread(fd, min(BLOCK, n - got), got)
+            if not b:
+                break
+            got += len(b)
+        el = time.perf_counter() - t0
+    finally:
+        os.close(fd)
+    return got / el / (1 << 20), el
+
+
+def bench_rand(path, size):
+    import random
+    rnd = random.Random(1234)          # fixed seed: runs are comparable
+    offs = [rnd.randrange(0, max(1, size - 4096)) & ~4095
+            for _ in range(RAND_READS)]
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        cold(fd, size)
+        t0 = time.perf_counter()
+        for o in offs:
+            os.pread(fd, 4096, o)
+        el = time.perf_counter() - t0
+    finally:
+        os.close(fd)
+    return RAND_READS / el, el * 1000 / RAND_READS
+
+
+def constraints():
+    print('device')
+    print(f'  model                 {read1(CTRL + "/model")}')
+    print(f'  quirks                {read1(CTRL + "/quirks")}')
+    qc = read1(CTRL + '/queue_count')
+    sq = read1(CTRL + '/sqsize')
+    print(f'  queue_count           {qc}   (1 admin + {int(qc) - 1 if qc.isdigit() else "?"} I/O)')
+    print(f'  sqsize                {sq}   (0-based, so {int(sq) + 1 if sq.isdigit() else "?"} entries)')
+    print(f'  usable tags           {read1(f"/sys/block/{DEV}/mq/0/nr_tags")}   <- commands in flight')
+    print()
+    print('queue')
+    for k in ('scheduler', 'nr_requests', 'read_ahead_kb', 'max_sectors_kb',
+              'max_hw_sectors_kb', 'nomerges', 'rq_affinity'):
+        print(f'  {k:<21} {read1(QUEUE + "/" + k)}')
+    print()
+    st = read1(f'/sys/block/{DEV}/stat').split()
+    if len(st) >= 8:
+        r, rm, w, wm = int(st[0]), int(st[1]), int(st[4]), int(st[5])
+        print('merging so far this boot')
+        print(f'  reads   {r:>9}  merged {rm:>9}  '
+              f'({100 * rm / (r + rm) if r + rm else 0:.0f}% of requests merged away)')
+        print(f'  writes  {w:>9}  merged {wm:>9}  '
+              f'({100 * wm / (w + wm) if w + wm else 0:.0f}% of requests merged away)')
+        print('  On a queue-depth-1 device every merge is one fewer round-trip.')
+        print('  This is the scheduler earning its keep -- see docs/hardware.md.')
+
+
+def main():
+    sweep = '--sweep' in sys.argv
+    constraints()
+    path, size = pick_file()
+    if not path or size < (32 << 20):
+        print('\nno file big enough to benchmark against; skipping', file=sys.stderr)
+        return 0
+    print(f'\nbenchmark target: {path} ({size >> 20} MB, read-only)')
+
+    def run(label):
+        mb, _ = bench_seq(path, size)
+        iops, lat = bench_rand(path, size)
+        print(f'  {label:<22} seq {mb:7.1f} MB/s   rand4k {iops:6.0f} IOPS '
+              f'({lat:.2f} ms each)')
+
+    ra = QUEUE + '/read_ahead_kb'
+    if not sweep:
+        print('\ncold-cache (POSIX_FADV_DONTNEED)')
+        run(f'read_ahead_kb={read1(ra)}')
+        print(f'\nsweep other readahead values with:  sudo {sys.argv[0]} --sweep')
+        return 0
+
+    if os.geteuid() != 0:
+        print(f'\n--sweep writes {ra}; run it as root', file=sys.stderr)
+        return 1
+    orig = read1(ra)
+    print('\ncold-cache (POSIX_FADV_DONTNEED), sweeping read_ahead_kb')
+    try:
+        for v in (64, 128, 256, 512, 1024):
+            with open(ra, 'w') as f:
+                f.write(str(v))
+            run(f'read_ahead_kb={v}')
+    finally:
+        with open(ra, 'w') as f:
+            f.write(orig)
+        print(f'\nrestored read_ahead_kb={orig}')
+    print('max_sectors_kb is 256, so a readahead above that is split into '
+          'several commands\nand on this controller they cannot overlap.')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

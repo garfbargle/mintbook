@@ -46,6 +46,10 @@ wired in, **not yet confirmed on a real wake**. See [input](docs/input.md).
 no use for, and why. It needs no root and changes nothing until you run it
 without `--check`.
 
+`bin/io-probe` measures the disk. The SSD controller here takes **one command at
+a time** (`qdepth_one`), so ordinary NVMe tuning advice does not apply — see
+[hardware](docs/hardware.md).
+
 After a kernel update, run `bin/doctor`. It checks every piece this machine needs —
 firmware, DKMS modules, the DSDT override, udev and systemd units, the panel — and
 tells you which one an update took away.
