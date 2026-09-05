@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# input-install — libinput DWT/palm quirk (and the DMA blacklist if missing).
-# Must be run as root. See docs/input.md.
+# input-install — libinput DWT/palm quirk, the DMA blacklist if missing, and
+# the post-resume applespi rebind. Must be run as root. See docs/input.md.
 #
 # Does not reboot. The quirk is visible to `libinput quirks list` immediately;
 # disable-while-typing only applies after Xorg reopens the devices (log out).
+# The resume hook is armed as soon as the unit is enabled.
 set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -15,11 +16,17 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 QUIRKS_SRC="$ROOT/config/libinput/local-overrides.quirks"
 QUIRKS_DST=/etc/libinput/local-overrides.quirks
 BLACKLIST=/etc/modprobe.d/blacklist-dw-dmac.conf
+REBIND_SRC="$ROOT/bin/applespi-rebind"
+REBIND_DST=/usr/local/sbin/mintbook-applespi-rebind
+UNIT_SRC="$ROOT/config/systemd/mintbook-applespi-resume.service"
+UNIT_DST=/etc/systemd/system/mintbook-applespi-resume.service
 
-if [ ! -f "$QUIRKS_SRC" ]; then
-  echo "missing $QUIRKS_SRC" >&2
-  exit 1
-fi
+for f in "$QUIRKS_SRC" "$REBIND_SRC" "$UNIT_SRC"; do
+  if [ ! -f "$f" ]; then
+    echo "missing $f" >&2
+    exit 1
+  fi
+done
 
 echo "==> $QUIRKS_DST"
 install -dm755 /etc/libinput
@@ -42,6 +49,17 @@ install dw_dmac_pci /bin/false
 EOF
 fi
 
+echo "==> $REBIND_DST"
+install -m755 "$REBIND_SRC" "$REBIND_DST"
+
+echo "==> $UNIT_DST"
+install -m644 "$UNIT_SRC" "$UNIT_DST"
+systemctl daemon-reload
+systemctl enable mintbook-applespi-resume.service
+
 echo
 echo "quirk is on disk. log out once for disable-while-typing to take effect."
+echo "resume hook is armed — it runs on the next wake from sleep."
 echo "then: bin/input-check"
+echo
+echo "undo: systemctl disable mintbook-applespi-resume.service && rm $UNIT_DST $REBIND_DST"

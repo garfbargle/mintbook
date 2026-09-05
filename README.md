@@ -36,6 +36,10 @@ Wi-Fi, speakers, headphones, camera, Bluetooth, keyboard, trackpad.
 
 Speakers, camera, and Bluetooth want kernel **7.0**. **6.14** is the fallback if 7.0 will not boot — silent speakers, but it boots. OpenCore is the picker. GRUB is not.
 
+Sleep is the open one: `applespi` does not survive S3, so every wake used to come
+back with a dead keyboard and trackpad. A resume hook now rebinds it — written,
+wired in, **not yet confirmed on a real wake**. See [input](docs/input.md).
+
 `bin/hw-report` is live. Read-only. No sudo.
 
 After a kernel update, run `bin/doctor`. It checks every piece this machine needs —

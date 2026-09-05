@@ -1,44 +1,52 @@
 #!/usr/bin/env bash
-# input-check - is the Apple SPI keyboard/trackpad on the working PIO path?
-# Read-only, no sudo. See docs/input.md.
+# input-check - is the Apple SPI keyboard/trackpad on the working PIO path,
+# and does it survive sleep? Read-only, no sudo. See docs/input.md.
 #   --history   survey every boot recorded in the journal
 set -uo pipefail
 
-verdict() { # $1=pio $2=timeouts $3=touchpad
+# There are two ways to lose input, and they look identical to the user.
+# The DMA boot race never reaches PIO or the touchpad. The resume failure
+# probes cleanly and only starts timing out after a wake — so a boot that
+# has PIO, a touchpad AND timeouts was killed by sleep, not by DMA.
+verdict() { # $1=pio $2=timeouts $3=touchpad $4=suspends
   if [ "$1" -eq 0 ] && [ "$2" -eq 0 ] && [ "$3" -eq 0 ]; then echo "no data"
   elif [ "$1" -gt 0 ] && [ "$3" -gt 0 ] && [ "$2" -eq 0 ]; then echo "OK (PIO)"
+  elif [ "$1" -gt 0 ] && [ "$3" -gt 0 ] && [ "${4:-0}" -gt 0 ]; then echo "DEAD (resume)"
   elif [ "$2" -gt 0 ] || [ "$3" -eq 0 ];                  then echo "DEAD (DMA)"
   else                                                         echo "unclear"; fi
 }
 
 scan() { # $1 = boot id or offset
   local b=$1
-  local pio to tp
-  pio=$(journalctl -b "$b" -k --no-pager 2>/dev/null | grep -c "using PIO")
-  to=$(journalctl -b "$b" -k --no-pager 2>/dev/null | grep -c "SPI transfer timed out")
-  tp=$(journalctl -b "$b" -k --no-pager 2>/dev/null | grep -c "Apple SPI Touchpad")
-  echo "$pio $to $tp"
+  local log pio to tp su
+  log=$(journalctl -b "$b" -k --no-pager 2>/dev/null)
+  pio=$(printf '%s\n' "$log" | grep -c "using PIO")
+  to=$(printf '%s\n' "$log" | grep -c "SPI transfer timed out")
+  tp=$(printf '%s\n' "$log" | grep -c "Apple SPI Touchpad")
+  su=$(printf '%s\n' "$log" | grep -c "PM: suspend entry")
+  echo "$pio $to $tp $su"
 }
 
 if [ "${1:-}" = "--history" ]; then
-  printf '%-4s %-10s %-5s %-9s %-9s %s\n' IDX KERNEL PIO TIMEOUTS TOUCHPAD RESULT
+  printf '%-4s %-10s %-5s %-9s %-9s %-6s %s\n' IDX KERNEL PIO TIMEOUTS TOUCHPAD SLEPT RESULT
   journalctl --list-boots --no-pager 2>/dev/null | awk 'NF>2 {print $1, $2}' | \
   while read -r off id; do
     case "$off" in ''|*[!0-9-]*) [ "${off#-}" = "$off" ] && [ "$off" != "0" ] && continue ;; esac
     k=$(journalctl -b "$id" -k --no-pager 2>/dev/null \
           | grep -m1 -oE 'Linux version [0-9]+\.[0-9]+\.[0-9]+-[0-9]+' | sed 's/Linux version //')
-    read -r pio to tp <<<"$(scan "$id")"
-    printf '%-4s %-10s %-5s %-9s %-9s %s\n' "$off" "${k:-?}" "$pio" "$to" "$tp" "$(verdict "$pio" "$to" "$tp")"
+    read -r pio to tp su <<<"$(scan "$id")"
+    printf '%-4s %-10s %-5s %-9s %-9s %-6s %s\n' "$off" "${k:-?}" "$pio" "$to" "$tp" "$su" "$(verdict "$pio" "$to" "$tp" "$su")"
   done
   exit 0
 fi
 
 echo "kernel: $(uname -r)"
-read -r pio to tp <<<"$(scan 0)"
+read -r pio to tp su <<<"$(scan 0)"
 echo "  'using PIO' lines ....... $pio   (want >0)"
 echo "  SPI transfer timeouts ... $to   (want 0)"
 echo "  Apple SPI Touchpad ...... $tp   (want >0)"
-echo "  verdict ................. $(verdict "$pio" "$to" "$tp")"
+echo "  suspends this boot ...... $su"
+echo "  verdict ................. $(verdict "$pio" "$to" "$tp" "$su")"
 echo
 echo "live input devices:"
 grep -E '^N: Name="Apple SPI' /proc/bus/input/devices 2>/dev/null | sed 's/^/  /' \
@@ -63,4 +71,34 @@ if command -v libinput >/dev/null 2>&1; then
   echo "     keyboard: ${kbd:-<no AttrKeyboardIntegration>}"
   echo "     touchpad: ${pad:-<no AttrSizeHint>}"
   echo "     (Xorg only reloads this on logout)"
+fi
+
+echo
+if [ -f /etc/systemd/system/mintbook-applespi-resume.service ]; then
+  if systemctl is-enabled mintbook-applespi-resume.service >/dev/null 2>&1; then
+    echo "resume hook: INSTALLED and enabled"
+  else
+    echo "resume hook: installed but NOT enabled - sleep will kill input. See docs/input.md"
+  fi
+else
+  echo "resume hook: NOT installed - input dies on every resume. See docs/input.md"
+fi
+
+# What happened on this boot's most recent wake, if there was one.
+wakes=$(journalctl -b -k --no-pager 2>/dev/null | grep -c 'Waking up from system sleep')
+if [ "$wakes" -eq 0 ]; then
+  echo "     (no resume yet this boot - nothing to judge)"
+else
+  post=$(journalctl -b -k --no-pager 2>/dev/null \
+           | awk '/Waking up from system sleep/{n++} n' )
+  to=$(printf '%s\n' "$post" | grep -c 'SPI transfer timed out')
+  ms=$(printf '%s\n' "$post" | grep -c 'modeswitch done')
+  echo "     resumes this boot ...... $wakes"
+  echo "     timeouts since wake .... $to   (want 0)"
+  echo "     modeswitch since wake .. $ms   (want >0 if the hook fired)"
+  if grep -qF 'Name="Apple SPI Touchpad"' /proc/bus/input/devices 2>/dev/null; then
+    echo "     touchpad now ........... present - input survived"
+  else
+    echo "     touchpad now ........... MISSING - input is dead"
+  fi
 fi

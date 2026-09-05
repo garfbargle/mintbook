@@ -1,0 +1,24 @@
+# Re-probe the Apple SPI keyboard/trackpad after S3. Installed to
+# /etc/systemd/system/mintbook-applespi-resume.service. See docs/input.md.
+#
+# applespi does not survive deep sleep: every transfer times out on resume and
+# the machine wakes with no keyboard and no trackpad. Unbind/bind re-runs the
+# probe path that works at boot.
+#
+# After= plus WantedBy= on the sleep targets is what makes this run on the way
+# OUT of suspend rather than on the way in. Undo: systemctl disable this unit
+# and delete the file.
+[Unit]
+Description=mintbook re-probe Apple SPI keyboard/trackpad after resume
+After=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
+
+[Service]
+Type=oneshot
+# The controller needs a moment to settle before the device will answer.
+ExecStartPre=/bin/sleep 2
+ExecStart=/usr/local/sbin/mintbook-applespi-rebind
+# Never stall the resume transition: the script caps its own writes, this is the backstop.
+TimeoutStartSec=60
+
+[Install]
+WantedBy=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target

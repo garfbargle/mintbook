@@ -100,6 +100,13 @@ fi
 section "Keyboard / trackpad"
 check "DMA blacklist" "/etc/modprobe.d/blacklist-dw-dmac.conf" have /etc/modprobe.d/blacklist-dw-dmac.conf
 check "libinput quirk" "/etc/libinput/local-overrides.quirks" have /etc/libinput/local-overrides.quirks
+check "resume rebind script" "/usr/local/sbin/mintbook-applespi-rebind" have /usr/local/sbin/mintbook-applespi-rebind
+check "resume hook enabled" "mintbook-applespi-resume.service" systemctl is-enabled mintbook-applespi-resume.service
+if grep -qF 'Name="Apple SPI Touchpad"' /proc/bus/input/devices 2>/dev/null; then
+  ok "touchpad present" "input survived this boot"
+else
+  bad "touchpad present" "no Apple SPI Touchpad — input is dead"
+fi
 if [ -e /sys/class/leds/spi::kbd_backlight ]; then ok "keyboard backlight" "spi::kbd_backlight"; else warn "keyboard backlight" "led node missing"; fi
 
 section "Desktop"

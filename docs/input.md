@@ -1,14 +1,20 @@
 # Input — Apple SPI keyboard and trackpad
 
-**Status: working.** Two separate problems, both now addressed:
+**Status: working at boot. Sleep is fixed but UNVERIFIED.** Three separate
+problems:
 
 | | |
 |---|---|
 | Dead at boot | **Fixed.** `dw_dmac_pci` is blacklisted, so SPI always uses PIO. |
+| Dead after sleep | **Fix written, not yet tested.** applespi does not survive S3; a resume hook rebinds it. No suspend has been run since installing it. |
 | Palm / typing | **Quirk installed.** Disable-while-typing was a no-op until the keyboard was marked internal. **Log out once** for Xorg to reload it. |
 
-`bin/input-check` reports both. `sudo bin/input-install` copies the quirk (and the
-blacklist, if missing).
+`bin/input-check` reports all three. `sudo bin/input-install` copies the quirk, the
+blacklist (if missing), and the resume hook.
+
+**Two different failures look identical from the chair: no keyboard, no trackpad.**
+They are told apart by `using PIO` and by whether the machine slept —
+`bin/input-check --history` now prints a `SLEPT` column for exactly this reason.
 
 ---
 
@@ -121,7 +127,139 @@ devices present, and `dw_dmac_pci not loaded`.
 
 ---
 
-## 2. Palm rejection / disable-while-typing
+## 2. Dead keyboard and trackpad after deep sleep
+
+**Every suspend this machine has ever taken has killed input. Two for two.**
+
+This is *not* the boot race coming back, and that matters: the reflex is to blame
+DMA again, and the blacklist is not the problem.
+
+### Symptom
+
+Close the lid or suspend. On wake the screen comes back, the machine is otherwise
+alive, and the keyboard and trackpad are dead. They never recover — applespi retries
+about once a second, forever, until a hard reboot.
+
+### The mechanism
+
+The SPI controller resumes perfectly. Checked on a live resume:
+
+- `pxa2xx_spi_pci 00:15.4` comes back at `power_state: D0`, `runtime_status: active`
+- the controller does **not** re-probe across suspend, so it stays on PIO
+- `dw_dmac_pci` is still absent — the blacklist held
+
+What fails is the **device re-init**, not the bus. On resume applespi cannot complete
+a single transfer:
+
+```
+ACPI: PM: Waking up from system sleep state S3
+applespi spi-APP000D:00: SPI transfer timed out
+applespi spi-APP000D:00: Error writing to device: -110      (ETIMEDOUT)
+spi_master spi1: failed to transfer one message from queue
+```
+
+**`modeswitch done.` is never reached after a wake.** That is the same tell as a bad
+boot — and the reason the two failures are so easy to confuse.
+
+`/sys/power/mem_sleep` is `s2idle [deep]`, so this is S3. Deep sleep is what breaks it.
+
+### The evidence
+
+Every boot in the journal, with and without a suspend:
+
+| boot | slept | SPI timeouts | `modeswitch` after wake | result |
+|---|---|---|---|---|
+| -6, -5, -4, -3 | no | 0 | — | works |
+| **-2** | **yes** | **106** | **no** | **dead on resume** |
+| **-1** | **yes** | **77** | **no** | **dead on resume** |
+| 0 | no | 0 | — | works |
+
+**Correlation with suspend is 100%.** Both slept boots probed cleanly first — PIO,
+touchpad present, zero timeouts — and only started failing after the wake. Boot -1
+logged its first timeout in the same second as `Waking up from system sleep state S3`
+and its last one 16 seconds later, when the machine was power-cycled.
+
+Reproduce with:
+
+```bash
+bin/input-check --history
+```
+
+### The fix
+
+Unbind and rebind the device on resume, which re-runs the same probe path that works
+at boot. `applespi` is a module and the SPI device exposes bind/unbind, so nothing
+needs a patched kernel.
+
+[`bin/applespi-rebind`](../bin/applespi-rebind) → `/usr/local/sbin/mintbook-applespi-rebind`,
+driven by [`mintbook-applespi-resume.service`](../config/systemd/mintbook-applespi-resume.service):
+
+```
+After=suspend.target ...
+WantedBy=suspend.target ...
+```
+
+`After=` **plus** `WantedBy=` on the sleep targets is what makes a unit run on the way
+*out* of suspend rather than into it. The script waits 2 s for the controller to
+settle, then tries up to three times, checking for the touchpad after each — the
+touchpad is the tell, since on a failed probe the keyboard device still registers.
+
+Both writes are wrapped in `timeout 10`. A wedged device makes them block on SPI
+timeouts, and a hook that hangs would stall the whole resume transition.
+
+```bash
+sudo bin/input-install
+```
+
+It runs on the next wake. Rebinding is unconditional: one code path, exercised every
+time, rather than a detector that is itself only tested during a failure.
+
+To undo:
+
+```bash
+sudo systemctl disable mintbook-applespi-resume.service
+sudo rm /etc/systemd/system/mintbook-applespi-resume.service /usr/local/sbin/mintbook-applespi-rebind
+```
+
+### Verifying it — this has NOT been done yet
+
+The hook is written and wired in, but **no suspend has been run since**. Until one is,
+treat it as untested. After the next wake:
+
+```bash
+bin/input-check                    # want: timeouts 0, touchpad present
+journalctl -t applespi-rebind      # want: "rebind ok on attempt 1"
+```
+
+The script can also be exercised without sleeping, though this drops input for a
+second or two while it re-probes:
+
+```bash
+sudo /usr/local/sbin/mintbook-applespi-rebind
+```
+
+### If the rebind does not work
+
+The fallback is to avoid S3 entirely, since `deep` is what breaks:
+
+```bash
+echo s2idle | sudo tee /sys/power/mem_sleep
+```
+
+Not installed, and not free — s2idle on this fanless Broadwell draws noticeably more
+in the bag than S3. Only reach for it if the rebind is proven not to recover the
+device.
+
+### Ruled out
+
+- **The DMA race.** The controller stays on PIO across suspend and `dw_dmac_pci`
+  never loads. Verified on the live resume above.
+- **A dead controller.** It resumes to D0 and accepts messages; they time out at the
+  device, not the bus.
+
+---
+
+## 3. Palm rejection / disable-while-typing
 
 The pad works. Resting a palm on it while typing still moved the cursor and tapped
 clicks. That is a libinput problem, not another SPI race.
