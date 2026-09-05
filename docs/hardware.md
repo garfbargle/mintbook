@@ -744,6 +744,46 @@ EOF
 
 `bin/doctor` reports the state either way and never treats it as a fault.
 
+### Measured, after (2026-09-04)
+
+Applied via `GRUB_CMDLINE_LINUX_DEFAULT="intel_iommu=off mitigations=off"`, one
+reboot. `/sys/devices/system/cpu/vulnerabilities/` goes from 9 mitigated to 1.
+
+```
+                     before    after
+raw getpid syscall   ~720 ns   127 ns      5.7x
+```
+
+Both measurements pinned to cpu3, same binary, comparable load (0.5-1.0 min
+load 2.74 before, 2.98 after). This is the trustworthy number: it is the thing
+the change acts on, measured directly.
+
+Knock-on effects, **consistent with that but not controlled** — the "before"
+figures were taken under a heavier load and cannot be re-run without rebooting
+back:
+
+```
+python3 -c pass       50 ms -> 31 ms
+panel-cpu             65 ms -> 45 ms
+panel-power           29 ms -> 21 ms
+panel-bt              23 ms -> 19 ms
+```
+
+Interpreter startup is thousands of `stat`/`open`/`mmap` calls, so it should
+move the most, and it does. Disk throughput is unchanged at ~222 MB/s, which is
+the sanity check — it is not syscall-bound, so it should not have moved, and it
+did not.
+
+Everything else survived the reboot: camera, audio, Bluetooth, trackpad, i965,
+and the boot-time CPU cap. `bin/doctor` reads 51 ok, 1 warn, 0 FAIL, the warning
+being this choice.
+
+**Undo** is one word and a reboot:
+
+```bash
+sudo sed -i 's/ mitigations=off//' /etc/default/grub
+```
+
 ## Housekeeping
 
 - **Journal was uncapped.** Stock `journald.conf` is empty, so the default is 10% of
