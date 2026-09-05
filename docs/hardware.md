@@ -681,10 +681,40 @@ smaller than that floor. Drift lands in both arms instead of only the second.
 > it by rising too. On a machine with a live desktop and browsers, a single
 > pair of samples is not a measurement. Interleave, and print the noise.
 
-> RAPL measures the SoC package. A device on its own rail can save real power
-> without moving that number, so for Wi-Fi and the SSD, measure on **battery**
-> with `current_now × voltage_now` from `/sys/class/power_supply/BAT0` instead.
-> On AC, `current_now` is charge current and tells you nothing about draw.
+`idle-probe` uses **BAT0 while discharging** in preference to RAPL, because
+RAPL only sees the SoC package and every device worth testing here is on its own
+rail. `current_now` is world-readable, so on battery the measurement needs no
+root — only flipping the device does. On AC, `current_now` is *charge* current
+and says nothing about draw, so the tool falls back to RAPL there.
+
+### The battery sensor is noisier than the thing being measured
+
+Twelve one-second samples of an idle-ish 12 W draw:
+
+```
+  mean 12.05 W   min 10.69   max 13.37   spread 2.67 W
+```
+
+A **2.67 W** spread, to look for a device that might be worth 0.3 W. A
+before/after pair here is worthless — it would report whatever the sensor
+happened to be doing.
+
+What makes it tractable is that the uncertainty of a *mean* shrinks as
+`1/sqrt(n)`. So `--try` collects one reading per second across many alternating
+arms and reports **mean ± standard error**, the difference, and the size of
+effect the run could actually resolve:
+
+```
+  on   mean  11.90 W  +/- 0.075  (n=120)
+  auto mean  11.72 W  +/- 0.071  (n=120)
+  difference  -0.18 W
+  this run could resolve about 0.21 W
+  VERDICT: NOT MEASURABLE. Any real effect is smaller than 0.21 W ...
+```
+
+The defaults on battery are 6 cycles x 20 s per arm — about four minutes, 120
+samples per arm, enough to resolve roughly 0.2 W. More `--cycles` narrows it,
+slowly, by the square root.
 
 > thermald logs `NO RAPL sysfs present` on this machine. It is wrong:
 > `/sys/class/powercap/intel-rapl:0/` is there with package, core, uncore and

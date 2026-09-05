@@ -54,6 +54,50 @@ def rapl_domains():
     return out
 
 
+def battery_source():
+    """Whole-system draw, but only while discharging.
+
+    On AC, current_now is the *charge* current and says nothing about draw.
+    This is world-readable, so unlike RAPL it needs no root — and unlike RAPL
+    it sees devices on their own rails, which is the entire reason to measure
+    runtime PM on battery.
+    """
+    b = '/sys/class/power_supply/BAT0'
+    if read1(b + '/status') != 'Discharging':
+        return None
+    try:
+        c = int(read1(b + '/current_now', '0'))
+        v = int(read1(b + '/voltage_now', '0'))
+    except ValueError:
+        return None
+    return (c / 1e6) * (v / 1e6) if c and v else None
+
+
+def mean_sem(xs):
+    """Mean and standard error. The spread of one arm is not the uncertainty
+    of its mean — averaging n samples shrinks that by sqrt(n), which is the
+    only reason a sub-watt effect is detectable against a 2.7 W sensor."""
+    n = len(xs)
+    if n == 0:
+        return 0.0, float('inf')
+    m = sum(xs) / n
+    if n < 2:
+        return m, float('inf')
+    var = sum((x - m) ** 2 for x in xs) / (n - 1)
+    return m, (var ** 0.5) / (n ** 0.5)
+
+
+def sample_battery(seconds):
+    """One reading per second; returns the individual readings, not a mean."""
+    out = []
+    for _ in range(max(1, int(seconds))):
+        w = battery_source()
+        if w is not None:
+            out.append(w)
+        time.sleep(1)
+    return out
+
+
 def sample_watts(domains, seconds):
     """Energy counters are microjoules and wrap; a delta over a window is watts."""
     if not domains:
@@ -132,10 +176,17 @@ def try_device(bdf, force, seconds, cycles):
               f'A runtime-PM experiment here can cost you the session. '
               f'Re-run with --force if you mean it.', file=sys.stderr)
         return 1
+
+    # Prefer the battery. RAPL only sees the SoC package, and every device
+    # worth testing here (Wi-Fi, the SSD, the camera) is on its own rail.
+    on_battery = battery_source() is not None
     doms = rapl_domains()
-    if not doms:
-        print('RAPL not readable — run as root', file=sys.stderr)
+    if not on_battery and not doms:
+        print('No power source to measure: not discharging, and RAPL needs '
+              'root.\nUnplug, or run as root.', file=sys.stderr)
         return 1
+    src = 'BAT0 (whole system)' if on_battery else 'RAPL package-0 (SoC only)'
+
     orig = read1(ctl)
     restored = False
 
@@ -149,55 +200,65 @@ def try_device(bdf, force, seconds, cycles):
 
     signal.signal(signal.SIGINT, lambda *a: (restore(), sys.exit(130)))
 
-    # Alternate. A single before/after pair cannot tell a device apart from
-    # whatever the desktop happened to be doing in those five seconds, and on
-    # this machine it did not: the first version of this tool reported the MEI
-    # mailbox "saving" 1.38 W, with 0.86 W of that coming out of *core* power.
-    # A mailbox cannot do that. Interleaving many short samples puts the drift
-    # into both arms instead of only the second one.
+    def take(n):
+        if on_battery:
+            return sample_battery(n)
+        w = sample_watts(doms, n)
+        return [w.get('package-0', 0.0)]
+
     runs = {orig: [], 'auto': []}
+    est = cycles * seconds * 2
+    print(f'{bdf}  {RISKY.get(bdf, "")}')
+    print(f'  source   {src}')
+    print(f'  plan     {cycles} cycles x {seconds}s per arm, alternating '
+          f'{orig}/auto  (~{est // 60}m{est % 60:02d}s)')
+    if on_battery:
+        print('  note     the battery sensor is noisy — a single 12 W reading '
+              'wanders +/-1.3 W.\n           Only the mean of many samples '
+              'can see a sub-watt device.')
+    print()
     try:
-        print(f'{bdf}  {RISKY.get(bdf, "")}')
-        print(f'  {cycles} cycles x {seconds}s per arm, alternating '
-              f'{orig}/auto ...')
         for i in range(cycles):
             for state in (orig, 'auto'):
                 with open(ctl, 'w') as f:
                     f.write(state)
-                w = sample_watts(doms, seconds)
-                runs[state].append(w.get('package-0', 0.0))
-            print(f'    cycle {i + 1}: {orig}={runs[orig][-1]:.2f} W  '
-                  f'auto={runs["auto"][-1]:.2f} W')
+                runs[state].extend(take(seconds))
+            ma, _ = mean_sem(runs[orig])
+            mb, _ = mean_sem(runs['auto'])
+            print(f'    cycle {i + 1}/{cycles}: running mean  '
+                  f'{orig}={ma:.2f} W  auto={mb:.2f} W')
         st = read1(os.path.join(PCI, bdf, 'power', 'runtime_status'))
     finally:
         restore()
 
     a, b = runs[orig], runs['auto']
-    if not a or not b:
-        return 1
-    ma, mb = sum(a) / len(a), sum(b) / len(b)
-    spread = max(max(a) - min(a), max(b) - min(b))
+    ma, sea = mean_sem(a)
+    mb, seb = mean_sem(b)
     diff = mb - ma
-    print(f'\n  package-0, {orig:<4} mean {ma:5.2f} W   '
-          f'(min {min(a):.2f}, max {max(a):.2f})')
-    print(f'  package-0, auto  mean {mb:5.2f} W   '
-          f'(min {min(b):.2f}, max {max(b):.2f})')
-    print(f'  difference        {diff:+5.2f} W')
-    print(f'  noise floor       {spread:5.2f} W  '
-          f'(widest within-arm spread)')
-    print(f'  runtime_status was: {st}')
-    if abs(diff) <= spread:
-        print('\n  VERDICT: not measurable. The difference is inside the '
-              'noise of a single\n  arm, so this is background activity, not '
-              'the device. Do not keep it on\n  the strength of this run.')
+    sed = (sea ** 2 + seb ** 2) ** 0.5     # standard error of the difference
+    resolve = 2 * sed                      # ~95%: what this run could detect
+
+    print(f'\n  {orig:<4} mean {ma:6.2f} W  +/- {sea:.3f}  (n={len(a)})')
+    print(f'  auto  mean {mb:6.2f} W  +/- {seb:.3f}  (n={len(b)})')
+    print(f'  difference {diff:+6.2f} W')
+    print(f'  this run could resolve about {resolve:.2f} W')
+    print(f'  runtime_status while on auto: {st}')
+
+    if abs(diff) > resolve:
+        verdict = ('MEASURABLE. The difference is larger than this run can '
+                   'explain by noise.\n  Repeat with more --cycles before '
+                   'making it permanent.')
     else:
-        print('\n  VERDICT: the difference is larger than the within-arm '
-              'spread. Worth\n  repeating with more --cycles before believing '
-              'it.')
-    print('\n  RAPL covers the SoC package only. A device on its own rail '
-          '(Wi-Fi, the\n  SSD) can save power without moving these numbers '
-          '— on battery, compare\n  current_now * voltage_now from '
-          '/sys/class/power_supply/BAT0 instead.')
+        verdict = (f'NOT MEASURABLE. Any real effect is smaller than '
+                   f'{resolve:.2f} W, which is all\n  this run could see. '
+                   f'Do not keep it on the strength of this. More --cycles\n'
+                   f'  narrows the window — it shrinks with the square root '
+                   f'of the samples.')
+    print(f'\n  VERDICT: {verdict}')
+    if not on_battery:
+        print('\n  RAPL covers the SoC package only. A device on its own rail '
+              'can save real\n  power without moving it — measure on battery '
+              'for those.')
     return 0
 
 
@@ -215,7 +276,10 @@ def main():
                     pass
         return default
 
-    seconds = opt('--seconds', 4)
+    # Battery sampling is one reading per second and noisy, so the
+    # defaults are deliberately long enough to mean something.
+    on_bat = battery_source() is not None
+    seconds = opt('--seconds', 20 if on_bat else 4)
     cycles = opt('--cycles', 6)
     if '--try' in args:
         i = args.index('--try')
@@ -224,6 +288,16 @@ def main():
             return 2
         return try_device(args[i + 1], force, seconds, cycles)
 
+    bw = battery_source()
+    if bw is not None:
+        print('whole-system power (battery, no root needed)')
+        xs = sample_battery(8)
+        m, se = mean_sem(xs)
+        print(f'  BAT0         {m:6.2f} W  +/- {se:.2f} '
+              f'(min {min(xs):.2f}, max {max(xs):.2f}, n={len(xs)})')
+        print('  This is the number that sees Wi-Fi and the SSD. RAPL below '
+              'does not.')
+        print()
     print('package power')
     show_power(seconds)
     print()
