@@ -35,15 +35,28 @@ check "apply script" "/usr/local/sbin/mintbook-power-apply" have /usr/local/sbin
 check "udev rule" "99-mintbook-power.rules" have /etc/udev/rules.d/99-mintbook-power.rules
 check "boot unit enabled" "mintbook-power.service" systemctl is-enabled mintbook-power.service
 check "request path unit" "mintbook-power-request.path" systemctl is-active mintbook-power-request.path
+check "settle timer" "mintbook-power-settle.timer" systemctl is-enabled mintbook-power-settle.timer
 check "tmpfiles" "/etc/tmpfiles.d/mintbook-power.conf" have /etc/tmpfiles.d/mintbook-power.conf
 AC=$(cat /sys/class/power_supply/ADP1/online 2>/dev/null || echo 1)
 PCT=$(cat /sys/devices/system/cpu/intel_pstate/max_perf_pct 2>/dev/null || echo '?')
 PROF=$(powerprofilesctl get 2>/dev/null || echo '?')
 if [ "$AC" = 1 ]; then WANT_PCT=100 WANT_PROF=balanced; else WANT_PCT=70 WANT_PROF=power-saver; fi
+# A profile picked by hand moves BOTH the profile and the cap, because
+# power-menu writes both. So a profile that still matches auto while the cap
+# does not is not a manual override — it is something else having written
+# max_perf_pct after we did. That is a real fault, not a preference.
+case "$PROF" in
+  power-saver) HAVE_PCT=70 ;;
+  balanced) HAVE_PCT=100 ;;
+  performance) HAVE_PCT=75 ;;
+  *) HAVE_PCT='' ;;
+esac
 if [ "$PCT" = "$WANT_PCT" ] && [ "$PROF" = "$WANT_PROF" ]; then
   ok "live policy" "ac=$AC $PROF max_perf_pct=$PCT"
+elif [ -n "$HAVE_PCT" ] && [ "$PCT" != "$HAVE_PCT" ]; then
+  bad "live policy" "ac=$AC $PROF wants max_perf_pct=$HAVE_PCT but has $PCT — the cap was reset; pkexec bin/power-install"
 else
-  warn "live policy" "ac=$AC $PROF max_perf_pct=$PCT (auto wants $WANT_PROF/$WANT_PCT — manual override is fine)"
+  ok "live policy" "ac=$AC $PROF max_perf_pct=$PCT (manual override; auto would be $WANT_PROF/$WANT_PCT)"
 fi
 
 section "Thermals"
@@ -52,7 +65,34 @@ if [ -z "${PKG:-}" ]; then warn "package temp" "sensors gave nothing"
 elif [ "$PKG" -ge 93 ]; then bad  "package temp" "${PKG}C — at the 95C throttle point"
 elif [ "$PKG" -ge 85 ]; then warn "package temp" "${PKG}C — hot; fanless, throttles at 95C"
 else ok "package temp" "${PKG}C"; fi
-check "thermald" "95C backstop" systemctl is-active thermald
+# thermald was in here as a "95C backstop". It is not one. On this machine it
+# logs "NO RAPL sysfs", "No coretemp sysfs found" and "No Zones present", so it
+# manages nothing — while still writing max_perf_pct, which is how the battery
+# cap went missing at boot (see docs/hardware.md). The real backstop is the
+# CPU's own TCC throttle, in silicon, which is what the throttle counters below
+# are counting. Masked is the state we want.
+if systemctl is-enabled thermald.service 2>/dev/null | grep -q masked; then
+  ok "thermald" "masked — no zones on this machine, and it resets max_perf_pct"
+elif systemctl is-active thermald.service >/dev/null 2>&1; then
+  warn "thermald" "running — manages nothing here, resets max_perf_pct; pkexec bin/tune-install"
+else
+  ok "thermald" "not running"
+fi
+# Evidence that the cap is doing its job. The count is the sensitive signal:
+# throttle stalls here are short and very frequent, which is exactly the
+# behaviour the Sustained cap of 75 was measured to avoid.
+TT=/sys/devices/system/cpu/cpu0/thermal_throttle
+THR=$(cat "$TT/package_throttle_total_time_ms" 2>/dev/null || echo '')
+THC=$(cat "$TT/package_throttle_count" 2>/dev/null || echo 0)
+if [ -n "$THR" ]; then
+  UPS=$(cut -d. -f1 /proc/uptime)
+  DET="${THR}ms in ${UPS}s uptime, $THC events"
+  if [ "$UPS" -gt 0 ] && [ "$THR" -gt $(( UPS * 10 )) ]; then
+    warn "package throttling" "$DET — over 1% of uptime stalled"
+  else
+    ok "package throttling" "$DET"
+  fi
+fi
 
 section "Memory / zram"
 check "zram-generator conf" "/etc/systemd/zram-generator.conf" have /etc/systemd/zram-generator.conf

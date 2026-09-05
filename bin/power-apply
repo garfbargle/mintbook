@@ -9,8 +9,16 @@
 #   mintbook-power-apply performance  # "Sustained": EPB=0, max_perf_pct=75
 #
 #   mintbook-power-apply --from-request  # profile from /run/mintbook-power/want
+#   mintbook-power-apply --reassert      # re-apply the cap for the CURRENT profile
 #
 # PPD's profile alone does not cap frequency on this Broadwell-Y chip.
+#
+# --reassert exists because max_perf_pct does not stay where this script puts
+# it. thermald writes max_perf_pct too, and at boot it starts *after* this unit
+# (measured 2026-09-04: unit 18:42:23, thermald 18:43:01, PPD 18:43:08), which
+# left the machine on battery at power-saver but uncapped at 100. --reassert
+# reads whichever profile PPD reports and re-applies only the cap, so it repairs
+# that without overriding a profile the user chose by hand.
 set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -36,41 +44,69 @@ if [ -r "$ADP" ]; then
   online=$(cat "$ADP")
 fi
 
+# The cap that belongs to each PPD profile. One table, used by the case block
+# below and by --reassert, so the two can never drift apart.
+#
+# "performance" is "Sustained" in the UI, and it is 75, not 100 — measured
+# 2026-09-03: on this thermally-saturated fanless chassis 100 sprints into the
+# wall and eats throttle stalls, and 75 completes ~20-25% more work at the same
+# ~90 C and ~7.4 W. See docs/hardware.md.
+pct_for() {
+  case "$1" in
+    power-saver) echo 70 ;;
+    balanced) echo 100 ;;
+    performance) echo 75 ;;
+    *) echo '' ;;
+  esac
+}
+
+if [ "$MODE" = "--reassert" ]; then
+  profile=$(powerprofilesctl get 2>/dev/null || echo '')
+  pct=$(pct_for "$profile")
+  if [ -z "$pct" ]; then
+    echo "--reassert: PPD reported no usable profile ('$profile')" >&2
+    exit 1
+  fi
+  had=$(cat "$PSTATE/max_perf_pct" 2>/dev/null || echo '?')
+  if [ ! -w "$PSTATE/max_perf_pct" ]; then
+    echo "--reassert: $PSTATE/max_perf_pct not writable" >&2
+    exit 1
+  fi
+  echo "$pct" > "$PSTATE/max_perf_pct"
+  got=$(cat "$PSTATE/max_perf_pct")
+  logger -t mintbook-power \
+    "mode=reassert profile=$profile max_perf_pct=$had->$got"
+  printf 'mode=reassert profile=%s max_perf_pct=%s->%s\n' \
+    "$profile" "$had" "$got"
+  exit 0
+fi
+
 case "$MODE" in
   auto|'')
     if [ "$online" = 1 ]; then
       profile=balanced
-      pct=100
     else
       profile=power-saver
-      pct=70
     fi
     MODE=auto
     ;;
-  power-saver)
-    profile=power-saver
-    pct=70
-    ;;
-  balanced)
-    profile=balanced
-    pct=100
-    ;;
-  performance)
-    # "Sustained" in the UI. max_perf_pct=75, not 100 — measured 2026-09-03:
-    # on this thermally-saturated fanless chassis 100 sprints into the wall and
-    # eats throttle stalls, and 75 completes ~20-25% more work at the same
-    # ~90 C and ~7.4 W. See docs/hardware.md.
-    profile=performance
-    pct=75
+  power-saver|balanced|performance)
+    profile=$MODE
     ;;
   *)
-    echo "usage: $0 [auto|power-saver|balanced|performance|--from-request]" >&2
+    echo "usage: $0 [auto|power-saver|balanced|performance|--from-request|--reassert]" >&2
     exit 2
     ;;
 esac
 
+pct=$(pct_for "$profile")
+
 if [ -w "$PSTATE/max_perf_pct" ]; then
   echo "$pct" > "$PSTATE/max_perf_pct"
+else
+  # Not fatal — the profile is still worth setting — but never silent: an
+  # unwritable max_perf_pct is exactly how the cap goes missing unnoticed.
+  echo "warning: $PSTATE/max_perf_pct not writable, cap not applied" >&2
 fi
 
 if command -v powerprofilesctl >/dev/null 2>&1; then

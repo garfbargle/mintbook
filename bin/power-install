@@ -20,6 +20,10 @@ REQ_PATH_SRC="$ROOT/config/systemd/mintbook-power-request.path"
 REQ_PATH_DST=/etc/systemd/system/mintbook-power-request.path
 REQ_UNIT_SRC="$ROOT/config/systemd/mintbook-power-request.service"
 REQ_UNIT_DST=/etc/systemd/system/mintbook-power-request.service
+SETTLE_UNIT_SRC="$ROOT/config/systemd/mintbook-power-settle.service"
+SETTLE_UNIT_DST=/etc/systemd/system/mintbook-power-settle.service
+SETTLE_TIMER_SRC="$ROOT/config/systemd/mintbook-power-settle.timer"
+SETTLE_TIMER_DST=/etc/systemd/system/mintbook-power-settle.timer
 TMPFILES_SRC="$ROOT/config/tmpfiles.d/mintbook-power.conf"
 TMPFILES_DST=/etc/tmpfiles.d/mintbook-power.conf
 POLKIT_SRC="$ROOT/config/polkit/org.mintbook.power.policy"
@@ -28,6 +32,7 @@ RULES_SRC="$ROOT/config/polkit/10-mintbook-power.rules"
 RULES_DST=/etc/polkit-1/rules.d/10-mintbook-power.rules
 
 for f in "$APPLY_SRC" "$UDEV_SRC" "$UNIT_SRC" "$REQ_PATH_SRC" "$REQ_UNIT_SRC" \
+         "$SETTLE_UNIT_SRC" "$SETTLE_TIMER_SRC" \
          "$TMPFILES_SRC" "$POLKIT_SRC" "$RULES_SRC"; do
   if [ ! -f "$f" ]; then
     echo "missing $f" >&2
@@ -53,10 +58,19 @@ echo "==> $REQ_PATH_DST"
 install -m644 "$REQ_PATH_SRC" "$REQ_PATH_DST"
 echo "==> $REQ_UNIT_DST"
 install -m644 "$REQ_UNIT_SRC" "$REQ_UNIT_DST"
+echo "==> $SETTLE_UNIT_DST"
+install -m644 "$SETTLE_UNIT_SRC" "$SETTLE_UNIT_DST"
+echo "==> $SETTLE_TIMER_DST"
+install -m644 "$SETTLE_TIMER_SRC" "$SETTLE_TIMER_DST"
 systemctl daemon-reload
 systemctl enable mintbook-power.service
 systemctl enable --now mintbook-power-request.path
+systemctl enable mintbook-power-settle.timer
 systemctl start mintbook-power.service
+
+# The cap is wrong right now on any machine that has been up a while with the
+# old unit set — repair it here rather than waiting for the next boot.
+/usr/local/sbin/mintbook-power-apply --reassert || true
 
 echo "==> $POLKIT_DST"
 install -m644 "$POLKIT_SRC" "$POLKIT_DST"
@@ -66,8 +80,10 @@ install -m644 "$RULES_SRC" "$RULES_DST"
 
 echo
 echo "applied. check with: $ROOT/bin/power-check"
-echo "undo: systemctl disable --now mintbook-power.service mintbook-power-request.path"
+echo "undo: systemctl disable --now mintbook-power.service mintbook-power-request.path \\"
+echo "        mintbook-power-settle.timer"
 echo "      rm -f $APPLY_DST $UDEV_DST $UNIT_DST $REQ_PATH_DST $REQ_UNIT_DST \\"
+echo "            $SETTLE_UNIT_DST $SETTLE_TIMER_DST \\"
 echo "            $TMPFILES_DST $POLKIT_DST $RULES_DST"
 echo "      echo 100 > /sys/devices/system/cpu/intel_pstate/max_perf_pct"
 echo "      powerprofilesctl set balanced"

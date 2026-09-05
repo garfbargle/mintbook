@@ -54,3 +54,22 @@ if systemctl is-enabled "$unit" >/dev/null 2>&1; then
 else
   echo "unit:              not enabled"
 fi
+
+# The boot unit runs before thermald and PPD do, and both of those write
+# max_perf_pct. The settle timer re-applies the cap once they have started.
+if systemctl is-enabled mintbook-power-settle.timer >/dev/null 2>&1; then
+  echo "settle timer:      enabled"
+else
+  echo "settle timer:      not enabled — the boot cap can be silently reset"
+  echo "                   install: pkexec $(cd "$(dirname "$0")/.." && pwd)/bin/power-install"
+fi
+
+# thermald writes max_perf_pct but finds no zones or sensors on this machine
+# (see docs/hardware.md), so unmasked it can only fight this policy.
+if systemctl is-enabled thermald.service 2>/dev/null | grep -q masked; then
+  echo "thermald:          masked (it manages nothing here)"
+elif systemctl is-active thermald.service >/dev/null 2>&1; then
+  echo "thermald:          RUNNING — it also writes max_perf_pct; pkexec bin/tune-install masks it"
+else
+  echo "thermald:          not running"
+fi

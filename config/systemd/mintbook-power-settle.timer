@@ -1,0 +1,15 @@
+# Fires mintbook-power-settle.service once, 90s after boot. Installed to
+# /etc/systemd/system/mintbook-power-settle.timer. See docs/hardware.md.
+#
+# 90s because the clobber was measured 45s after mintbook-power.service ran.
+# Undo: systemctl disable --now mintbook-power-settle.timer, delete both files.
+[Unit]
+Description=Re-apply mintbook CPU cap 90s after boot
+
+[Timer]
+OnBootSec=90
+AccuracySec=5s
+Unit=mintbook-power-settle.service
+
+[Install]
+WantedBy=timers.target

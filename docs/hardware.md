@@ -194,6 +194,9 @@ That copies:
 - [`config/systemd/mintbook-power-request.path`](../config/systemd/mintbook-power-request.path)
   + [`.service`](../config/systemd/mintbook-power-request.service) — panel writes
   `/run/mintbook-power/want`, root applies it. **No password on click.**
+- [`config/systemd/mintbook-power-settle.timer`](../config/systemd/mintbook-power-settle.timer)
+  + [`.service`](../config/systemd/mintbook-power-settle.service) — re-applies the
+  cap 90 s after boot, once thermald and PPD have started. See below.
 - [`config/tmpfiles.d/mintbook-power.conf`](../config/tmpfiles.d/mintbook-power.conf)
   → `/etc/tmpfiles.d/` (`/run/mintbook-power` owned `root:cobo`, mode 0770)
 - [`config/polkit/org.mintbook.power.policy`](../config/polkit/org.mintbook.power.policy)
@@ -218,18 +221,70 @@ bin/power-check
 Undo:
 
 ```bash
-sudo systemctl disable --now mintbook-power.service mintbook-power-request.path
+sudo systemctl disable --now mintbook-power.service mintbook-power-request.path \
+       mintbook-power-settle.timer
 sudo rm -f /usr/local/sbin/mintbook-power-apply \
            /etc/udev/rules.d/99-mintbook-power.rules \
            /etc/systemd/system/mintbook-power.service \
            /etc/systemd/system/mintbook-power-request.path \
            /etc/systemd/system/mintbook-power-request.service \
+           /etc/systemd/system/mintbook-power-settle.timer \
+           /etc/systemd/system/mintbook-power-settle.service \
            /etc/tmpfiles.d/mintbook-power.conf \
            /usr/share/polkit-1/actions/org.mintbook.power.policy \
            /etc/polkit-1/rules.d/10-mintbook-power.rules
 echo 100 | sudo tee /sys/devices/system/cpu/intel_pstate/max_perf_pct
 powerprofilesctl set balanced
 ```
+
+### The cap did not stay put (2026-09-04)
+
+`bin/power-check` reported `MISMATCH`: on battery, PPD `power-saver` — correct —
+but `max_perf_pct=100` instead of 70. The machine had been running uncapped on
+battery, at 86–90 °C, for the whole session.
+
+The unit had done its job. The journal for that boot:
+
+```
+18:42:23  mintbook-power   mode=auto ac=0 profile=power-saver max_perf_pct=70
+18:43:01  thermald         started
+18:43:08  power-profiles-daemon  started
+```
+
+It set 70 and something reset it 40-odd seconds later. `mintbook-power.service`
+carries `After=power-profiles-daemon.service`, which does nothing here: PPD is
+D-Bus-activated, so it starts when something first asks for it — 45 s *after*
+the unit that was supposed to be ordered behind it.
+
+thermald is the one that writes it (`strings /usr/sbin/thermald` has
+`/max_perf_pct`), and on this machine it is doing so with no idea what the
+temperature is:
+
+```
+NO RAPL sysfs present
+Thermal DTS: No coretemp sysfs found
+Thermal DTS or hwmon: No Zones present Need to configure manually
+Config file /etc/thermald/thermal-conf.xml does not exist
+```
+
+No zones, no sensors, no DPTF tables, in `--adaptive` mode. It manages nothing
+and can only fight the policy, so `bin/tune-install` now masks it. The thermal
+backstop was never thermald — it is the CPU's own TCC throttle, in silicon,
+which is what `package_throttle_count` counts (4116 events, 18.6 s, in the first
+two hours of that boot).
+
+Two fixes, because masking thermald alone would leave the same hole open for the
+next daemon that decides it owns `max_perf_pct`:
+
+- `mintbook-power-apply --reassert` re-applies the cap belonging to whatever
+  profile PPD **currently** reports. It does not touch the profile, so a
+  Sustained picked by hand survives it.
+- `mintbook-power-settle.timer` runs that once at `OnBootSec=90`.
+
+`bin/doctor` now tells the two cases apart. A profile picked by hand moves the
+profile *and* the cap, because `power-menu` writes both — so a profile that
+still matches auto while the cap does not is not a preference, it is this fault,
+and doctor fails on it rather than shrugging it off as an override.
 
 ### Ruled out
 

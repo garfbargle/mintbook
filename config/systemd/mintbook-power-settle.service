@@ -1,0 +1,20 @@
+# Re-apply the intel_pstate cap ~90s after boot, once the daemons that also
+# write it have settled. Installed to
+# /etc/systemd/system/mintbook-power-settle.service. See docs/hardware.md.
+#
+# mintbook-power.service runs early, and at boot on 2026-09-04 it correctly set
+# max_perf_pct=70 at 18:42:23 — then thermald started at 18:43:01 and PPD at
+# 18:43:08, and the cap was 100 by the time the desktop came up. The
+# After=power-profiles-daemon.service on that unit does not help: PPD is
+# D-Bus-activated, so it starts when something asks for it, not before.
+#
+# --reassert only rewrites the cap for whatever profile PPD currently reports,
+# so a profile picked by hand in the first 90 seconds survives this.
+# Undo: systemctl disable --now mintbook-power-settle.timer and delete both files.
+[Unit]
+Description=Re-apply mintbook CPU cap after the power daemons settle
+After=power-profiles-daemon.service thermald.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/mintbook-power-apply --reassert
