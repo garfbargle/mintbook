@@ -303,7 +303,15 @@ show_dock_shadow=false           # see Gotchas
 
 `Cmd+Space` runs [`bin/spotlight`](../bin/spotlight), which toggles
 `rofi -show drun` with [`config/rofi/spotlight.rasi`](../config/rofi/spotlight.rasi):
-centred, 46% wide, 14% from the top, translucent dark, rounded 16px, fuzzy matching.
+centred, 52% wide, 14% from the top, translucent dark, rounded 24px, fuzzy matching.
+
+Sizes in the theme are **real device pixels** — rofi 1.7.5 lays `px` out
+literally and does not scale it by `Xft.dpi`, so on this 168dpi panel a
+96dpi-sized theme comes out at ~0.6x. The theme is written ~1.7x up to land at
+macOS Spotlight's apparent size: 52px app icons, 80px rows, `Inter 30` in the
+search field, `Inter 18` in the list. Fonts follow the same rule (rofi renders
+them at 96dpi here), so a point size in this file is not the point size you
+would use in a GTK app.
 
 ### Keyboard
 
