@@ -143,19 +143,23 @@ All read-only unless stated. `--check` / no-argument forms need no root.
 
 ---
 
+## Closed by measurement
+
+- **PCI runtime PM.** Measured on battery: letting the MEI controller suspend
+  saved **under 0.07 W** — below what a four-minute, 240-sample run could
+  resolve, on a 6 W machine. The device really did enter D3. The remaining
+  `control=on` devices are on-chip controllers of the same order, and five of
+  them are Wi-Fi, the camera, the NVMe, the Bluetooth UART and applespi, which
+  is most of this repo's scar tissue. Not worth the risk for an effect too small
+  to find.
+
+  The run doubled as the best demonstration of why the arms are interleaved:
+  the machine drifted 0.54 W over four minutes while the effect under test was
+  0.04 W — **14x the signal** — and a naive before/after would have reported
+  ~0.20 W of savings that was purely drift. See
+  [hardware.md](hardware.md#result-mei-runtime-pm-measured-2026-09-04).
+
 ## Still open
 
-- **PCI runtime PM.** Eleven devices never enter D3. `idle-probe` now measures
-  whole-system draw from `BAT0` whenever the machine is discharging, which is
-  the only view that sees Wi-Fi and the SSD. It needs no root to measure, only
-  to flip a device. `--try` refuses Wi-Fi, the camera, the NVMe, the Bluetooth
-  UART and applespi without `--force`, because those five are most of this
-  repo's scar tissue.
-
-  The honest expectation is that most of these come back *not measurable*: the
-  battery sensor's spread is 2.67 W and a single device is worth well under one.
-  A four-minute default run resolves about 0.2 W. That is a real answer — "too
-  small to find" is worth knowing before wiring something permanent into a
-  machine whose Wi-Fi and camera were this hard to get working.
 - **`i915.enable_fbc`.** Whether FBC is actually on is a root-only debugfs read.
   Change it only if it is off *and* a measurement says it is worth something.

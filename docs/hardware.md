@@ -716,6 +716,41 @@ The defaults on battery are 6 cycles x 20 s per arm — about four minutes, 120
 samples per arm, enough to resolve roughly 0.2 W. More `--cycles` narrows it,
 slowly, by the square root.
 
+### Result: MEI runtime PM, measured (2026-09-04)
+
+```
+  on   mean   6.13 W  +/- 0.030  (n=120)
+  auto mean   6.09 W  +/- 0.021  (n=120)
+  difference  -0.04 W
+  this run could resolve about 0.07 W
+  runtime_status while on auto: suspended
+  VERDICT: NOT MEASURABLE.
+```
+
+**Under 0.07 W. Not worth having.** The device genuinely did suspend — the
+`runtime_status` line is there to prove the test actually happened rather than
+silently doing nothing — and it still saved nothing findable.
+
+The run is also the clearest evidence yet for why the arms are interleaved. The
+running means fell monotonically in *both* arms, because the machine was still
+settling down from earlier benchmarking:
+
+```
+    cycle 1   on 6.47   auto 6.22   gap -0.25
+    cycle 3   on 6.33   auto 6.21   gap -0.12
+    cycle 6   on 6.13   auto 6.09   gap -0.04
+```
+
+Drift across the run was about **0.54 W**. The effect under test was **0.04 W** —
+so the drift was **14x the signal**. A naive "measure A for 20 s, then B for
+20 s" would have reported roughly 0.20 W of savings, five times the truth and
+all of it the machine calming down. Watch the gap converge from -0.25 to -0.04
+as the drift averages equally out of both arms: that is the method working,
+live.
+
+The remaining `control=on` devices are small on-chip controllers of the same
+order. This avenue is closed unless something suggests otherwise.
+
 > thermald logs `NO RAPL sysfs present` on this machine. It is wrong:
 > `/sys/class/powercap/intel-rapl:0/` is there with package, core, uncore and
 > dram domains. thermald is looking for the MSR interface, not powercap. One
