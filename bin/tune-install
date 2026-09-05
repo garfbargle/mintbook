@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # tune-install — system tuning for MacBook8,1: zram sysctls, the Broadwell VA-API
-# driver, a capped journal, and the live-ISO leftover unit. Must be run as root.
+# driver, a capped journal, thermald, and the live-ISO leftover unit. Must be
+# run as root.
 # See docs/hardware.md. Nothing here touches audio, camera, Bluetooth or input.
 set -euo pipefail
 
@@ -39,6 +40,22 @@ install -m644 "$JOURNAL_SRC" "$JOURNAL_DST"
 systemctl restart systemd-journald
 journalctl --vacuum-size=100M >/dev/null 2>&1 || true
 
+# thermald manages nothing on this machine and actively breaks the power policy.
+# It logs "NO RAPL sysfs", "Thermal DTS: No coretemp sysfs found" and "No Zones
+# present Need to configure manually", then runs in --adaptive mode with no DPTF
+# tables — but it still writes max_perf_pct, and because it starts after
+# mintbook-power.service it was resetting the battery cap from 70 to 100 on
+# every boot. See docs/hardware.md.
+#
+# This does not remove a thermal backstop. The backstop is the CPU's own TCC
+# throttle, in silicon, which is what package_throttle_count counts. thermald
+# cannot act as one when it has no sensor to read.
+if ! systemctl is-enabled thermald.service 2>/dev/null | grep -q masked; then
+  echo "==> masking thermald.service (no zones on this machine; resets max_perf_pct)"
+  systemctl disable --now thermald.service >/dev/null 2>&1 || true
+  systemctl mask thermald.service
+fi
+
 # casper-md5check verifies a live ISO's checksums. It is enabled on every Mint
 # install and fails on every boot from disk, because there is no ISO to check.
 if systemctl is-enabled casper-md5check.service >/dev/null 2>&1; then
@@ -55,3 +72,4 @@ echo "  rm -f $SYSCTL_DST $LIBVA_DST $JOURNAL_DST"
 echo "  sysctl -w vm.swappiness=60 vm.page-cluster=3 vm.vfs_cache_pressure=100"
 echo "  systemctl restart systemd-journald"
 echo "  systemctl unmask casper-md5check.service"
+echo "  systemctl unmask --now thermald.service"

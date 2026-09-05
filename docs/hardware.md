@@ -471,6 +471,13 @@ have to go on the `Exec=` line of the desktop entry.
   live ISO's checksums; there is no ISO when booting from disk. Masked.
   `systemctl --failed` is now empty, which is the point — it is only a useful signal
   if it is normally clean.
+- **`thermald` was running blind and undoing the power policy.** Masked by
+  `bin/tune-install`. It found no RAPL, no coretemp and no thermal zones on this
+  machine, so it manages nothing — but it still writes `max_perf_pct`, and it
+  starts after `mintbook-power.service`, which is how the battery cap went
+  missing on every boot. Full trace in
+  [The cap did not stay put](#the-cap-did-not-stay-put-2026-09-04). The thermal
+  backstop is unaffected: that is the CPU's TCC throttle, in silicon.
 - **`evolution-data-server` started four processes at every login** (alarm-notify,
   source-registry, calendar-factory, addressbook-factory) with no Evolution installed.
   Disabled with a `Hidden=true` override in `~/.config/autostart/`, the same pattern
