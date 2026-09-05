@@ -4,6 +4,7 @@
     bin/idle-probe                 # inventory (no root; watts need root)
     sudo bin/idle-probe            # + RAPL watts and the real FBC/PSR state
     sudo bin/idle-probe --try BDF  # A/B one device's runtime PM, then restore
+    sudo bin/idle-probe --try BDF --cycles 8 --seconds 4
 
 RAPL, the i915 parameters and debugfs are all root-only on this kernel, so the
 interesting half needs sudo. Nothing here is persistent: --try restores the
@@ -121,7 +122,7 @@ def show_runtime_pm():
     print('    sudo bin/idle-probe --try 0000:00:16.0')
 
 
-def try_device(bdf, force, seconds):
+def try_device(bdf, force, seconds, cycles):
     ctl = os.path.join(PCI, bdf, 'power', 'control')
     if not os.path.exists(ctl):
         print(f'no such device: {bdf}', file=sys.stderr)
@@ -147,42 +148,81 @@ def try_device(bdf, force, seconds):
             print(f'\nrestored {bdf} power/control={orig}')
 
     signal.signal(signal.SIGINT, lambda *a: (restore(), sys.exit(130)))
+
+    # Alternate. A single before/after pair cannot tell a device apart from
+    # whatever the desktop happened to be doing in those five seconds, and on
+    # this machine it did not: the first version of this tool reported the MEI
+    # mailbox "saving" 1.38 W, with 0.86 W of that coming out of *core* power.
+    # A mailbox cannot do that. Interleaving many short samples puts the drift
+    # into both arms instead of only the second one.
+    runs = {orig: [], 'auto': []}
     try:
         print(f'{bdf}  {RISKY.get(bdf, "")}')
-        print(f'  baseline (control={orig}), {seconds}s ...')
-        base = sample_watts(doms, seconds)
-        for n in ('package-0', 'core', 'uncore', 'dram'):
-            if n in base:
-                print(f'    {n:<12} {base[n]:6.2f} W')
-        with open(ctl, 'w') as f:
-            f.write('auto')
-        print(f'  control=auto, {seconds}s ...')
-        alt = sample_watts(doms, seconds)
-        for n in ('package-0', 'core', 'uncore', 'dram'):
-            if n in alt:
-                d = alt[n] - base.get(n, alt[n])
-                print(f'    {n:<12} {alt[n]:6.2f} W   ({d:+.2f} W)')
-        print(f'  runtime_status now: '
-              f'{read1(os.path.join(PCI, bdf, "power", "runtime_status"))}')
-        print('\n  RAPL covers the SoC package only. A device on its own rail '
-              '(Wi-Fi, the\n  SSD) can save power without moving these numbers '
-              '— on battery, compare\n  current_now * voltage_now from '
-              '/sys/class/power_supply/BAT0 instead.')
+        print(f'  {cycles} cycles x {seconds}s per arm, alternating '
+              f'{orig}/auto ...')
+        for i in range(cycles):
+            for state in (orig, 'auto'):
+                with open(ctl, 'w') as f:
+                    f.write(state)
+                w = sample_watts(doms, seconds)
+                runs[state].append(w.get('package-0', 0.0))
+            print(f'    cycle {i + 1}: {orig}={runs[orig][-1]:.2f} W  '
+                  f'auto={runs["auto"][-1]:.2f} W')
+        st = read1(os.path.join(PCI, bdf, 'power', 'runtime_status'))
     finally:
         restore()
+
+    a, b = runs[orig], runs['auto']
+    if not a or not b:
+        return 1
+    ma, mb = sum(a) / len(a), sum(b) / len(b)
+    spread = max(max(a) - min(a), max(b) - min(b))
+    diff = mb - ma
+    print(f'\n  package-0, {orig:<4} mean {ma:5.2f} W   '
+          f'(min {min(a):.2f}, max {max(a):.2f})')
+    print(f'  package-0, auto  mean {mb:5.2f} W   '
+          f'(min {min(b):.2f}, max {max(b):.2f})')
+    print(f'  difference        {diff:+5.2f} W')
+    print(f'  noise floor       {spread:5.2f} W  '
+          f'(widest within-arm spread)')
+    print(f'  runtime_status was: {st}')
+    if abs(diff) <= spread:
+        print('\n  VERDICT: not measurable. The difference is inside the '
+              'noise of a single\n  arm, so this is background activity, not '
+              'the device. Do not keep it on\n  the strength of this run.')
+    else:
+        print('\n  VERDICT: the difference is larger than the within-arm '
+              'spread. Worth\n  repeating with more --cycles before believing '
+              'it.')
+    print('\n  RAPL covers the SoC package only. A device on its own rail '
+          '(Wi-Fi, the\n  SSD) can save power without moving these numbers '
+          '— on battery, compare\n  current_now * voltage_now from '
+          '/sys/class/power_supply/BAT0 instead.')
     return 0
 
 
 def main():
     args = sys.argv[1:]
     force = '--force' in args
-    seconds = 5
+
+    def opt(name, default):
+        if name in args:
+            i = args.index(name)
+            if i + 1 < len(args):
+                try:
+                    return int(args[i + 1])
+                except ValueError:
+                    pass
+        return default
+
+    seconds = opt('--seconds', 4)
+    cycles = opt('--cycles', 6)
     if '--try' in args:
         i = args.index('--try')
         if i + 1 >= len(args):
             print('--try needs a PCI address, e.g. 0000:00:16.0', file=sys.stderr)
             return 2
-        return try_device(args[i + 1], force, seconds)
+        return try_device(args[i + 1], force, seconds, cycles)
 
     print('package power')
     show_power(seconds)

@@ -410,10 +410,30 @@ Baseline, cold cache via `POSIX_FADV_DONTNEED`:
 one to finish.
 
 `bin/io-probe` is read-only and needs no sudo. `--sweep` (root) walks
-`read_ahead_kb` through 64/128/256/512/1024 and restores the original value
-afterwards — the open question is whether 256 beats 128, since `max_sectors_kb`
-is 256 and a readahead larger than that splits into commands that *cannot*
-overlap on this device. Not yet measured.
+`read_ahead_kb` and restores the original value afterwards.
+
+### The readahead sweep, measured (2026-09-04)
+
+```
+  read_ahead_kb=64       seq   214.2 MB/s   rand4k   6147 IOPS (0.16 ms each)
+  read_ahead_kb=128      seq   218.3 MB/s   rand4k   5401 IOPS (0.19 ms each)
+  read_ahead_kb=256      seq   210.9 MB/s   rand4k   5899 IOPS (0.17 ms each)
+  read_ahead_kb=512      seq   220.9 MB/s   rand4k   3898 IOPS (0.26 ms each)
+  read_ahead_kb=1024     seq   215.1 MB/s   rand4k   2427 IOPS (0.41 ms each)
+```
+
+**Leave it at 128.** The hypothesis was that 256 would win, because
+`max_sectors_kb` is 256 and a bigger bite means fewer round-trips on a
+one-command-at-a-time device. It does not. Sequential throughput is
+210.9–220.9 MB/s across a 16x range of readahead — a 5% spread that is not even
+monotonic (256 is the slowest, 512 the fastest), which is the shape of noise,
+not of an effect.
+
+Random 4K is the only real signal, and it goes the *other* way: 512 and 1024
+cost 28% and 55% of the IOPS. That is the "cannot overlap" prediction coming
+true — oversized readahead fetches data nothing asked for, and this controller
+has to finish it before it can start the next request. 64/128/256 are within
+noise of each other, so there is nothing to win, only something to lose.
 
 `bin/doctor` records the queue depth, and warns if the scheduler is ever set to
 `none`, so this does not get "fixed" later.
@@ -630,6 +650,34 @@ of what those devices are:
 `idle-probe --try` refuses those five without `--force`. The unremarkable ones —
 `00:16.0` (MEI), `00:1f.6` (thermal), `00:14.0` (xHCI) — are where to start.
 
+### A measurement that lied (2026-09-04)
+
+The first `--try 0000:00:16.0` looked spectacular:
+
+```
+  baseline (control=on), 5s ...     package-0  3.43 W   core 1.54 W   dram 1.08 W
+  control=auto, 5s ...              package-0  2.06 W (-1.38 W)
+                                    core 0.69 W (-0.86 W)   dram 0.61 W (-0.47 W)
+```
+
+A 40% drop in package power from letting a management-engine **mailbox** nap.
+It is not real, and the giveaway is in the same output: 0.86 W of it came out
+of **core**, and 0.47 W out of **dram**. Whatever MEI does, it cannot make the
+CPU cores or the memory controller use less power. The two five-second windows
+simply had different background activity, and the tool attributed all of it to
+the one thing that changed on purpose.
+
+`--try` now alternates: `--cycles` pairs of samples, `on`/`auto`/`on`/`auto`,
+reporting the mean of each arm, the widest within-arm spread as a **noise
+floor**, and a verdict that says *not measurable* whenever the difference is
+smaller than that floor. Drift lands in both arms instead of only the second.
+
+> This is the second time on this machine that a straight before/after has
+> flattered a change — the genmon rewrite measured 11.6% → 7.8% only because
+> the second window was busier, and the plugins that were *not* touched proved
+> it by rising too. On a machine with a live desktop and browsers, a single
+> pair of samples is not a measurement. Interleave, and print the noise.
+
 > RAPL measures the SoC package. A device on its own rail can save real power
 > without moving that number, so for Wi-Fi and the SSD, measure on **battery**
 > with `current_now × voltage_now` from `/sys/class/power_supply/BAT0` instead.
@@ -662,9 +710,22 @@ posture decision, not a performance bug, so it is written down here and not
 applied.** The trade is only reasonable if you accept that a malicious page in a
 browser tab is the threat model you are opting out of, on a machine that browses.
 
-It is a boot argument, and **OpenCore is the picker on this machine, not GRUB** —
-editing `/etc/default/grub` does nothing. Add it to the OpenCore config's boot
-arguments, reboot, and re-measure:
+It is a boot argument. **Corrected:** an earlier version of this section said
+that because OpenCore is the picker, editing `/etc/default/grub` does nothing.
+That is wrong, and [boot.md](boot.md) already had the answer. OpenLinuxBoot is
+in autodetect mode and reads `GRUB_CMDLINE_LINUX_DEFAULT` straight out of
+`/etc/default/grub` — no `update-grub`, no `config.plist` edit. It is how
+`intel_iommu=off` got onto the cmdline for the camera, confirmed 2026-09-01.
+
+```bash
+sudo sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT="\(.*\)"/GRUB_CMDLINE_LINUX_DEFAULT="\1 mitigations=off"/' /etc/default/grub
+grep GRUB_CMDLINE_LINUX_DEFAULT /etc/default/grub    # check before rebooting
+```
+
+Reverting is deleting the word again. If a boot ever does go wrong, OpenCanopy
+still offers 6.14 and macOS — see [boot.md](boot.md) Rollback safety.
+
+Re-measure after the reboot:
 
 ```bash
 gcc -O2 -o /tmp/sc - <<'EOF' && taskset -c 3 /tmp/sc
