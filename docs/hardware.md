@@ -629,7 +629,14 @@ symptom — no sound — looks nothing like its cause. See
 
 Flagged as "no i915 tuning is set". The parameters are not unset, they are
 `-1`, which `modinfo` spells out as *"use per-chip default"* — the driver
-already decides per platform. Forcing `enable_fbc=1` does not enable something
+already decides per platform. Confirmed as root, 2026-09-04:
+
+```
+  enable_fbc   -1   (per-chip default)
+  enable_psr   -1   (per-chip default)
+  enable_dc    -1   (per-chip default)
+  enable_ips    Y   (already on)
+``` Forcing `enable_fbc=1` does not enable something
 that was off; it overrides a per-chip decision, on a Gen8 part, in a driver that
 has had FBC reworked repeatedly. `idle-probe` reports the actual state when run
 as root. Change it only if that shows FBC off **and** a `--try` measurement
@@ -683,7 +690,16 @@ smaller than that floor. Drift lands in both arms instead of only the second.
 
 `idle-probe` uses **BAT0 while discharging** in preference to RAPL, because
 RAPL only sees the SoC package and every device worth testing here is on its own
-rail. `current_now` is world-readable, so on battery the measurement needs no
+rail. Measured side by side on an idle battery machine:
+
+```
+  BAT0        6.88 W     whole system
+  package-0   3.82 W     SoC only  (core 1.61, uncore 0.12, dram 1.16)
+```
+
+**RAPL sees 55% of the draw.** The missing 3.06 W is the backlight, Wi-Fi, the
+SSD and the rest of the board — which is exactly where a runtime-PM saving would
+show up, and exactly what RAPL cannot see. `current_now` is world-readable, so on battery the measurement needs no
 root — only flipping the device does. On AC, `current_now` is *charge* current
 and says nothing about draw, so the tool falls back to RAPL there.
 

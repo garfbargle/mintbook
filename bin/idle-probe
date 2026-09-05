@@ -135,11 +135,26 @@ def show_display():
         v = read1(f'/sys/module/i915/parameters/{p}', 'root only')
         note = '  (-1 = per-chip default: the driver decides)' if v == '-1' else ''
         print(f'  {p:<12} {v}{note}')
-    fbc = read1('/sys/kernel/debug/dri/0/i915_fbc_status', '')
-    if fbc:
-        print(f'  FBC status   {fbc[:100]}')
+    # i915 moved FBC status under the CRTC in newer kernels, and the dri
+    # number is not always 0, so search rather than hardcode. If nothing
+    # matches, say what IS there — a wrong path and a missing permission look
+    # identical otherwise, and this printed "not readable" to a root shell.
+    import glob
+    hits = (glob.glob('/sys/kernel/debug/dri/*/i915_fbc_status')
+            + glob.glob('/sys/kernel/debug/dri/*/crtc-*/i915_fbc_status'))
+    if hits:
+        for h in hits:
+            txt = read1(h, '')
+            print(f'  FBC status   {h}')
+            print(f'               {txt[:110]}')
+    elif not os.access('/sys/kernel/debug', os.R_OK):
+        print('  FBC status   /sys/kernel/debug not readable — run as root')
     else:
-        print('  FBC status   debugfs not readable — run as root')
+        where = glob.glob('/sys/kernel/debug/dri/*')
+        print('  FBC status   no i915_fbc_status found. dri nodes present:')
+        for w in sorted(where):
+            entries = sorted(os.listdir(w))[:14] if os.path.isdir(w) else []
+            print(f'               {w}: {" ".join(entries)}')
 
 
 def show_runtime_pm():
