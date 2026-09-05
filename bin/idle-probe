@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+"""idle-probe — where the idle watts go, and whether a knob actually moves them.
+
+    bin/idle-probe                 # inventory (no root; watts need root)
+    sudo bin/idle-probe            # + RAPL watts and the real FBC/PSR state
+    sudo bin/idle-probe --try BDF  # A/B one device's runtime PM, then restore
+
+RAPL, the i915 parameters and debugfs are all root-only on this kernel, so the
+interesting half needs sudo. Nothing here is persistent: --try restores the
+original value on the way out, including on Ctrl-C.
+
+Why this exists: three of the four "obvious" tunings on this machine turned out
+to be wrong when checked (see docs/hardware.md). The remaining ones — PCI
+runtime PM and framebuffer compression — are worth exactly what they measure,
+and on a fanless chassis idle watts are thermal budget. So measure them.
+"""
+import os
+import signal
+import sys
+import time
+
+RAPL = '/sys/class/powercap'
+PCI = '/sys/bus/pci/devices'
+
+# Devices where a runtime-PM experiment can cost you the session. Each one has
+# a history in this repo. --try refuses them without --force.
+RISKY = {
+    '0000:00:15.4': 'applespi — the keyboard and trackpad (docs/input.md)',
+    '0000:00:15.5': 'the Bluetooth UART (docs/bluetooth.md)',
+    '0000:01:00.0': 'Wi-Fi (brcmfmac runtime PM is known flaky)',
+    '0000:02:00.0': 'the FaceTime camera (out-of-tree DKMS, docs/camera.md)',
+    '0000:03:00.0': 'the NVMe controller — and APST already power-manages it',
+}
+
+
+def read1(p, d='?'):
+    try:
+        with open(p) as f:
+            return ' '.join(f.read().split())
+    except OSError:
+        return d
+
+
+def rapl_domains():
+    out = []
+    for n in sorted(os.listdir(RAPL)):
+        if not n.startswith('intel-rapl:'):
+            continue
+        d = os.path.join(RAPL, n)
+        name = read1(os.path.join(d, 'name'), n)
+        if os.access(os.path.join(d, 'energy_uj'), os.R_OK):
+            out.append((name, os.path.join(d, 'energy_uj')))
+    return out
+
+
+def sample_watts(domains, seconds):
+    """Energy counters are microjoules and wrap; a delta over a window is watts."""
+    if not domains:
+        return None
+    a = {n: int(read1(p, '0')) for n, p in domains}
+    t0 = time.perf_counter()
+    time.sleep(seconds)
+    el = time.perf_counter() - t0
+    b = {n: int(read1(p, '0')) for n, p in domains}
+    out = {}
+    for n, _ in domains:
+        d = b[n] - a[n]
+        if d < 0:                      # counter wrapped
+            continue
+        out[n] = d / 1e6 / el
+    return out
+
+
+def show_power(seconds=5):
+    doms = rapl_domains()
+    if not doms:
+        print('  RAPL not readable — run as root '
+              '(energy_uj is 0400 since the Platypus side-channel)')
+        return None
+    w = sample_watts(doms, seconds)
+    for n in ('package-0', 'core', 'uncore', 'dram'):
+        if n in w:
+            print(f'  {n:<12} {w[n]:6.2f} W')
+    return w
+
+
+def show_display():
+    print('display (i915)')
+    for p in ('enable_fbc', 'enable_psr', 'enable_dc', 'enable_ips'):
+        v = read1(f'/sys/module/i915/parameters/{p}', 'root only')
+        note = '  (-1 = per-chip default: the driver decides)' if v == '-1' else ''
+        print(f'  {p:<12} {v}{note}')
+    fbc = read1('/sys/kernel/debug/dri/0/i915_fbc_status', '')
+    if fbc:
+        print(f'  FBC status   {fbc[:100]}')
+    else:
+        print('  FBC status   debugfs not readable — run as root')
+
+
+def show_runtime_pm():
+    print('PCI runtime power management')
+    import subprocess
+    try:
+        names = {}
+        for ln in subprocess.run(['lspci'], capture_output=True, text=True,
+                                 timeout=5).stdout.splitlines():
+            bdf, _, rest = ln.partition(' ')
+            names['0000:' + bdf] = rest[:52]
+    except Exception:
+        names = {}
+    on = []
+    for n in sorted(os.listdir(PCI)):
+        c = read1(os.path.join(PCI, n, 'power', 'control'), '?')
+        st = read1(os.path.join(PCI, n, 'power', 'runtime_status'), '?')
+        if c == 'on':
+            on.append(n)
+        flag = 'RISKY' if n in RISKY else ''
+        print(f'  {c:<5} {st:<10} {n}  {names.get(n, "")[:44]:<44} {flag}')
+    print(f'\n  {len(on)} device(s) pinned to "on" — they never enter D3.')
+    print('  "auto" is what powertop calls a Good tunable. Measure before keeping:')
+    print('    sudo bin/idle-probe --try 0000:00:16.0')
+
+
+def try_device(bdf, force, seconds):
+    ctl = os.path.join(PCI, bdf, 'power', 'control')
+    if not os.path.exists(ctl):
+        print(f'no such device: {bdf}', file=sys.stderr)
+        return 1
+    if bdf in RISKY and not force:
+        print(f'{bdf} is {RISKY[bdf]}\n'
+              f'A runtime-PM experiment here can cost you the session. '
+              f'Re-run with --force if you mean it.', file=sys.stderr)
+        return 1
+    doms = rapl_domains()
+    if not doms:
+        print('RAPL not readable — run as root', file=sys.stderr)
+        return 1
+    orig = read1(ctl)
+    restored = False
+
+    def restore(*_a):
+        nonlocal restored
+        if not restored:
+            with open(ctl, 'w') as f:
+                f.write(orig)
+            restored = True
+            print(f'\nrestored {bdf} power/control={orig}')
+
+    signal.signal(signal.SIGINT, lambda *a: (restore(), sys.exit(130)))
+    try:
+        print(f'{bdf}  {RISKY.get(bdf, "")}')
+        print(f'  baseline (control={orig}), {seconds}s ...')
+        base = sample_watts(doms, seconds)
+        for n in ('package-0', 'core', 'uncore', 'dram'):
+            if n in base:
+                print(f'    {n:<12} {base[n]:6.2f} W')
+        with open(ctl, 'w') as f:
+            f.write('auto')
+        print(f'  control=auto, {seconds}s ...')
+        alt = sample_watts(doms, seconds)
+        for n in ('package-0', 'core', 'uncore', 'dram'):
+            if n in alt:
+                d = alt[n] - base.get(n, alt[n])
+                print(f'    {n:<12} {alt[n]:6.2f} W   ({d:+.2f} W)')
+        print(f'  runtime_status now: '
+              f'{read1(os.path.join(PCI, bdf, "power", "runtime_status"))}')
+        print('\n  RAPL covers the SoC package only. A device on its own rail '
+              '(Wi-Fi, the\n  SSD) can save power without moving these numbers '
+              '— on battery, compare\n  current_now * voltage_now from '
+              '/sys/class/power_supply/BAT0 instead.')
+    finally:
+        restore()
+    return 0
+
+
+def main():
+    args = sys.argv[1:]
+    force = '--force' in args
+    seconds = 5
+    if '--try' in args:
+        i = args.index('--try')
+        if i + 1 >= len(args):
+            print('--try needs a PCI address, e.g. 0000:00:16.0', file=sys.stderr)
+            return 2
+        return try_device(args[i + 1], force, seconds)
+
+    print('package power')
+    show_power(seconds)
+    print()
+    show_display()
+    print()
+    show_runtime_pm()
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

@@ -29,6 +29,14 @@ case "$KREL" in
   *) warn "running kernel" "$KREL — untested; 7.0 is the working kernel" ;;
 esac
 check "headers for this kernel" "/usr/src/linux-headers-$KREL" have "/usr/src/linux-headers-$KREL"
+# Reported, never asserted: this is a security posture choice, not a fault.
+# See docs/hardware.md for the measured cost and the OpenCore boot arg.
+if grep -q 'mitigations=off' /proc/cmdline 2>/dev/null; then
+  warn "cpu mitigations" "disabled on the cmdline — faster syscalls, no Meltdown/MDS protection"
+else
+  NMIT=$(grep -l 'Mitigation' /sys/devices/system/cpu/vulnerabilities/* 2>/dev/null | wc -l)
+  ok "cpu mitigations" "$NMIT active (PTI, retpolines, MDS clear) — see docs/hardware.md"
+fi
 
 section "Power policy"
 check "apply script" "/usr/local/sbin/mintbook-power-apply" have /usr/local/sbin/mintbook-power-apply
@@ -153,6 +161,16 @@ section "Audio"
 if grep -q '^snd_hda_codec_cs420x ' /proc/modules; then ok "CS4208 codec module" "snd_hda_codec_cs420x"; else bad "CS4208 codec module" "not loaded"; fi
 if aplay -l 2>/dev/null | grep -qi 'CS4208\|MacBook'; then ok "playback device" "$(aplay -l 2>/dev/null | grep -m1 -i 'CS4208\|MacBook' | cut -c1-60)"; else warn "playback device" "no CS4208 card in aplay -l"; fi
 check "macbook12-audio dkms" "built for $KREL" bash -c "dkms status macbook12-audio 2>/dev/null | grep -q \"$KREL.*installed\""
+# power_save=0 is load-bearing, not an oversight. The CS4208 class-D amp rails
+# are set once by EFI and the driver never re-drives them, so a runtime-PM D3
+# cycle kills the speakers until reboot. Guarded because a modprobe.d change or
+# a kernel default flip would do it silently. See docs/audio.md.
+PSV=$(cat /sys/module/snd_hda_intel/parameters/power_save 2>/dev/null || echo '?')
+if [ "$PSV" = 0 ]; then
+  ok "codec power_save" "0 — the EFI-set amp rails stay powered"
+else
+  bad "codec power_save" "$PSV — a D3 cycle kills the speaker amp until reboot (docs/audio.md)"
+fi
 
 section "Camera"
 check "firmware" "/lib/firmware/facetimehd/firmware.bin" have /lib/firmware/facetimehd/firmware.bin

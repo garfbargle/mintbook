@@ -575,6 +575,114 @@ wrong file *on its own*.
 **Not yet confirmed on a real login.** `doctor` now checks the driver a running
 app has mapped, which is the test that cannot lie.
 
+## Idle power and the display — measured, not assumed
+
+[`bin/idle-probe`](../bin/idle-probe) reports package watts from RAPL, the real
+FBC/PSR state, and every device's runtime-PM setting. `--try <BDF>` flips one
+device to `auto`, samples watts, and restores the original — including on
+Ctrl-C. RAPL, the `i915` parameters and `debugfs` are all `0400` on this kernel,
+so the interesting half needs `sudo`.
+
+**Nothing here was applied blind, and two candidates were withdrawn outright.**
+
+### `snd_hda_intel power_save` — retracted, and now guarded
+
+Flagged as an easy win: `power_save=0` when the Ubuntu default is 1. It is not
+an oversight. `/etc/modprobe.d/mb81-singlecmd.conf` sets it deliberately, and
+says why:
+
+> The CS4208 class-D speaker amp rails (GPIO4/GPIO5) are set ONCE by EFI and the
+> driver deliberately never re-drives them. A runtime-PM D3 cycle disturbs those
+> rails and nothing restores them on the D0 resume: the clock recovers but the
+> amp stays dead → SILENCE.
+
+Setting `power_save=1` would trade a fraction of a watt for the speakers, until
+the next reboot. `bin/doctor` now **fails** if it is ever not 0, because a
+modprobe.d change or a kernel default flip would do this silently and the
+symptom — no sound — looks nothing like its cause. See
+[audio.md](audio.md).
+
+### `i915.enable_fbc` — nothing to turn on
+
+Flagged as "no i915 tuning is set". The parameters are not unset, they are
+`-1`, which `modinfo` spells out as *"use per-chip default"* — the driver
+already decides per platform. Forcing `enable_fbc=1` does not enable something
+that was off; it overrides a per-chip decision, on a Gen8 part, in a driver that
+has had FBC reworked repeatedly. `idle-probe` reports the actual state when run
+as root. Change it only if that shows FBC off **and** a `--try` measurement
+shows it is worth something.
+
+### PCI runtime PM — the safe set is smaller than it looks
+
+Eleven devices sit at `power/control=on` and never enter D3. `auto` is what
+`powertop` calls a Good tunable, and on a fanless chassis idle watts are thermal
+budget — so it is worth measuring. It is not worth applying blind here, because
+of what those devices are:
+
+| Device | Why not blind |
+|---|---|
+| `00:15.4` | applespi — the keyboard and trackpad. Already `auto`, and it works. Leave it |
+| `00:15.5` | the Bluetooth UART. See [bluetooth.md](bluetooth.md) for what it took to get an adapter at all |
+| `01:00.0` | Wi-Fi. `brcmfmac` runtime PM is a well-known source of dropped links |
+| `02:00.0` | the FaceTime camera — out-of-tree DKMS that needs `intel_iommu=off` to DMA at all |
+| `03:00.0` | the NVMe controller, which already power-manages itself through APST (`default_ps_max_latency_us=100000`) |
+
+`idle-probe --try` refuses those five without `--force`. The unremarkable ones —
+`00:16.0` (MEI), `00:1f.6` (thermal), `00:14.0` (xHCI) — are where to start.
+
+> RAPL measures the SoC package. A device on its own rail can save real power
+> without moving that number, so for Wi-Fi and the SSD, measure on **battery**
+> with `current_now × voltage_now` from `/sys/class/power_supply/BAT0` instead.
+> On AC, `current_now` is charge current and tells you nothing about draw.
+
+> thermald logs `NO RAPL sysfs present` on this machine. It is wrong:
+> `/sys/class/powercap/intel-rapl:0/` is there with package, core, uncore and
+> dram domains. thermald is looking for the MSR interface, not powercap. One
+> more reason it was not doing the job it was kept around for.
+
+## CPU mitigations — your call, with a number
+
+Measured on this machine, pinned, `mitigations` at their defaults:
+
+```
+raw getpid syscall   ~720 ns     (about 1450 cycles at 2 GHz)
+```
+
+An unmitigated `getpid` on this class of core is 150–300 cycles. Nine
+mitigations are active, and the syscall path carries most of them: PTI (a page
+table switch per entry and exit), MDS buffer clearing (a `VERW` on every return
+to userspace), and retpolines on the indirect branches in between.
+
+That tax lands hardest on exactly what this machine runs — Node, git, Electron
+IPC — all syscall- and context-switch-bound.
+
+`mitigations=off` would give most of it back. It also turns off Meltdown and MDS
+protection on a CPU that is genuinely vulnerable to both. **This is a security
+posture decision, not a performance bug, so it is written down here and not
+applied.** The trade is only reasonable if you accept that a malicious page in a
+browser tab is the threat model you are opting out of, on a machine that browses.
+
+It is a boot argument, and **OpenCore is the picker on this machine, not GRUB** —
+editing `/etc/default/grub` does nothing. Add it to the OpenCore config's boot
+arguments, reboot, and re-measure:
+
+```bash
+gcc -O2 -o /tmp/sc - <<'EOF' && taskset -c 3 /tmp/sc
+#define _GNU_SOURCE
+#include <stdio.h>
+#include <time.h>
+#include <unistd.h>
+#include <sys/syscall.h>
+int main(void){ struct timespec a,b; const long N=2000000;
+  syscall(SYS_getpid); clock_gettime(CLOCK_MONOTONIC,&a);
+  for(long i=0;i<N;i++) syscall(SYS_getpid);
+  clock_gettime(CLOCK_MONOTONIC,&b);
+  printf("%.1f ns\n",((b.tv_sec-a.tv_sec)*1e9+(b.tv_nsec-a.tv_nsec))/N); }
+EOF
+```
+
+`bin/doctor` reports the state either way and never treats it as a fault.
+
 ## Housekeeping
 
 - **Journal was uncapped.** Stock `journald.conf` is empty, so the default is 10% of
