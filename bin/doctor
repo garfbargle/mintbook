@@ -119,6 +119,17 @@ if [ "$PSZ" = "$MTOP" ]; then
 else
   bad "panel size / margin_top" "panel=$PSZ margin_top=$MTOP — they must match"
 fi
+PPOS=$(xfconf-query -c xfce4-panel -p /panels/panel-1/position 2>/dev/null || echo '?')
+case "$PPOS" in
+  p=6*) ok "panel snap position" "$PPOS — snapped to the top edge, so it sets a strut" ;;
+  *)    bad "panel snap position" "$PPOS — must be p=6, or the panel sets no strut" ;;
+esac
+WA=$(xprop -root _NET_WORKAREA 2>/dev/null | cut -d= -f2 | tr -d ' ' | cut -d, -f1-4)
+if [ "$WA" = "0,$PSZ,2304,$((1440 - PSZ))" ]; then
+  ok "_NET_WORKAREA" "$WA — apps that place their own windows clear the bar"
+else
+  bad "_NET_WORKAREA" "$WA — expected 0,$PSZ,2304,$((1440 - PSZ)); windows will open under the bar"
+fi
 for p in 17 18 19 21 22 23; do
   [ -e "$HOME/.config/xfce4/panel/genmon-$p.rc" ] || MISSING="${MISSING-} $p"
 done

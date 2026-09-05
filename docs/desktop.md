@@ -59,7 +59,7 @@ TERM=xterm-256color ./install.sh -o normal -c light -c dark -a normal -t default
 
 | Setting | Value |
 |---|---|
-| `position` | `p=1;x=0;y=0` (top, full width) |
+| `position` | `p=6;x=0;y=0` (top, full width — `p=6` is what makes it *snap*, see Gotchas) |
 | `size` | 52 |
 | `icon-size` | 36 |
 | `background-style` | 1 (solid colour) |
@@ -295,7 +295,7 @@ yields 16px of trailing gap. If the format string is ever edited, keep those spa
 theme=WhiteSur-Light-hdpi        # hdpi variant for the Retina panel
 button_layout=CHM|               # close/min/max on the LEFT, Mac order
 title_alignment=center
-margin_top=52                    # see Gotchas - this is what reserves the top bar
+margin_top=52                    # fallback only; the panel's strut is the real reserve. Gotchas.
 show_dock_shadow=false           # see Gotchas
 ```
 
@@ -415,12 +415,39 @@ reliably appear, so the process sits there until killed. `-s` must be a
 
 ## Gotchas — things that cost real time
 
-**The panel sets no struts, and never did.** `_NET_WM_STRUT_PARTIAL` is absent on
-every window on this system, and `_NET_WORKAREA` is full-screen. Maximized windows
-therefore render *under* the panel. This was always true; it was simply invisible when
-the panel was at the bottom. The fix is xfwm4's workspace margin
-(`/general/margin_top = 52`), not anything strut-related. **If the bar height changes,
-this margin must change to match.**
+**The panel set no struts, because its snap position was wrong.** For most of this
+config's life `_NET_WM_STRUT_PARTIAL` was absent on every window and `_NET_WORKAREA`
+was the full 2304x1440. The cause was `position = p=1;x=0;y=0`. The `p=` field is
+xfce4-panel's *snap* position, not a coordinate — the `x=0;y=0` put the bar at the top
+of the screen, but `p=1` told the panel it was not snapped to the top edge, so
+`struts_edge` came out as none and it declined to publish a strut. It looked right and
+behaved wrong. **`p=6` is the top edge.** Measured, with everything else unchanged:
+
+| `p=` | panel geometry | strut |
+|---|---|---|
+| 0, 1 | `2304x52+0+0` | property never set |
+| 2, 6, 9 | `2304x52+0+0` | `top = 52` ✔ |
+| 5 | `2304x52+0+0` | set, but all zeros |
+| 3, 7 | `2304x52+0+694` | all zeros (bar jumps to mid-screen) |
+| 4, 8 | `2304x52+0+1388` | `bottom = 52` (bar jumps to the bottom) |
+
+`enable-struts` was `true` the whole time and toggling it changed nothing — the snap
+position is checked first. Fixed 2026-09-04; `_NET_WORKAREA` is now `0, 52, 2304, 1388`
+and survives `xfce4-panel -r`.
+
+**Why this mattered, and what `margin_top` does not cover.** xfwm4's workspace margin
+(`/general/margin_top = 52`) fixes xfwm4's *own* placement and maximization, and that is
+all. It is never published to `_NET_WORKAREA` — verified by setting the margin to 200 and
+watching the root property stay full-screen. So every app that positions its own windows
+by reading `_NET_WORKAREA` — Electron (Claude, Cursor), Chrome, Qt, Java — believed it
+had all 1440 rows and opened its windows over the bar. That is the "window opens with a
+gap, but not a 52px one" bug: those apps were insetting from y=0, not from y=52.
+
+The two settings do **not** stack, so keeping both is safe: xfwm4 takes the larger of
+margin and strut, verified at `margin_top` 0 / 52 / 200 against a 52px strut (frame
+landed at y=52, 52, 200). `margin_top` stays as a fallback in case the strut ever
+breaks again. **If the bar height changes, `margin_top` must change to match** — the
+strut follows the panel's own height automatically.
 
 **xfwm4 draws a shadow around every `_NET_WM_WINDOW_TYPE_DOCK` window.** Plank's window
 is 2304x272 and keeps that size even while the dock is hidden, so it cast a shadow

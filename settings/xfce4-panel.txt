@@ -9,7 +9,7 @@
 /panels/panel-1/leave-opacity                 100
 /panels/panel-1/length                        100
 /panels/panel-1/plugin-ids                    <<UNSUPPORTED>>
-/panels/panel-1/position                      p=1;x=0;y=0
+/panels/panel-1/position                      p=6;x=0;y=0
 /panels/panel-1/position-locked               true
 /panels/panel-1/size                          52
 /plugins/plugin-1                             whiskermenu
