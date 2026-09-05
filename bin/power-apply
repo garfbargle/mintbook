@@ -22,7 +22,7 @@
 set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then
-  echo "run as root: pkexec $0 [auto|power-saver|balanced|performance]" >&2
+  echo "run as root: pkexec $0 [auto|power-saver|balanced|performance|--reassert]" >&2
   exit 1
 fi
 
