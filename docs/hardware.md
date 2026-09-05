@@ -1,5 +1,8 @@
 # Hardware status
 
+> Summary of the 2026-09-04 tuning pass, with the numbers and the
+> retractions: [performance.md](performance.md).
+
 What works, what does not, and what was measured. Regenerate the live parts with
 [`bin/hw-report`](../bin/hw-report).
 

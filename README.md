@@ -53,6 +53,9 @@ framebuffer compression — and `--try` A/Bs one device and puts it back.
 a time** (`qdepth_one`), so ordinary NVMe tuning advice does not apply — see
 [hardware](docs/hardware.md).
 
+[Performance](docs/performance.md) records a tuning pass from 2026-09-04 — what
+changed, what it was worth, and the six things that turned out to be wrong.
+
 After a kernel update, run `bin/doctor`. It checks every piece this machine needs —
 firmware, DKMS modules, the DSDT override, udev and systemd units, the panel — and
 tells you which one an update took away.
