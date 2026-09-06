@@ -52,10 +52,17 @@ DPI was tuned by eye in stages: 96 (too small) → 144 (still too small) → **1
 - **`xfwm4 /general/margin_top` must equal the panel height.** The panel sets no
   struts on this system, so that margin is the only thing keeping maximized windows
   from rendering under the bar. See [desktop.md](desktop.md).
-- Some applications keep their own scaling and will not follow xsettings — **Firefox**
-  (`layout.css.devPixelsPerPx`) and **Electron apps** in particular.
+- Some applications keep their own scaling and will not follow xsettings —
+  **Electron apps** in particular.
   **Chrome does follow it**: a `chrome://gpu` export reports `scale=1.75` and a
   1317x823 work area, which is 168/96 and 2304x1440 divided by it. Verified 2026-09-04.
+- **Firefox follows it too — corrected 2026-09-06.** This list used to name Firefox
+  as needing `layout.css.devPixelsPerPx` by hand. Firefox 155 does not: a profile
+  with **no prefs at all** reports `devicePixelRatio` **1.765** and a 1306-CSS-pixel
+  screen, which is 2304 physical divided by it. That is 0.8% off the desktop's
+  1.75 and not visible. **Do not set `layout.css.devPixelsPerPx`** — setting it
+  would pin Firefox to a fixed ratio and break it the next time the panel or the
+  DPI changes. The old advice predates this Firefox.
 
 ## Video decode
 

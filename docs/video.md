@@ -369,15 +369,21 @@ Only video playback was measured. General browsing, page-load, memory, and
 extension behaviour were **not** compared, and the desktop-app work in
 [app-performance.md](app-performance.md) is about a different application again.
 
-One practical caveat remains before making Firefox the default browser:
+This section used to carry two caveats about making Firefox the default browser.
+Both are now gone:
 
-- **Firefox does not follow this desktop's scaling.** It keeps its own, and needs
-  `layout.css.devPixelsPerPx` set by hand, or it will look wrong on a 226-DPI
-  panel. See [display.md](display.md). This is not set, and `firefox-video` does
-  not touch it — it is a matter of taste, not a measurement.
+- ~~Firefox does not follow this desktop's scaling.~~ **Withdrawn, measured
+  2026-09-06.** It does follow it: `devicePixelRatio` is **1.765** against the
+  desktop's 1.75, with no prefs set at all. Do not set
+  `layout.css.devPixelsPerPx` — see [display.md](display.md).
 
-The pref caveat that used to sit here is **resolved**: the set was narrowed from
-eight prefs to two, and applied to the real profile on 2026-09-06.
+- ~~The pref set is unapplied and un-narrowed.~~ **Resolved.** Narrowed from eight
+  prefs to two and applied to the real profile by
+  [`bin/firefox-video`](../bin/firefox-video), with `--undo` and a `doctor` check.
+
+**Nothing is left standing between this machine and using Firefox.** What remains
+genuinely unknown is only the part nobody measured: how it compares for ordinary
+browsing.
 
 The honest summary: **use Firefox to watch video, use Thorium for browsing**, until
 someone measures the rest.
