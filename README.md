@@ -60,6 +60,11 @@ changed, what it was worth, and the six things that turned out to be wrong.
 Reduce motion change: 62% lower app CPU in the sampled active-task view,
 with raw measurements, undo steps, and the next-session handoff.
 
+[Video](docs/video.md) records the 2026-09-06 playback pass: Chrome decodes
+video **in software here whatever `chrome://gpu` claims**, YouTube's default on
+this machine is AV1 rather than VP9, and forcing H.264 buys about 11% of Chrome's
+CPU without making 720p60 playable.
+
 After a kernel update, run `bin/doctor`. It checks every piece this machine needs —
 firmware, DKMS modules, the DSDT override, udev and systemd units, the panel — and
 tells you which one an update took away.

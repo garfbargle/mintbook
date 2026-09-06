@@ -1,0 +1,106 @@
+[
+  {
+    "label": "default-1",
+    "forced_h264": false,
+    "valid": true,
+    "probe_valid": true,
+    "probe_reason": "session/power stable; workload must be controlled manually",
+    "codecs": "av01.0.08M.08 (398) / opus (251)",
+    "resolution": "1280x720@60 / 1280x720@60",
+    "video_px": [
+      1280,
+      720
+    ],
+    "played_s": 26.45,
+    "chrome_cpu_pct": 179.62,
+    "chrome_gpu_proc_cpu_pct": 38.78,
+    "xorg_cpu_pct": 20.17,
+    "dropped_frames": 506,
+    "total_frames": 1627,
+    "pkg_temp_c_mean": 93.8,
+    "pkg_temp_c_range": [
+      91.0,
+      95.0
+    ],
+    "pkg_temp_c_start": 95.0,
+    "battery_w_mean": null
+  },
+  {
+    "label": "h264-1",
+    "forced_h264": true,
+    "valid": true,
+    "probe_valid": true,
+    "probe_reason": "session/power stable; workload must be controlled manually",
+    "codecs": "avc1.4d4020 (298) / opus (251)",
+    "resolution": "1280x720@60 / 1280x720@60",
+    "video_px": [
+      1280,
+      720
+    ],
+    "played_s": 27.06,
+    "chrome_cpu_pct": 163.92,
+    "chrome_gpu_proc_cpu_pct": 39.47,
+    "xorg_cpu_pct": 19.83,
+    "dropped_frames": 429,
+    "total_frames": 1629,
+    "pkg_temp_c_mean": 93.7,
+    "pkg_temp_c_range": [
+      92.0,
+      95.0
+    ],
+    "pkg_temp_c_start": 94.0,
+    "battery_w_mean": null
+  },
+  {
+    "label": "default-2",
+    "forced_h264": false,
+    "valid": true,
+    "probe_valid": true,
+    "probe_reason": "session/power stable; workload must be controlled manually",
+    "codecs": "av01.0.08M.08 (398) / opus (251)",
+    "resolution": "1280x720@60 / 1280x720@60",
+    "video_px": [
+      1280,
+      720
+    ],
+    "played_s": 26.27,
+    "chrome_cpu_pct": 184.14,
+    "chrome_gpu_proc_cpu_pct": 35.11,
+    "xorg_cpu_pct": 21.52,
+    "dropped_frames": 645,
+    "total_frames": 1626,
+    "pkg_temp_c_mean": 94.4,
+    "pkg_temp_c_range": [
+      93.0,
+      95.0
+    ],
+    "pkg_temp_c_start": 95.0,
+    "battery_w_mean": null
+  },
+  {
+    "label": "h264-2",
+    "forced_h264": true,
+    "valid": true,
+    "probe_valid": true,
+    "probe_reason": "session/power stable; workload must be controlled manually",
+    "codecs": "avc1.4d4020 (298) / opus (251)",
+    "resolution": "1280x720@60 / 1280x720@60",
+    "video_px": [
+      1280,
+      720
+    ],
+    "played_s": 26.26,
+    "chrome_cpu_pct": 160.73,
+    "chrome_gpu_proc_cpu_pct": 41.24,
+    "xorg_cpu_pct": 20.09,
+    "dropped_frames": 395,
+    "total_frames": 1608,
+    "pkg_temp_c_mean": 93.6,
+    "pkg_temp_c_range": [
+      91.0,
+      95.0
+    ],
+    "pkg_temp_c_start": 95.0,
+    "battery_w_mean": null
+  }
+]

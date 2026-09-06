@@ -491,6 +491,14 @@ picture, not the i965 one.
 — whether Chrome used VA-API at all — is answered: it does, and it did so before the
 driver change. There is no decode win to collect here.
 
+> **Corrected 2026-09-06 — this paragraph read the wrong thing.** The profile list
+> above is Chrome reporting what the *driver* can do. Asked what the decoder stack
+> actually chose while a video played, Chrome answers `FFmpegVideoDecoder` with
+> `kIsPlatformVideoDecoder: false` — **software**, for YouTube H.264, YouTube AV1,
+> and a plain `.mp4` alike, under **both** i965 and iHD, and under every flag tried.
+> Chrome never uses VA-API on this machine. The conclusion "no decode win to
+> collect" survives; the reason given for it does not. See [video.md](video.md).
+
 **No VP9 and no AV1 in that list.** This is the empirical confirmation of the
 Broadwell limit, not just the spec claim: YouTube's default codecs decode on the CPU,
 and on a fanless chip that is the heat. The only lever is making sites serve H.264.

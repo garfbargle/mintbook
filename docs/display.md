@@ -70,7 +70,9 @@ default to those codecs still decode on the CPU, and this chip is fanless, so th
 felt as heat rather than as dropped frames.
 
 Chrome's own `chrome://gpu` confirms this from the other side: its hardware decode list
-is h264 baseline/main/high and vp8, and nothing else. Decode was **already hardware
+is h264 baseline/main/high and vp8, and nothing else. **That list is a capability
+claim, not behaviour** — measured 2026-09-06, Chrome decodes in software here
+regardless. See [video.md](video.md). Decode was **already hardware
 accelerated before** the driver change — see [hardware.md](hardware.md), What Chrome
 actually does. Encode was not.
 
