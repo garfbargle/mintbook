@@ -2,9 +2,9 @@
 # appearance-snapshot - capture a compact visual record for desktop-theme tweaks.
 # Usage: appearance-snapshot [label]
 #
-# Saves the whole desktop plus visible Firefox and ChatGPT windows, then restores
-# the window that was focused before the capture. Uses the installed XFCE tool;
-# it neither uploads files nor opens a save dialog.
+# Saves a clean system-chrome view plus visible Firefox and ChatGPT windows, then
+# restores the workspace and the window that was focused before the capture.
+# Uses the installed XFCE tool; it neither uploads files nor opens a save dialog.
 set -euo pipefail
 
 root="$HOME/Pictures/Appearance"
@@ -16,8 +16,20 @@ mkdir -p "$out"
 
 active=$(xdotool getactivewindow 2>/dev/null || true)
 
-capture_fullscreen() {
-  xfce4-screenshooter -f -s "$out/desktop.png"
+capture_system_chrome() {
+  local showing
+  showing=$(xprop -root _NET_SHOWING_DESKTOP 2>/dev/null | awk '{print $3}' || true)
+  if [ "$showing" != "1" ]; then
+    wmctrl -k on
+    # Let XFCE reveal Plank before the screenshot is requested.
+    sleep 0.3
+  fi
+
+  xfce4-screenshooter -f -s "$out/system-chrome.png"
+
+  if [ "$showing" != "1" ]; then
+    wmctrl -k off
+  fi
 }
 
 capture_window() {
@@ -31,7 +43,7 @@ capture_window() {
   xfce4-screenshooter -w -s "$out/$name.png"
 }
 
-capture_fullscreen
+capture_system_chrome
 capture_window firefox firefox
 capture_window chatgpt Chatgpt
 

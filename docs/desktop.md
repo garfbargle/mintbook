@@ -491,7 +491,7 @@ Cmd-like key (Spotlight), so the macOS chords are the ones that work:
 | **Cmd+Shift+3** | whole screen | `~/Pictures/Screenshots/Screenshot_*.png` |
 | **Cmd+Shift+4** | drag a region (click, drag, release) | same |
 | **Cmd+Shift+5** | current window | same |
-| **Cmd+Shift+6** | desktop, Firefox, and ChatGPT appearance set | `~/Pictures/Appearance/<timestamp>_tweak/` |
+| **Cmd+Shift+6** | system chrome, Firefox, and ChatGPT appearance set | `~/Pictures/Appearance/<timestamp>_tweak/` |
 
 They run [`bin/screenshot`](../bin/screenshot) → `xfce4-screenshooter -$mode -s $file`,
 then a **160ms full-screen white flash**. Confirmed 2026-09-01: fullscreen write
@@ -500,8 +500,10 @@ of a 2304×1440 PNG in under a second, flash visible after the file exists.
 The old Print bindings stay in xfconf in case an external keyboard appears.
 
 `Cmd+Shift+6` runs [`bin/appearance-snapshot`](../bin/appearance-snapshot).
-It saves `desktop.png`, then visible `firefox.png` and `chatgpt.png`, and restores
-the previously focused window. For an intentional comparison label, run
+It temporarily uses XFCE's **Show Desktop** state to save a clean
+`system-chrome.png` with the panel and dock visible, restores the workspace,
+then saves visible `firefox.png` and `chatgpt.png` and restores the previously
+focused window. For an intentional comparison label, run
 `appearance-snapshot before` and `appearance-snapshot after` from a terminal;
 the output path is printed for each set. It has no flash, dialog, upload, or
 additional screenshot dependency.
