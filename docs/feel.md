@@ -97,18 +97,55 @@ roughly 225 ms / 33 Hz, which is close to what is set here.
 This changes no work the machine does. It was the highest felt value per minute
 of effort on the list, and it is done.
 
-### 2. Fix the worst moments, not the average
+### 2. Fix the worst moments, not the average — **built, needs one root command**
 
 The SSD controller takes **one command at a time** (`qdepth_one`), and
-`nr_requests` is **2**. Meanwhile these are enabled and dump heavy IO at it on
-their own schedule: `apt-daily`, `apt-daily-upgrade`, `plocate-updatedb`,
-`man-db`, `e2scrub_all`, `motd-news`, `fwupd-refresh`, `anacron`.
+`nr_requests` is **2**. A background job therefore does not *share* this disk
+with the desktop. It takes it. Twelve maintenance units fire on their own
+timers and do exactly that: `apt-daily`, `apt-daily-upgrade`,
+`plocate-updatedb`, `man-db`, `e2scrub_all`, `fstrim`, `motd-news`,
+`fwupd-refresh`, `anacron`, `logrotate`, `dpkg-db-backup`,
+`systemd-tmpfiles-clean`.
 
-These are the "why is it frozen" moments. They do not move any average and they
-are what a person remembers. `IOSchedulingClass=idle` and `Nice=19` drop-ins, or
-`OnlyRunWhenOnAC`-style gating, would cost nothing measurable and remove them.
-`io PSI some avg10` was **3.49** while writing this — the machine is already
-waiting on that disk.
+These move no average. They are the "why is it frozen" minutes, and those are
+what a person remembers. `io` PSI `some avg10` was **3.49** while this was being
+written — the machine is already waiting on that disk.
+
+[`bin/quiet-timers`](../bin/quiet-timers) installs a drop-in on each one.
+`--check` is read-only and needs no root; `--undo` removes them.
+
+**The obvious fix does not work here, and that is worth recording.**
+`IOSchedulingClass=idle` is *already* set on `plocate-updatedb`, `man-db` and
+`systemd-tmpfiles-clean` by their packages — and it does nothing, because
+**mq-deadline does not implement I/O priorities**. Only BFQ does, and BFQ is not
+loaded (and switching to it would reopen a scheduler question this repository
+already settled by measurement). So ionice is inert on this machine no matter
+who sets it.
+
+What is enforced regardless of elevator is blk-throttle, at the block layer:
+
+```
+Nice=19
+CPUWeight=10
+IOReadBandwidthMax=/dev/nvme0n1  32M
+IOWriteBandwidthMax=/dev/nvme0n1 16M
+IOSchedulingClass=idle            # inert here; kept for a scheduler that honours it
+```
+
+Setting any `IO*` property is also what makes systemd enable the `io` controller
+down `cgroup.subtree_control`, which is currently `cpu memory pids` — so the
+throttle knobs do not exist until a unit asks for them.
+
+Not yet applied: this needs root and no password is available to this session.
+
+```bash
+sudo bin/quiet-timers        # then: bin/quiet-timers --check
+```
+
+Untested claim, stated as one: the caps are chosen to leave the desktop most of
+a ~222 MB/s device, not measured against a timer actually running. The honest
+test is to run `plocate-updatedb` by hand with and without the drop-in and watch
+`io` PSI, which nobody has done yet.
 
 ### 3. Cap the sustained, not the burst
 

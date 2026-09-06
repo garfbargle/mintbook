@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# quiet-timers — stop scheduled maintenance from taking a disk that accepts one
+# command at a time. Installs a drop-in on each unit behind a systemd timer that
+# does bulk I/O. Read-only with --check. Undo with --undo.
+#
+# This changes no average and no benchmark. It removes the machine's worst
+# moments — the minutes where a timer fires and the desktop goes to glue.
+# See docs/feel.md.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SRC="$ROOT/config/systemd/quiet-io.conf"
+DROPIN=50-mintbook-quiet.conf
+
+# Every unit reached by an enabled timer that reads or writes in bulk. Units
+# absent on this install are skipped, not an error.
+UNITS=(
+  apt-daily apt-daily-upgrade
+  plocate-updatedb man-db
+  e2scrub_all fstrim
+  motd-news fwupd-refresh
+  anacron logrotate dpkg-db-backup
+  systemd-tmpfiles-clean
+)
+
+mode=apply
+case "${1:-}" in
+  --check) mode=check ;;
+  --undo)  mode=undo ;;
+  "")      mode=apply ;;
+  *) echo "usage: $0 [--check|--undo]" >&2; exit 2 ;;
+esac
+
+if [ "$mode" != check ] && [ "$(id -u)" -ne 0 ]; then
+  echo "run as root: sudo $0 ${1:-}" >&2
+  exit 1
+fi
+
+[ -f "$SRC" ] || { echo "missing $SRC" >&2; exit 1; }
+
+changed=0
+for u in "${UNITS[@]}"; do
+  unit="$u.service"
+  if ! systemctl cat "$unit" >/dev/null 2>&1; then
+    printf '%-24s %s\n' "$u" "absent, skipped"
+    continue
+  fi
+  dst="/etc/systemd/system/$unit.d/$DROPIN"
+  case "$mode" in
+    check)
+      if [ -f "$dst" ]; then state="quieted"; else state="DEFAULT"; fi
+      printf '%-24s %-9s Nice=%s IOClass=%s IOReadMax=%s\n' "$u" "$state" \
+        "$(systemctl show -p Nice --value "$unit")" \
+        "$(systemctl show -p IOSchedulingClass --value "$unit")" \
+        "$(systemctl show -p IOReadBandwidthMax --value "$unit")"
+      ;;
+    apply)
+      install -dm755 "/etc/systemd/system/$unit.d"
+      install -m644 "$SRC" "$dst"
+      printf '%-24s %s\n' "$u" "==> $dst"
+      changed=1
+      ;;
+    undo)
+      if [ -f "$dst" ]; then
+        rm -f "$dst"
+        rmdir --ignore-fail-on-non-empty "/etc/systemd/system/$unit.d" 2>/dev/null || true
+        printf '%-24s %s\n' "$u" "removed"
+        changed=1
+      else
+        printf '%-24s %s\n' "$u" "-"
+      fi
+      ;;
+  esac
+done
+
+if [ "$changed" = 1 ]; then
+  systemctl daemon-reload
+  echo
+  echo "reloaded. verify: $0 --check"
+  [ "$mode" = apply ] && echo "undo:    sudo $0 --undo"
+fi
