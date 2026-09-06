@@ -61,17 +61,41 @@ as latency work.
 
 ## Ranked candidates
 
-### 1. Keyboard repeat is at the X11 default — 500 ms delay, 20 Hz
+### 1. Keyboard repeat — **applied**, 500 ms / 20 Hz → 200 ms / 40 Hz
 
 ```
-auto repeat delay:  500    repeat rate:  20
+before   auto repeat delay:  500    repeat rate:  20
+after    auto repeat delay:  200    repeat rate:  40
 ```
 
-Nothing sets it, in `xfconf`, `~/.profile`, or `Xsession.d`. macOS on this same
-hardware ships far faster. Every held arrow key, every backspace run, waits half
-a second and then crawls. `xset r rate 200 45` changes no work the machine does
-and changes how it feels to use immediately. Highest felt value per minute of
-effort on this list, and the undo is `xset r rate 500 20`.
+Nothing set it — the `keyboards` channel held only `/Default/Numlock`, so
+`xfsettingsd` left X11's own defaults in place. Every held arrow key, every
+backspace run, waited half a second and then crawled at 20 Hz.
+
+Set through xfconf, which both applies immediately and persists across logins:
+
+```bash
+xfconf-query -c keyboards -p /Default/KeyRepeat       -n -t bool -s true
+xfconf-query -c keyboards -p /Default/KeyRepeat/Delay -n -t int  -s 200
+xfconf-query -c keyboards -p /Default/KeyRepeat/Rate  -n -t int  -s 40
+```
+
+Undo: set `Delay` back to 500 and `Rate` to 20, or `xfconf-query -c keyboards -p
+/Default/KeyRepeat/Delay -r` to drop the properties entirely and return to the X
+default. If held keys overshoot, `Rate` 30 is calmer; the delay is the half that
+matters most.
+
+**A claim in the first draft of this file was wrong and is corrected here.** It
+said macOS "ships far faster" on this hardware. It does not: macOS defaults to
+`InitialKeyRepeat` 25 (≈375 ms) and `KeyRepeat` 6 (≈90 ms, ≈11 Hz) — a *slower*
+repeat rate than X11's 20 Hz, with a shorter delay. The case for this change is
+not that macOS is quicker. It is that both defaults are conservative, the delay
+is the part a person feels, and 200 ms is where a held key stops feeling like a
+request and starts feeling like a control. The macOS-power-user equivalent is
+roughly 225 ms / 33 Hz, which is close to what is set here.
+
+This changes no work the machine does. It was the highest felt value per minute
+of effort on the list, and it is done.
 
 ### 2. Fix the worst moments, not the average
 
