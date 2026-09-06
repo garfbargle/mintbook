@@ -9,13 +9,14 @@
  */
 
 :root {
-  --mint-glass-top: rgb(250 250 250 / 76%);
-  --mint-glass-bottom: rgb(205 205 205 / 58%);
-  --mint-glass-edge: rgb(255 255 255 / 72%);
-  --mint-glass-shadow: rgb(50 50 50 / 18%);
-  --mint-control-fill: rgb(255 255 255 / 48%);
-  --mint-control-hover: rgb(255 255 255 / 78%);
-  --mint-selected-tab: rgb(255 255 255 / 78%);
+  /* Smoky silver: between the dark panel and bright dock, without blur. */
+  --mint-glass-top: rgb(160 165 171 / 88%);
+  --mint-glass-bottom: rgb(119 124 131 / 82%);
+  --mint-glass-edge: rgb(255 255 255 / 54%);
+  --mint-glass-shadow: rgb(25 28 32 / 24%);
+  --mint-control-fill: rgb(255 255 255 / 43%);
+  --mint-control-hover: rgb(255 255 255 / 66%);
+  --mint-selected-tab: rgb(255 255 255 / 62%);
 }
 
 /* Crucial: expose the alpha from the ARGB Firefox window to Xfwm. */
