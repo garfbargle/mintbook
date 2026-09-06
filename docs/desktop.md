@@ -55,6 +55,15 @@ TERM=xterm-256color ./install.sh -o normal -c light -c dark -a normal -t default
 
 ## Current configuration
 
+### Shared glass palette
+
+[`config/theme/mintbook-glass.ini`](../config/theme/mintbook-glass.ini) is the
+canonical source for the pearl surface colour: `#E5E7EA` at the lit edge to
+`#CACDD2` below it. It also holds the darker, icon-safe system-bar derivative.
+Each renderer has its own format, so the palette is translated rather than
+shared as literal CSS: Firefox uses `rgb()` values, Plank uses `R;;G;;B;;A`, and
+XFCE panel stores normalized RGBA doubles.
+
 ### Top bar (xfce4-panel, `panel-1`)
 
 | Setting | Value |
@@ -380,8 +389,9 @@ theme=WhiteSur   position=bottom   icon-size=80   zoom-enabled=true
 zoom-percent=150   hide-mode=intelligent   auto-pinning=false
 ```
 
-Theme copied from `~/.themes/WhiteSur-Light/plank/dock.theme` to
-`~/.local/share/plank/themes/WhiteSur/dock.theme`.
+Theme copied from [`config/plank/WhiteSur/dock.theme`](../config/plank/WhiteSur/dock.theme)
+to `~/.local/share/plank/themes/WhiteSur/dock.theme`. It retains WhiteSur's
+geometry and animation, with its fill translated from the shared pearl palette.
 
 ### Firefox glass chrome
 

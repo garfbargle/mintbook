@@ -9,7 +9,7 @@
  */
 
 :root {
-  /* Dense pearl: a restrained glass sheen rather than a visible backdrop. */
+  /* Dense pearl; canonical values live in config/theme/mintbook-glass.ini. */
   --mint-glass-top: rgb(229 231 234 / 96%);
   --mint-glass-bottom: rgb(202 205 210 / 92%);
   --mint-glass-edge: rgb(255 255 255 / 70%);
