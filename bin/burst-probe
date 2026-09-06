@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# burst-probe — does the battery cap cost the burst?
+#
+# docs/feel.md measured that this chassis reaches 95 C in under three seconds
+# and then holds 1700-1900 MHz whatever the cap says. That implies the
+# max_perf_pct=70 battery cap is nearly free on long work and expensive only on
+# short work — the first seconds, which is the only part a person perceives.
+#
+# This times a fixed, interactive-length, single-core task under each cap,
+# interleaved, and prints the spread within each arm. If the difference is
+# inside that spread it says so, because a straight before/after has flattered a
+# change three times in this repository already (docs/performance.md).
+#
+# No root. Profiles are requested through /run/mintbook-power/want, the same
+# password-free channel the panel uses. The profile in effect on entry is
+# restored on exit, including on interrupt.
+set -euo pipefail
+
+WANT=/run/mintbook-power/want
+PSTATE=/sys/devices/system/cpu/intel_pstate/max_perf_pct
+ZONE=/sys/class/thermal/thermal_zone2/temp
+CYCLES=${1:-5}
+
+[ -w "$(dirname "$WANT")" ] || { echo "cannot write $(dirname "$WANT") — is mintbook-power installed?" >&2; exit 1; }
+command -v python3 >/dev/null || { echo "needs python3" >&2; exit 1; }
+
+orig=$(powerprofilesctl get 2>/dev/null || echo balanced)
+restore() { echo "$orig" > "$WANT"; sleep 1; echo; echo "restored profile: $orig (max_perf_pct=$(cat $PSTATE))"; }
+trap restore EXIT
+
+# Ask for a profile and wait until the cap actually lands. The request is
+# applied by a root path unit, so this is not synchronous.
+want_pct() {
+  local profile=$1 target=$2 i
+  echo "$profile" > "$WANT"
+  for i in $(seq 1 25); do
+    [ "$(cat $PSTATE)" = "$target" ] && return 0
+    sleep 0.2
+  done
+  echo "cap did not reach $target (still $(cat $PSTATE))" >&2
+  return 1
+}
+
+# A fixed amount of single-core work, about a second: the length of a click
+# that feels slow. Pinned to one core so the other arm cannot get a second one.
+task() {
+  taskset -c 0 python3 -c 'x=0
+for i in range(3000000): x+=i' >/dev/null
+}
+
+run_arm() {
+  local label=$1 profile=$2 target=$3
+  want_pct "$profile" "$target"
+  sleep 1.5                       # let the governor settle before timing
+  local t0 t1 temp
+  temp=$(awk '{printf "%.0f", $1/1000}' "$ZONE" 2>/dev/null || echo '?')
+  t0=$(date +%s%N); task; t1=$(date +%s%N)
+  awk -v ns=$((t1-t0)) -v l="$label" -v c="$target" -v tp="$temp" \
+    'BEGIN{printf "  %-9s pct=%-3s %6.0f ms  %s C\n", l, c, ns/1e6, tp}'
+  echo "$(( (t1-t0)/1000000 ))" >> "$TMP/$label"
+}
+
+TMP=$(mktemp -d); trap 'restore; rm -rf "$TMP"' EXIT
+echo "burst-probe: $CYCLES interleaved pairs, one core, ~1 s of work per run"
+echo "entry profile: $orig   cap now: $(cat $PSTATE)"
+echo
+for i in $(seq 1 "$CYCLES"); do
+  echo "cycle $i"
+  run_arm uncapped balanced    100
+  run_arm capped    power-saver 70
+done
+
+echo
+python3 - "$TMP" <<'PY'
+import sys, pathlib, statistics
+d = pathlib.Path(sys.argv[1])
+arms = {}
+for name in ("uncapped", "capped"):
+    f = d / name
+    if f.exists():
+        arms[name] = [int(x) for x in f.read_text().split()]
+for name, v in arms.items():
+    print(f"  {name:<9} n={len(v)}  mean {statistics.mean(v):7.0f} ms   "
+          f"min {min(v)} max {max(v)}   spread {max(v)-min(v)} ms")
+if len(arms) == 2:
+    u, c = arms["uncapped"], arms["capped"]
+    diff = statistics.mean(c) - statistics.mean(u)
+    noise = max(max(u) - min(u), max(c) - min(c))
+    print(f"\n  cap costs {diff:+.0f} ms on ~1 s of work "
+          f"({diff / statistics.mean(u) * 100:+.1f}%)")
+    print(f"  worst within-arm spread: {noise} ms")
+    if abs(diff) <= noise:
+        print("  NOT MEASURABLE: the difference is inside one arm's own spread.")
+PY

@@ -147,15 +147,69 @@ a ~222 MB/s device, not measured against a timer actually running. The honest
 test is to run `plocate-updatedb` by hand with and without the drop-in and watch
 `io` PSI, which nobody has done yet.
 
-### 3. Cap the sustained, not the burst
+### 3. Cap the sustained, not the burst — **measured, built, running**
 
-Instead of a flat `max_perf_pct=70` on battery: leave it at 100, and have a small
-daemon drop it to 70 after *N* seconds of continuous load, restoring it when load
-falls. A turbo budget, in userspace, on top of the existing `power-apply`.
+The inference above is now a measurement. [`bin/burst-probe`](../bin/burst-probe)
+times a fixed ~1 s single-core task under each cap, interleaved, and prints the
+spread inside each arm:
 
-Same energy for long jobs — those are thermally capped regardless — and the
-first three seconds of every interaction come back. Needs the inference in the
-section above tested first.
+```
+uncapped (100)  n=5  mean 661 ms   min 589  max 744   spread 155 ms
+capped   (70)   n=5  mean 903 ms   min 839  max 967   spread 128 ms
+
+cap costs +241 ms on ~1 s of work (+36.5%)
+```
+
+**The arms do not overlap.** The slowest uncapped run is faster than the fastest
+capped one, and package temperature (72–80 C) did not sort with the arms. Raw
+numbers: [2026-09-06-burst-cap.md](measurements/2026-09-06-burst-cap.md).
+
+So both of these are true, and they are not in conflict:
+
+| length of work | faster | source |
+|---|---|---|
+| ~1 second | **uncapped**, by 36.5% | this measurement |
+| sustained | **capped** — 75 does 20–25% more work than 100 | [hardware.md](hardware.md) |
+
+An uncapped chassis sprints into the 95 C wall and then eats throttle stalls.
+A capped one never gets the sprint. [`bin/turbo-budget`](../bin/turbo-budget)
+takes both: while a cap is in force it grants **8 uncapped seconds** at the
+start of any burst, then hands the cap back and keeps it until the machine goes
+quiet. A click gets the whole chip; a compile gets the cap it was always going
+to get.
+
+Verified live, on a forced `power-saver` baseline:
+
+```
+t= 1.0s  cap=70          quiet
+t= 1.5s  cap=100         burst detected
+t= 8.5s  cap=100         still inside the budget
+t= 9.0s  cap=70          budget spent — cap back, under continuing load
+```
+
+It needs no root: it writes a profile name to `/run/mintbook-power/want`, the
+password-free channel the panel already uses, and it stands down entirely
+whenever nothing is capped — so picking Balanced by hand switches it off.
+
+**Its own cost, because this repository has been bitten there before:** under
+10 ms of CPU in 29 s of running. The loop forks nothing — `/proc` through the
+`read` builtin, time from `EPOCHREALTIME`, arithmetic in bash, and the sleep is
+a `read` timeout on a fifo nobody writes to. The most expensive software ever
+found on this machine was a panel plugin that forked a Python interpreter twice
+a tick.
+
+```bash
+systemctl --user enable --now mintbook-turbo-budget.service   # installed and running
+systemctl --user disable --now mintbook-turbo-budget.service  # undo
+```
+
+Tunable through the environment: `BUDGET` (8 s), `TRIGGER` (25% of total CPU),
+`QUIET` (10%), `MINGAP` (3 s between requests).
+
+Not measured: what the extra 8-second sprints cost in battery life or in
+temperature over a real session. The sprints are short and the chassis was
+already reaching 95 C under any sustained load, but that is an argument, not a
+number.
 
 ### 4. Nice the things you look at *up*
 
