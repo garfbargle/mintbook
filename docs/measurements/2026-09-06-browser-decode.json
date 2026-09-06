@@ -100,5 +100,67 @@
       ]
     },
     "note": "decode to fakesink sync=false, i.e. unthrottled; divide CPU seconds by 25 s of video for the realtime equivalent"
+  },
+  "chrome_vs_thorium_interleaved": {
+    "order": "chrome-1, thorium-1, chrome-2, thorium-2",
+    "thorium_version": "152.0.7977.55 stable, built on Ubuntu (AVX2)",
+    "both_software_decode": "kVideoDecoderName=FFmpegVideoDecoder, kIsPlatformVideoDecoder=false, for both, including Thorium with VA-API flags forced",
+    "samples": [
+      {
+        "label": "chrome-1",
+        "browser": "chrome",
+        "valid": true,
+        "cpu_pct_total": 97.87,
+        "roles": {
+          "renderer": 55.5,
+          "gpu-process": 38.86,
+          "main": 3.24,
+          "network.mojom.NetworkService": 0.23
+        },
+        "frames_total": 1555,
+        "frames_dropped": 315
+      },
+      {
+        "label": "thorium-1",
+        "browser": "thorium",
+        "valid": true,
+        "cpu_pct_total": 98.85,
+        "roles": {
+          "renderer": 53.12,
+          "gpu-process": 43.44,
+          "main": 2.25
+        },
+        "frames_total": 1614,
+        "frames_dropped": 46
+      },
+      {
+        "label": "chrome-2",
+        "browser": "chrome",
+        "valid": true,
+        "cpu_pct_total": 88.57,
+        "roles": {
+          "renderer": 50.02,
+          "gpu-process": 35.7,
+          "main": 2.58,
+          "network.mojom.NetworkService": 0.19,
+          "storage.mojom.StorageService": 0.08
+        },
+        "frames_total": 1616,
+        "frames_dropped": 303
+      },
+      {
+        "label": "thorium-2",
+        "browser": "thorium",
+        "valid": true,
+        "cpu_pct_total": 99.96,
+        "roles": {
+          "renderer": 53.64,
+          "gpu-process": 44.1,
+          "main": 2.18
+        },
+        "frames_total": 1614,
+        "frames_dropped": 40
+      }
+    ]
   }
 }

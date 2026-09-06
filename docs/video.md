@@ -4,12 +4,51 @@
 Forcing H.264 instead of AV1 is a real but modest win: about **11% less Chrome CPU**
 and roughly a **quarter fewer dropped frames**. It does not make 720p60 playable.
 
+**Thorium beats Chrome and is still software:** 2.7% of frames dropped against
+Chrome's 19.5%, bought with more CPU, not with the GPU.
+
 **The hardware decoder itself is fine — and costs one fourteenth of the CPU.**
 GStreamer's `vah264dec` needs 0.023 CPU-seconds per second of 720p60 video where
 software needs 0.313. Chrome just will not use it. **Firefox will**, and the same
 clip that costs Chrome a fifth of its frames plays in Firefox with 0.2% dropped.
 **Hardware H.264 encode, by contrast, is not gated but broken:** the i965 encoder
 advertises the entrypoint and then aborts.
+
+## In plain terms
+
+This chip has a small dedicated circuit for playing H.264 video. Using it is nearly
+free. Not using it means the main processor decodes every frame by hand, and on a
+fanless four-thread machine that shows up as heat, throttling, and stutter.
+
+**Chrome cannot use that circuit.** Neither can Thorium, or any Chromium. They decode
+in software. **Firefox can, and does.** On the same test video:
+
+| Browser | Frames it failed to show | CPU used |
+|---|---|---|
+| **Firefox** (hardware decoding on) | **1 in 400** | 64% of one core |
+| Thorium | 1 in 37 | 99% of one core |
+| Chrome | **1 in 5** | 93% of one core |
+
+One in five dropped frames is what visible stutter looks like. One in 400 is
+indistinguishable from perfect.
+
+A second, smaller point: **YouTube sends this machine AV1 by default**, a newer format
+this GPU has no circuit for and is expensive to decode in software. Asking for the
+older H.264 helps in any browser, and is what makes the Firefox result possible at all
+— the hardware circuit only understands H.264.
+
+### What to do
+
+1. **Watch video in Firefox.** This is the whole win. Nothing else comes close.
+2. **In Firefox, turn off VP9 and AV1** so YouTube sends H.264, which is the format
+   the hardware can decode. Prefs are listed below.
+3. **Prefer Thorium over Chrome** for everything else. It is measurably the better
+   Chromium on this machine — just not a video player.
+4. `enhanced-h264ify` in Chrome or Thorium is a small free improvement, worth having,
+   not worth much.
+5. **Do not chase hardware video encoding.** It is broken at the driver level here.
+
+Everything below is the evidence and the exact settings.
 
 ## The headline correction
 
@@ -160,6 +199,39 @@ entrypoint" finding already recorded.
 **There is no working H.264 hardware encoder on this machine, in any driver.**
 Chrome's refusal to use it costs nothing. Close this thread for good: an
 advertised VA-API entrypoint is a claim, and this one is false.
+
+## Thorium: really is better than Chrome, and still software
+
+Thorium 152 is installed here (`152.0.7977.55 stable, built on Ubuntu (AVX2)`). The
+impression that it handles video better than Chrome is **correct and measurable** —
+and the reason is not hardware decoding.
+
+Chrome and Thorium interleaved, two samples each, same clip and window as above:
+
+| Sample | CPU | Frames dropped |
+|---|---:|---:|
+| chrome-1 | 97.87% | 315 / 1555 — 20.3% |
+| thorium-1 | 98.85% | 46 / 1614 — 2.9% |
+| chrome-2 | 88.57% | 303 / 1616 — 18.8% |
+| thorium-2 | 99.96% | 40 / 1614 — 2.5% |
+| **Chrome mean** | **93.22%** | **19.5%** |
+| **Thorium mean** | **99.41%** | **2.7%** |
+
+**Thorium drops about a seventh of what Chrome drops**, and the effect dwarfs the
+spread (1.5 points within Chrome, 0.4 within Thorium). It buys that with about six
+points more CPU: it is not cheaper, it is *faster*, which is exactly what an AVX2
+build of the same Chromium should be. Chrome gave up and dropped frames; Thorium
+spent the cycles and kept them.
+
+**But it is still software.** `kVideoDecoderName` is `FFmpegVideoDecoder` with
+`kIsPlatformVideoDecoder: false`, and it stays that way with `--ignore-gpu-blocklist`
+and every VA-API feature spelling forced. Thorium carries the same Chromium decode
+code and the same symbols. **The whole Chromium family is locked out of this GPU's
+decoder here.** Only Firefox gets in.
+
+So Thorium is the right Chromium to use on this machine, and it is still the wrong
+tool for a long video: it holds 60 fps by burning a full core, where Firefox holds
+it on 64% of one.
 
 ## Firefox does use the decoder. Same machine, same clip.
 

@@ -42,7 +42,7 @@ def processes():
             # so comm alone misses most of the browser. Group them by executable.
             if os.readlink(path / "exe").startswith("/usr/lib/firefox/"):
                 name = "firefox"
-            elif name not in {"ChatGPT", "chrome", "chromium", "codex", "Xorg", "xfwm4", "pipewire"} and "genmon" not in name:
+            elif name not in {"ChatGPT", "chrome", "chromium", "thorium", "codex", "Xorg", "xfwm4", "pipewire"} and "genmon" not in name:
                 continue
             stat = (path / "stat").read_text()
             fields = stat[stat.rindex(")") + 2:].split()
