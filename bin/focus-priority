@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# focus-priority — give the machine to the window you are looking at.
+#
+# systemd already puts each application in its own cgroup scope
+# (app-com.anthropic.Claude-49554.scope). This follows _NET_ACTIVE_WINDOW,
+# resolves the focused window to its scope, and raises that scope's CPU weight
+# and memory protection while lowering everyone else's.
+#
+# On two cores, background Electron renderers competing with the foreground one
+# is the most-felt contention on this machine. A cgroup is the right unit here:
+# the focused window's PID is one process, but its renderers, its GPU process
+# and its helpers are all in the same scope, so weighting the scope weights the
+# whole application without having to enumerate it.
+#
+# No root. No polling: xprop -spy blocks until the focus actually changes, so
+# this costs nothing between windows.
+#
+#   focus-priority --check      what is available and what is set right now
+#   focus-priority --undo       clear everything this has set
+#   focus-priority              run in the foreground
+#
+# See docs/feel.md.
+set -uo pipefail
+
+FOCUS_WEIGHT=${FOCUS_WEIGHT:-400}     # cgroup cpu.weight for the focused app (default 100)
+BG_WEIGHT=${BG_WEIGHT:-50}            # ...and for everything else
+FOCUS_LOW=${FOCUS_LOW:-536870912}     # memory.low: 512M the focused app keeps under pressure
+
+APPSLICE=/sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/app.slice
+
+scopes() { find "$APPSLICE" -mindepth 1 -maxdepth 1 -name 'app-*.scope' -type d 2>/dev/null; }
+
+# cpu.weight does not exist on an application scope until the cpu controller is
+# enabled in app.slice's subtree_control, and systemd only does that when a unit
+# inside app.slice asks for it — which no desktop-launched scope does. The
+# subtree is delegated to this user, so we can enable it ourselves. Idempotent,
+# and neutral: every scope simply gains the default weight of 100.
+ensure_cpu() {
+  grep -qw cpu "$APPSLICE/cgroup.subtree_control" && return 0
+  grep -qw cpu "$APPSLICE/cgroup.controllers" || return 1
+  echo "+cpu" > "$APPSLICE/cgroup.subtree_control" 2>/dev/null
+}
+
+have() { [ -w "$1/$2" ]; }
+
+set_knob() {                          # set_knob DIR FILE VALUE
+  have "$1" "$2" || return 1
+  echo "$3" > "$1/$2" 2>/dev/null || return 1
+}
+
+scope_of_pid() {                      # scope_of_pid PID -> cgroup dir, or empty
+  local line
+  read -r line < "/proc/$1/cgroup" 2>/dev/null || return 1
+  line=${line#0::}
+  case "$line" in
+    */app-*.scope) echo "/sys/fs/cgroup$line" ;;
+    *) return 1 ;;
+  esac
+}
+
+focused_pid() {                       # -> pid of the active window's owner
+  local win pid
+  win=$(xprop -root _NET_ACTIVE_WINDOW 2>/dev/null) || return 1
+  # "window id # 0x5400004, 0x0" — two ids, and the one that matters is the
+  # first. Taking the last field yields 0x0 and silently resolves nothing.
+  win=${win#*\# }
+  win=${win%%,*}
+  case "$win" in 0x0|'') return 1 ;; esac
+  pid=$(xprop -id "$win" _NET_WM_PID 2>/dev/null) || return 1
+  pid=${pid##* }
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  echo "$pid"
+}
+
+apply() {                             # apply FOCUSED_SCOPE
+  local focused=$1 s
+  for s in $(scopes); do
+    if [ "$s" = "$focused" ]; then
+      set_knob "$s" cpu.weight  "$FOCUS_WEIGHT" || true
+      set_knob "$s" memory.low  "$FOCUS_LOW"    || true
+    else
+      set_knob "$s" cpu.weight  "$BG_WEIGHT"    || true
+      set_knob "$s" memory.low  0               || true
+    fi
+  done
+}
+
+case "${1:-}" in
+  --check)
+    echo "app.slice:       $APPSLICE"
+    ensure_cpu || true
+    echo "cpu.weight:      $(grep -qw cpu "$APPSLICE/cgroup.subtree_control" 2>/dev/null && echo 'enabled on app scopes' || echo 'NOT available')"
+    echo "io controller:   $(grep -qw io "$APPSLICE/cgroup.controllers" 2>/dev/null && echo yes || echo 'no — needs +io at the system level, and io.weight needs BFQ')"
+    printf '\n%-52s %-10s %s\n' SCOPE cpu.weight memory.low
+    for s in $(scopes); do
+      printf '%-52s %-10s %s\n' "$(basename "$s")" \
+        "$(cat "$s/cpu.weight" 2>/dev/null || echo -)" \
+        "$(cat "$s/memory.low" 2>/dev/null || echo -)"
+    done
+    exit 0 ;;
+  --undo)
+    for s in $(scopes); do
+      set_knob "$s" cpu.weight 100 || true
+      set_knob "$s" memory.low 0   || true
+    done
+    echo "cleared"; exit 0 ;;
+  "") ;;
+  *) echo "usage: $0 [--check|--undo]" >&2; exit 2 ;;
+esac
+
+command -v xprop >/dev/null || { echo "needs xprop (x11-utils)" >&2; exit 1; }
+[ -n "${DISPLAY:-}" ] || { echo "needs an X display" >&2; exit 1; }
+[ -d "$APPSLICE" ] || { echo "no app.slice at $APPSLICE" >&2; exit 1; }
+
+trap '"$0" --undo >/dev/null 2>&1' EXIT TERM INT
+
+ensure_cpu || echo "warning: cpu.weight is not available on app scopes; memory.low only" >&2
+echo "focus-priority: weighting the active window's scope $FOCUS_WEIGHT against $BG_WEIGHT"
+last=""
+apply "$(scope_of_pid "$(focused_pid || echo 1)" 2>/dev/null || echo none)"
+
+# Blocks until the focus changes. One xprop, for the life of the session.
+xprop -root -spy _NET_ACTIVE_WINDOW 2>/dev/null | while read -r _; do
+  pid=$(focused_pid) || continue
+  scope=$(scope_of_pid "$pid") || continue
+  [ "$scope" = "$last" ] && continue
+  last=$scope
+  apply "$scope"
+done
