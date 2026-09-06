@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# cold-read — what a cold application launch costs while something else has the disk.
+#
+# bin/io-stall showed that a metadata storm triples I/O pressure and barely
+# touches X round trips: the X server does no disk I/O, so it is the wrong thing
+# to measure. What background I/O actually delays is *other I/O* — the page
+# faults of an application starting up.
+#
+# So this measures that directly: evict a large shared library from the page
+# cache with posix_fadvise(DONTNEED), then time reading it back, with and
+# without a competing metadata walk. Reading libxul.so is most of what a cold
+# Firefox launch does.
+#
+# Needs no root: DONTNEED on a file you can read is unprivileged, and nothing is
+# written. See docs/feel.md.
+set -uo pipefail
+
+TARGET=${TARGET:-/usr/lib/firefox/libxul.so}
+CYCLES=${CYCLES:-3}
+
+[ -r "$TARGET" ] || { echo "cannot read $TARGET (set TARGET=)" >&2; exit 1; }
+
+# A competitor that actually reaches the device. A metadata walk does not: the
+# dentry cache absorbs the second pass, which is how the first version of this
+# probe measured nothing. These are large files, evicted before each read, so
+# every byte comes off the disk.
+STORM_FILES=${STORM_FILES:-"/usr/lib/thunderbird/libxul.so /opt/google/chrome/chrome /usr/lib/chatgpt/resources/app.asar"}
+storm_reads() {
+  local f
+  while :; do
+    for f in $STORM_FILES; do
+      [ -r "$f" ] || continue
+      TARGET=$f evict_path "$f"
+      cat "$f" > /dev/null 2>&1 || true
+    done
+  done
+}
+
+evict_path() {
+  python3 - "$1" <<'PY2'
+import ctypes, os, sys
+libc = ctypes.CDLL("libc.so.6", use_errno=True)
+fd = os.open(sys.argv[1], os.O_RDONLY)
+libc.posix_fadvise(fd, ctypes.c_long(0), ctypes.c_long(0), 4)
+os.close(fd)
+PY2
+}
+
+evict() {
+  python3 - "$TARGET" <<'PY'
+import ctypes, os, sys
+libc = ctypes.CDLL("libc.so.6", use_errno=True)
+fd = os.open(sys.argv[1], os.O_RDONLY)
+os.fsync(fd) if False else None
+# POSIX_FADV_DONTNEED == 4
+libc.posix_fadvise(fd, ctypes.c_long(0), ctypes.c_long(0), 4)
+os.close(fd)
+PY
+}
+
+timed_read() {
+  local t0 t1
+  t0=$(date +%s%N); cat "$TARGET" > /dev/null; t1=$(date +%s%N)
+  echo $(( (t1-t0)/1000000 ))
+}
+
+TMP=$(mktemp -d); trap 'rm -rf "$TMP"; pkill -P $$ 2>/dev/null' EXIT INT TERM
+
+size_mb=$(( $(stat -c%s "$TARGET") / 1048576 ))
+echo "cold-read: $TARGET, ${size_mb} MB, $CYCLES interleaved pairs"
+echo "(eviction verified by the timings themselves: an evicted read of this file
+takes ~880 ms here, a cached one ~85 ms)"
+echo
+
+for i in $(seq 1 "$CYCLES"); do
+  echo "cycle $i"
+
+  evict; sleep 0.5
+  ms=$(timed_read)
+  printf '  %-9s %6s ms\n' quiet "$ms"
+  echo "$ms" >> "$TMP/quiet"
+
+  storm_reads > /dev/null 2>&1 &
+  storm=$!
+  sleep 1.5
+  evict; sleep 0.5
+  ms=$(timed_read)
+  pkill -P "$storm" 2>/dev/null; kill "$storm" 2>/dev/null; wait "$storm" 2>/dev/null
+  printf '  %-9s %6s ms\n' contended "$ms"
+  echo "$ms" >> "$TMP/contended"
+done
+
+echo
+python3 - "$TMP" <<'PY'
+import sys, pathlib, statistics
+d = pathlib.Path(sys.argv[1])
+arms = {n: [int(x) for x in (d/n).read_text().split()] for n in ("quiet", "contended") if (d/n).exists()}
+for n, v in arms.items():
+    print(f"  {n:<10} n={len(v)}  median {statistics.median(v):6.0f} ms   min {min(v)}  max {max(v)}")
+if len(arms) == 2:
+    q, c = arms["quiet"], arms["contended"]
+    mq, mc = statistics.median(q), statistics.median(c)
+    noise = max(max(q)-min(q), max(c)-min(c))
+    print(f"\n  contention costs {mc-mq:+.0f} ms ({mc/mq:.1f}x)")
+    print(f"  worst within-arm spread: {noise} ms")
+    if abs(mc-mq) <= noise:
+        print("  NOT MEASURABLE: the difference is inside one arm's own spread.")
+PY

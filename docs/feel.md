@@ -97,32 +97,50 @@ roughly 225 ms / 33 Hz, which is close to what is set here.
 This changes no work the machine does. It was the highest felt value per minute
 of effort on the list, and it is done.
 
-### 2. Fix the worst moments, not the average — **built, needs one root command**
+### 2. Fix the worst moments, not the average — **built, measured, needs one root command**
 
 The SSD controller takes **one command at a time** (`qdepth_one`), and
 `nr_requests` is **2**. A background job therefore does not *share* this disk
-with the desktop. It takes it. Twelve maintenance units fire on their own
-timers and do exactly that: `apt-daily`, `apt-daily-upgrade`,
-`plocate-updatedb`, `man-db`, `e2scrub_all`, `fstrim`, `motd-news`,
-`fwupd-refresh`, `anacron`, `logrotate`, `dpkg-db-backup`,
-`systemd-tmpfiles-clean`.
-
-These move no average. They are the "why is it frozen" minutes, and those are
-what a person remembers. `io` PSI `some avg10` was **3.49** while this was being
-written — the machine is already waiting on that disk.
+with the desktop. It takes it. Twelve maintenance units fire on their own timers
+and do exactly that: `apt-daily`, `apt-daily-upgrade`, `plocate-updatedb`,
+`man-db`, `e2scrub_all`, `fstrim`, `motd-news`, `fwupd-refresh`, `anacron`,
+`logrotate`, `dpkg-db-backup`, `systemd-tmpfiles-clean`.
 
 [`bin/quiet-timers`](../bin/quiet-timers) installs a drop-in on each one.
 `--check` is read-only and needs no root; `--undo` removes them.
 
-**The obvious fix does not work here, and that is worth recording.**
-`IOSchedulingClass=idle` is *already* set on `plocate-updatedb`, `man-db` and
-`systemd-tmpfiles-clean` by their packages — and it does nothing, because
-**mq-deadline does not implement I/O priorities**. Only BFQ does, and BFQ is not
-loaded (and switching to it would reopen a scheduler question this repository
-already settled by measurement). So ionice is inert on this machine no matter
-who sets it.
+**What that is worth was measured, and it is not what this entry first claimed.**
+The original claim — that a busy disk makes the desktop go to glue — did not
+reproduce. A 512 MB write and a full metadata walk of `/` each left X round trips
+essentially untouched, while I/O pressure tripled. The X server does no disk
+I/O; it was the wrong probe for the question.
 
-What is enforced regardless of elevator is blk-throttle, at the block layer:
+What a busy disk *does* cost is **application launches**.
+[`bin/cold-read`](../bin/cold-read) evicts a 177 MB library and times reading it
+back:
+
+```
+quiet      median   905 ms
+contended  median  1668 ms      +763 ms, 1.8x, arms not overlapping
+```
+
+And cold versus cached on the same file is **881 ms against 85 ms** — a factor
+of ten. All three runs, including the two that found nothing:
+[2026-09-06-io-contention.md](measurements/2026-09-06-io-contention.md).
+
+So this change is worth having, for a narrower and better-understood reason than
+the one it started with: it keeps a timer from doubling the launch time of the
+next thing you open.
+
+**The obvious way to do it does not work here, and that is worth recording.**
+`IOSchedulingClass=idle` is *already* set on `plocate-updatedb`, `man-db` and
+`systemd-tmpfiles-clean` by their own packages — and does nothing, because
+**mq-deadline implements no I/O priorities**. Only BFQ does, and BFQ is not
+loaded (switching to it would reopen a scheduler question this repository
+already settled by measurement). ionice is inert on this machine no matter who
+sets it.
+
+What is enforced whatever the elevator is, is blk-throttle:
 
 ```
 Nice=19
@@ -133,19 +151,14 @@ IOSchedulingClass=idle            # inert here; kept for a scheduler that honour
 ```
 
 Setting any `IO*` property is also what makes systemd enable the `io` controller
-down `cgroup.subtree_control`, which is currently `cpu memory pids` — so the
+down `cgroup.subtree_control`, which is otherwise `cpu memory pids` — the
 throttle knobs do not exist until a unit asks for them.
 
-Not yet applied: this needs root and no password is available to this session.
+Not yet applied: needs root, and no password is available to this session.
 
 ```bash
 sudo bin/quiet-timers        # then: bin/quiet-timers --check
 ```
-
-Untested claim, stated as one: the caps are chosen to leave the desktop most of
-a ~222 MB/s device, not measured against a timer actually running. The honest
-test is to run `plocate-updatedb` by hand with and without the drop-in and watch
-`io` PSI, which nobody has done yet.
 
 ### 3. Cap the sustained, not the burst — **measured, built, running**
 
@@ -297,23 +310,63 @@ changing numbers in `cpu.weight`. With one scope in play it very likely does not
 yet. The measurement to make is `bin/desktop-latency`-shaped, with a real second
 application competing.
 
-### 6. Writeback in bytes, not percent
+### 6. Writeback in bytes, not percent — **written, unproven, needs root**
 
-`vm.dirty_ratio=20` of 7.8 GB is ~1.5 GB of dirty pages that can be handed, all
-at once, to a disk that accepts one command at a time. `vm.dirty_bytes` around
-64 MB (background 32 MB) makes a large save trickle instead of stalling the UI.
+`vm.dirty_ratio` is 20% of 7.8 GB: roughly **1.5 GB** of dirty pages that can be
+handed at once to a device that accepts one command at a time. `vm.dirty_bytes`
+of 64 MB (background 32 MB) makes a large save trickle instead of arriving as a
+wall. `watermark_scale_factor` is the default **10**, so `kswapd` starts late
+and the machine can reach *direct* reclaim — which is what a freeze is; 100
+trades a little held-back memory for not getting there.
 
-Related: `watermark_scale_factor` is the default **10**, so `kswapd` starts late
-and the machine reaches *direct* reclaim — which is what a freeze is. 100–200
-trades a little RAM for never getting there.
+Both are in [`config/sysctl.d/99-mintbook-feel.conf`](../config/sysctl.d/99-mintbook-feel.conf).
 
-### 7. Warm the page cache for the apps you actually launch
+**Unproven, and the one test run argues against it.** The 512 MB write in
+measurement 1 above never came close to the 1.5 GB limit and disturbed nothing,
+so the stall this is meant to prevent was not reproduced. What was *not* tested
+is an application launch during a large write — which, given what item 2 found,
+is where the cost would actually show. That test is the one to run before
+applying this.
 
-One command at a time, ~222 MB/s, and 2.8 GB of RAM sitting free. A login- or
-idle-time warm of the binaries and mapped libraries of the five apps in daily
-use converts cold launches into warm ones, using memory that is otherwise idle.
-`vmtouch` is not installed; a read loop over `/proc/*/maps` of the previous
-session's apps does the same thing.
+```bash
+sudo install -m644 config/sysctl.d/99-mintbook-feel.conf /etc/sysctl.d/
+sudo sysctl -p /etc/sysctl.d/99-mintbook-feel.conf
+# undo: rm the file, then
+# sudo sysctl -w vm.dirty_ratio=20 vm.dirty_background_ratio=10 vm.watermark_scale_factor=10
+```
+
+It is a trade in the direction of smoothness over bulk write throughput, and on
+a `qdepth_one` device that is probably the right direction — but "probably" is
+not a measurement, and this file does not pretend otherwise.
+
+### 7. Warm the page cache for the apps you actually launch — **built, running**
+
+Cold and cached, for the same 177 MB library, on this disk:
+
+```
+evicted   881 ms
+cached     85 ms      10x
+```
+
+There is 5.0 GB of memory available and the apps worth warming come to
+**624 MB**. [`bin/warm-cache`](../bin/warm-cache) reads each app's binary, its
+libraries and its install directory into the page cache, using memory that is
+otherwise idle to spend nothing and remove that wait. The kernel remains free to
+drop any of it under pressure, which is the correct behaviour.
+
+Resolving an app to its files is the part that needed care: `firefox` and
+`google-chrome` are wrapper scripts, and their real weight — `libxul.so` is
+177 MB — is `dlopen`ed, so it appears in no `ldd` output. The script takes the
+install directory's own shared objects as well.
+
+```bash
+systemctl --user enable --now mintbook-warm-cache.timer   # installed; runs 3 min after login
+bin/warm-cache --check                                    # what it would read, and free memory
+```
+
+Not measured: whether a warmed Firefox actually *starts* faster, as opposed to
+reading faster. Proving that needs `drop_caches`, which needs root, and a real
+launch after a real boot.
 
 ### 8. Remove a frame
 

@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# io-stall — what a bulk write does to the desktop.
+#
+# This SSD controller accepts one command at a time (qdepth_one, docs/hardware.md)
+# and vm.dirty_ratio is 20% of 7.8 GB, so a single large save can hand roughly
+# 1.5 GB of dirty pages to a device that cannot queue. This measures the cost of
+# that to the desktop, in X round trips and in I/O pressure.
+#
+# Writes a temporary file under $TMPDIR (default /var/tmp, on the root
+# filesystem — the point is to hit the real disk) and removes it, including on
+# interrupt. Needs no root.
+set -uo pipefail
+
+MB=${MB:-512}
+MODE=${MODE:-write}             # write | find — a bulk write, or a metadata storm
+DIR=${TMPDIR:-/var/tmp}
+SAMPLES=${SAMPLES:-10}
+
+command -v xdpyinfo >/dev/null || { echo "needs xdpyinfo (x11-utils)" >&2; exit 1; }
+[ -n "${DISPLAY:-}" ] || { echo "needs an X display" >&2; exit 1; }
+
+F=$(mktemp "$DIR/io-stall.XXXXXX")
+TMP=$(mktemp -d)
+cleanup() { rm -f "$F"; rm -rf "$TMP"; }
+trap cleanup EXIT INT TERM
+
+psi() { awk -F'avg10=' '/^some/{split($2,a," "); print a[1]}' /proc/pressure/io; }
+
+sample() {                      # sample LABEL
+  local t0 t1
+  t0=$(date +%s%N); xdpyinfo >/dev/null 2>&1; t1=$(date +%s%N)
+  echo $(( (t1-t0)/1000000 )) >> "$TMP/$1"
+  psi >> "$TMP/$1.psi"
+}
+
+case "$MODE" in
+  write) echo "io-stall: ${MB} MB written to $DIR, X round trips sampled throughout" ;;
+  find)  echo "io-stall: full metadata walk of /, X round trips sampled throughout" ;;
+esac
+echo
+
+for _ in $(seq 1 "$SAMPLES"); do sample quiet; sleep 0.2; done
+
+case "$MODE" in
+  write) dd if=/dev/zero of="$F" bs=1M count="$MB" conv=fsync status=none & ;;
+  # What plocate-updatedb and apt actually do: a metadata storm, random and
+  # small, which is the case a sequential write does not reproduce.
+  find)  find / -xdev -mount > /dev/null 2>&1 & ;;
+  *) echo "MODE must be write or find" >&2; exit 2 ;;
+esac
+DD=$!
+while kill -0 "$DD" 2>/dev/null; do sample writing; sleep 0.2; done
+wait "$DD" 2>/dev/null
+
+python3 - "$TMP" <<'PY'
+import sys, pathlib, statistics
+d = pathlib.Path(sys.argv[1])
+def pct(v, p):
+    v = sorted(v); return v[min(len(v)-1, int(round((p/100)*(len(v)-1))))]
+for name in ("quiet", "writing"):
+    f, fp = d / name, d / f"{name}.psi"
+    if not f.exists(): continue
+    v = [int(x) for x in f.read_text().split()]
+    p = [float(x) for x in fp.read_text().split()] if fp.exists() else [0.0]
+    print(f"  {name:<8} n={len(v):<3} median {statistics.median(v):5.0f} ms   "
+          f"p95 {pct(v,95):5.0f} ms   max {max(v):5.0f} ms   io PSI some avg10 max {max(p):5.1f}")
+PY
