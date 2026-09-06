@@ -1,0 +1,104 @@
+{
+  "date": "2026-09-06",
+  "clip": "1500 frames 1280x720@60 H.264 High, 25.0 s, encoded locally with x264enc speed-preset=fast",
+  "note": "CPU is percent of ONE logical CPU; four threads means a 400% ceiling. Frame counts read from HTMLVideoElement.getVideoPlaybackQuality() published into the window title and read back with xdotool.",
+  "local_clip": [
+    {
+      "browser": "chrome",
+      "version": "152.0.7977.82",
+      "hardware_decode": false,
+      "reason": "Chrome never uses VA-API on this machine; see video.md",
+      "cpu_pct_total": 95.2,
+      "roles": {
+        "renderer": 52.14,
+        "gpu-process": 37.4,
+        "main": 2.75,
+        "passage_embeddings.mojom.PassageEmbeddingsService": 2.68,
+        "network.mojom.NetworkService": 0.15,
+        "storage.mojom.StorageService": 0.08
+      },
+      "frames_total": 1612,
+      "frames_dropped": 318
+    },
+    {
+      "browser": "firefox",
+      "version": "155.0.1",
+      "hardware_decode": true,
+      "reason": "media.hardware-video-decoding enabled; i965_drv_video.so mapped in the RDD process",
+      "cpu_pct_total": 63.77,
+      "roles": {
+        "firefox-bin": 33.4,
+        "file:// Content": 15.05,
+        "RDD Process": 14.07,
+        "Privileged Cont": 0.64,
+        "Isolated Web Co": 0.27,
+        "WebExtensions": 0.23,
+        "Web Content": 0.11
+      },
+      "frames_total": 1624,
+      "frames_dropped": 4
+    },
+    {
+      "browser": "firefox",
+      "version": "155.0.1",
+      "hardware_decode": false,
+      "reason": "media.hardware-video-decoding.enabled=false; no VA driver mapped in the RDD process",
+      "cpu_pct_total": 66.68,
+      "roles": {
+        "firefox-bin": 27.04,
+        "RDD Process": 25.25,
+        "file:// Content": 13.97,
+        "WebExtensions": 0.15,
+        "Privileged Cont": 0.11,
+        "Isolated Web Co": 0.08,
+        "Web Content": 0.08
+      },
+      "frames_total": 1623,
+      "frames_dropped": 504
+    }
+  ],
+  "youtube_720p60": {
+    "browser": "firefox",
+    "forced_h264_via": "media.mediasource.vp9.enabled=false, media.av1.enabled=false",
+    "codec": "h264",
+    "va_driver_in_rdd": "i965_drv_video.so",
+    "cpu_pct_total": 105.55,
+    "roles": {
+      "firefox-bin": 52.71,
+      "Isolated Web Co": 36.03,
+      "RDD Process": 13.11,
+      "Utility Process": 2.52,
+      "Privileged Cont": 0.83,
+      "Isolated Servic": 0.23,
+      "Web Content": 0.08
+    },
+    "frames_not_measured": "YouTube page; no injection path in Firefox, so drop rate was not captured here"
+  },
+  "gstreamer_decode_only": {
+    "software_avdec_h264": {
+      "wall_s": [
+        4.63,
+        4.25,
+        4.46
+      ],
+      "cpu_seconds": [
+        7.76,
+        7.68,
+        8.05
+      ]
+    },
+    "hardware_vah264dec": {
+      "wall_s": [
+        2.52,
+        2.56,
+        2.52
+      ],
+      "cpu_seconds": [
+        0.53,
+        0.6,
+        0.57
+      ]
+    },
+    "note": "decode to fakesink sync=false, i.e. unthrottled; divide CPU seconds by 25 s of video for the realtime equivalent"
+  }
+}

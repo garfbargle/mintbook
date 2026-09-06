@@ -60,10 +60,12 @@ changed, what it was worth, and the six things that turned out to be wrong.
 Reduce motion change: 62% lower app CPU in the sampled active-task view,
 with raw measurements, undo steps, and the next-session handoff.
 
-[Video](docs/video.md) records the 2026-09-06 playback pass: Chrome decodes
-video **in software here whatever `chrome://gpu` claims**, YouTube's default on
-this machine is AV1 rather than VP9, and forcing H.264 buys about 11% of Chrome's
-CPU without making 720p60 playable.
+[Video](docs/video.md) records the 2026-09-06 playback pass. **Watch video in
+Firefox.** It hardware-decodes H.264 through the i965 driver and plays 720p60 with
+**0.2%** of frames dropped; Chrome cannot use the decoder at all and drops **20%**
+of the same clip. Chrome's `chrome://gpu` claims hardware decode and is describing
+the driver, not itself. Hardware H.264 *encode* is advertised by the driver and
+crashes.
 
 After a kernel update, run `bin/doctor`. It checks every piece this machine needs —
 firmware, DKMS modules, the DSDT override, udev and systemd units, the panel — and

@@ -5,9 +5,11 @@ Forcing H.264 instead of AV1 is a real but modest win: about **11% less Chrome C
 and roughly a **quarter fewer dropped frames**. It does not make 720p60 playable.
 
 **The hardware decoder itself is fine — and costs one fourteenth of the CPU.**
-GStreamer's `vah264dec` decodes 720p60 at 22% of one core where software needs 176%.
-Chrome just will not use it. **Hardware H.264 encode, by contrast, is not gated but
-broken:** the i965 encoder advertises the entrypoint and then aborts.
+GStreamer's `vah264dec` needs 0.023 CPU-seconds per second of 720p60 video where
+software needs 0.313. Chrome just will not use it. **Firefox will**, and the same
+clip that costs Chrome a fifth of its frames plays in Firefox with 0.2% dropped.
+**Hardware H.264 encode, by contrast, is not gated but broken:** the i965 encoder
+advertises the entrypoint and then aborts.
 
 ## The headline correction
 
@@ -122,6 +124,11 @@ so that nothing had to be downloaded.
 
 **Hardware decode costs about one fourteenth of the CPU** — 0.023 CPU-seconds per
 second of video against 0.313 — and finishes in a little over half the wall time.
+
+The percentage column is **not** a playback figure: `sync=false` decodes as fast as
+the machine allows, which was about 5.6x realtime for software. Divide the CPU
+seconds by the clip's 25 s to get the realtime equivalent — **31.3% of one core for
+software, 2.3% for hardware.**
 The three repetitions are tight: the widest software spread is 0.38 s of wall time
 against a 1.92 s effect.
 
@@ -153,6 +160,95 @@ entrypoint" finding already recorded.
 **There is no working H.264 hardware encoder on this machine, in any driver.**
 Chrome's refusal to use it costs nothing. Close this thread for good: an
 advertised VA-API entrypoint is a claim, and this one is false.
+
+## Firefox does use the decoder. Same machine, same clip.
+
+This is the finding worth acting on. Firefox 155 hardware-decodes H.264 here and
+plays 720p60 essentially perfectly, where Chrome drops a fifth of the frames.
+
+Same local clip, same 1280x720 element, each browser measured alone with
+[`bin/app-probe`](../bin/app-probe) while its window was focused. Frame counts come
+from `getVideoPlaybackQuality()` published into the window title and read back with
+`xdotool`, so they are the browser's own accounting.
+
+| Browser | Decode | CPU | Frames dropped |
+|---|---|---:|---:|
+| Chrome 152 | software (no choice) | 95.2% | **318 / 1612 — 19.7%** |
+| Firefox 155, hardware decoding **off** | software | 66.7% | **504 / 1623 — 31.1%** |
+| Firefox 155, hardware decoding **on** | **VA-API** | 63.8% | **4 / 1624 — 0.2%** |
+
+**Read the frame column, not the CPU column.** The two Firefox rows are only three
+points apart on CPU, which looks like the hardware decoder barely helps. It is an
+artefact: the software run was *dropping a third of its frames*, so it was doing
+less work for its 66.7%. The hardware run did all the work for less. CPU alone
+would have led to the wrong conclusion here.
+
+Isolating the decoder makes it unambiguous — Firefox decodes in a separate
+`RDD Process`, so it can be read on its own:
+
+| | RDD Process CPU | VA driver mapped in RDD |
+|---|---:|---|
+| hardware decoding on | **14.07%** | `i965_drv_video.so` |
+| hardware decoding off | 25.25% | none |
+
+The driver is mapped only in the hardware case, and only while H.264 plays. That is
+the same `i965` this machine forces in [hardware.md](hardware.md) — **so the driver
+work was worth something after all, just not to Chrome.**
+
+### End to end on YouTube
+
+Firefox with VP9 and AV1 turned off, on the same 720p60 video Chrome was tested
+with:
+
+| | Chrome, forced H.264 | Firefox, forced H.264 |
+|---|---:|---:|
+| Total browser CPU | 162.32% | **105.55%** |
+| Decoder process | not separable | **13.11%** |
+| Codec served | `avc1.4d4020` | `h264` |
+| VA driver in decoder | none | **`i965_drv_video.so`** |
+
+**Frame drops on YouTube were not measured for Firefox** — there is no injection
+path into a Firefox page the way there is over Chrome's DevTools protocol, and the
+title trick only works on a page we control. The local-clip result above is the
+frame-drop evidence; this table is CPU and decoder identity only.
+
+### The configuration that was tested
+
+In a throwaway profile:
+
+```
+media.hardware-video-decoding.enabled       true      // the actual VA-API gate
+media.hardware-video-decoding.force-enabled true
+media.mediasource.vp9.enabled               false     // make YouTube serve H.264
+media.av1.enabled                           false
+media.webm.enabled                          false
+gfx.webrender.all                           true
+gfx.x11-egl.force-enabled                   true
+```
+
+plus `MOZ_X11_EGL=1` in the environment.
+
+**Which of these are actually required was not isolated** — they were set together
+and the result was measured as a set. `media.hardware-video-decoding.enabled` is
+certainly load-bearing, since flipping that one alone turned VA-API off and the
+frame drops on. `media.webm.enabled=false` is the most suspicious of the rest: it
+is heavier than needed and will affect sites beyond YouTube. Narrowing this to the
+minimum set is the obvious next job, and none of it is installed on the real
+profile yet.
+
+Two things that are **not** the gate, despite looking like it:
+`media.ffmpeg.vaapi.enabled`, which every guide still recommends, **is not a pref in
+Firefox 155 at all** — it is absent from `libxul.so`, so setting it does nothing.
+And the log description stays `ffmpeg video decoder` whether or not VA-API is in
+use; it is not a hardware indicator. Check the RDD process for a mapped
+`*_drv_video.so` instead.
+
+### What to do
+
+**Watch video in Firefox on this machine, with VP9 and AV1 disabled.** That is the
+whole recommendation. It is the difference between 0.2% and 20% of frames dropped
+at 720p60. `enhanced-h264ify` in Chrome remains a small, free improvement for
+whatever stays in Chrome, but it is not in the same category as this.
 
 ## Method
 

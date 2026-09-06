@@ -38,7 +38,11 @@ def processes():
     for path in Path("/proc").glob("[0-9]*"):
         try:
             name = (path / "comm").read_text().strip()
-            if name not in {"ChatGPT", "chrome", "chromium", "codex", "Xorg", "xfwm4", "pipewire"} and "genmon" not in name:
+            # Firefox names its children by role ("RDD Process", "Web Content"),
+            # so comm alone misses most of the browser. Group them by executable.
+            if os.readlink(path / "exe").startswith("/usr/lib/firefox/"):
+                name = "firefox"
+            elif name not in {"ChatGPT", "chrome", "chromium", "codex", "Xorg", "xfwm4", "pipewire"} and "genmon" not in name:
                 continue
             stat = (path / "stat").read_text()
             fields = stat[stat.rindex(")") + 2:].split()
@@ -46,6 +50,9 @@ def processes():
             command = (path / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
             kind = re.search(r"--type=([^ ]+)", command)
             role = kind[1] if kind else "main"
+            if name == "firefox" and not kind:
+                # Firefox has no --type=; its comm already names the role.
+                role = (path / "comm").read_text().strip()
             if role == "utility":
                 subtype = re.search(r"--utility-sub-type=([^ ]+)", command)
                 role = subtype[1] if subtype else role
