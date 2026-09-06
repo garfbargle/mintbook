@@ -487,6 +487,8 @@ picture, not the i965 one.
 | GL path | `gl=egl-angle, angle=opengl`, ozone x11 |
 | GPU process crashes | 0 |
 
+> **SUPERSEDED 2026-09-06 — read the note below this paragraph before acting on it.**
+
 **Decode was already working.** The open question from the session that forced i965
 — whether Chrome used VA-API at all — is answered: it does, and it did so before the
 driver change. There is no decode win to collect here.

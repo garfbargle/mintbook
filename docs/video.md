@@ -322,6 +322,54 @@ whole recommendation. It is the difference between 0.2% and 20% of frames droppe
 at 720p60. `enhanced-h264ify` in Chrome remains a small, free improvement for
 whatever stays in Chrome, but it is not in the same category as this.
 
+## Settled. Do not re-test any of this.
+
+Everything in this list was measured on 2026-09-06 and cost real time. Re-running
+any of it will reproduce the same answer.
+
+| Question | Answer | Do not |
+|---|---|---|
+| Does Chrome use VA-API decode here? | **No.** `FFmpegVideoDecoder`, `kIsPlatformVideoDecoder: false` | Re-read `chrome://gpu` and conclude otherwise — that page describes the driver |
+| Is it because of the i965 driver? | **No.** iHD decodes in software too, both confirmed mapped | Swap the VA driver hoping to fix a browser |
+| Is there a Chrome flag for it? | **No.** `--ignore-gpu-blocklist`, `AcceleratedVideoDecodeLinuxGL`, `kAcceleratedVideoDecodeLinuxGL`, `kAcceleratedVideoDecodeLinuxZeroCopyGL`, `VaapiIgnoreDriverChecks`, `Vaapi`, `--use-gl=angle --use-angle=gl` | Try more spellings; `--vmodule=*vaapi*=2` logs nothing, the path never starts |
+| Is it the MSE path? | **No.** A plain `.mp4` over HTTP decodes in software too | Blame YouTube |
+| Does Thorium fix it? | **No.** Same Chromium decode code, same result under forced flags | Assume a Chromium fork changes this |
+| Does Chrome hardware-*encode*? | **No**, and it does not matter | See the next row |
+| Does *anything* hardware-encode H.264 here? | **No.** `vah264enc` and `vaapih264enc` both abort in `i965_encoder.c:1692` | Trust `vainfo`'s `VAEntrypointEncSlice`; it is advertised and false |
+| Does the hardware *decoder* work? | **Yes, superbly.** `vah264dec`, one fourteenth the CPU | — |
+| Can any browser reach it? | **Firefox only** | — |
+| Is `media.ffmpeg.vaapi.enabled` the Firefox pref? | **No.** It does not exist in Firefox 155 | Follow the guides that still recommend it |
+| Does the Firefox log say "vaapi"? | **No.** It says `ffmpeg video decoder` either way | Use the log description as a hardware signal — check the RDD process for a mapped `*_drv_video.so` |
+
+**The one reliable test**, for any browser, any video:
+
+```bash
+# while the video is playing, find the process that decodes, and look for the driver
+grep -l '_drv_video\.so' /proc/*/maps 2>/dev/null
+```
+
+For Chromium, ask the pipeline over the DevTools protocol instead: `Media.enable`,
+then read `kVideoDecoderName` and `kIsPlatformVideoDecoder`.
+
+## Is Firefox simply the better browser here?
+
+**For video, yes, and not narrowly.** For anything else, this pass does not say.
+Only video playback was measured. General browsing, page-load, memory, and
+extension behaviour were **not** compared, and the desktop-app work in
+[app-performance.md](app-performance.md) is about a different application again.
+
+Two practical caveats before making Firefox the default browser:
+
+- **Firefox does not follow this desktop's scaling.** It keeps its own, and needs
+  `layout.css.devPixelsPerPx` set by hand, or it will look wrong on a 226-DPI
+  panel. See [display.md](display.md).
+- **The pref set below has not been applied to the real profile**, and has not been
+  narrowed to its minimum. `media.webm.enabled=false` in particular is heavier than
+  needed and affects sites beyond YouTube.
+
+The honest summary: **use Firefox to watch video, use Thorium for browsing**, until
+someone measures the rest.
+
 ## Method
 
 Raw samples: [2026-09-06-youtube-codec-ab.json](measurements/2026-09-06-youtube-codec-ab.json).

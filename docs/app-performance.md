@@ -14,16 +14,9 @@ overhead. Keep future comparisons within one workload and interleave settings.
   `reduced-motion-preference = "on"` under `[desktop]` — so it can be checked from
   a script, but this repository does not apply it on a new install.
 - The user wants improvements tackled **one at a time, highest value first**.
-- **Video, updated 2026-09-06.** Chrome's *capability* side is now fully settled:
-  decode is hardware for h264 and vp8 and nothing else, encode is unreachable by
-  configuration. See [hardware.md](hardware.md), Encode with i965 live. Do not
-  re-run `chrome://gpu` exports or try more flags.
-  What is **still unmeasured** is the only lever left: whether pushing a site to
-  serve H.264 instead of VP9/AV1 actually lowers CPU and heat here, and by how
-  much. Measure that on one real video before recommending any extension —
-  `MediaSource.isTypeSupported` can be overridden from the DevTools protocol to
-  force the codec, so the A/B needs no install. Never assume a mapped library
-  proves hardware decoding for a particular video.
+- **Video is done — see [video.md](video.md).** It carries a do-not-re-test table.
+  The short version: no Chromium can reach this GPU's H.264 decoder, Firefox can,
+  and hardware H.264 encode is broken at the driver level. Do not re-open any of it.
 - Subsequent candidates are a fresh real-workload Sustained-profile comparison,
   remaining panel overhead, and sleep recovery. Those were not changed here.
 - Preserve the distinction between reduced CPU overhead, task completion speed,

@@ -170,6 +170,22 @@ that tasks finish 62% faster. Battery savings were not measured on AC.
 See [app-performance.md](app-performance.md) for all four samples, limitations,
 the setting and undo, and the read-only `bin/app-probe`.
 
+## Follow-up: video playback (2026-09-06)
+
+**No Chromium on this machine can use the GPU's H.264 decoder. Firefox can.** On one
+720p60 clip, Firefox dropped **0.2%** of frames on 64% of a core; Thorium dropped
+**2.7%** on a full core; Chrome dropped **19.5%**. The decoder itself is excellent —
+`vah264dec` needs one fourteenth the CPU of software — so this was a browser
+limitation, not a hardware one.
+
+Three claims already in this repository were **wrong and are corrected in place**:
+Chrome's decode was never hardware-accelerated (the `chrome://gpu` list describes the
+driver, not the browser); YouTube's default here is AV1, not VP9; and the H.264
+encode entrypoint `vainfo` advertises does not work — the encoder aborts.
+
+See [video.md](video.md), which carries a **do-not-re-test table** listing every dead
+end with its one-line reason.
+
 ## Still open
 
 - **`i915.enable_fbc`.** Whether FBC is actually on is a root-only debugfs read.
