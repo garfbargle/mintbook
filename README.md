@@ -69,11 +69,17 @@ describing the driver, not itself. Hardware H.264 *encode* is advertised by the
 driver and crashes.
 
 [Feel](docs/feel.md) asks a different question from the other passes: not how
-much work the machine does, but how fast it feels. It records one measurement —
-under load the package hits its **95 °C** limit in under three seconds and holds
-**1700–1900 MHz** of a 2400 MHz maximum, on AC — which means the machine has
-about three seconds of turbo and no sustained fast state to protect. Then ten
-ranked candidates, none applied yet.
+much work the machine does, but how fast it feels. Under load the package hits
+its **95 °C** limit in under three seconds and holds **1700–1900 MHz** of a
+2400 MHz maximum — so the machine has about three seconds of turbo and no
+sustained fast state. The battery cap costs **+36.5%** on a one-second task and
+almost nothing on a long one, so `bin/turbo-budget` now gives back eight
+uncapped seconds per burst and takes the cap for everything after. Background
+disk traffic costs **1.8x** on a cold application read and nothing measurable on
+the compositor. Key repeat was at the X11 default of 500 ms and is now 200.
+
+Ten candidates, with where each one ended up — three of them, including one that
+was already fine, turned out differently from how they were written down.
 
 `bin/firefox-video` applies the two prefs that make YouTube serve H.264 — the one
 format the GPU can decode — and `bin/firefox-video --undo` takes them back out.

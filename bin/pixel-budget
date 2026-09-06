@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# pixel-budget — what the Retina panel costs the GPU, measured.
+#
+# 2304x1440 at 168 DPI on an HD 5300: every frame the compositor draws is
+# 3.3 megapixels. Rendering fewer of them is the largest single lever available
+# for UI smoothness on this GPU — and the only item in docs/feel.md with a real
+# downside, because what it spends is sharpness.
+#
+#   pixel-budget --measure [SCALE]   A/B Xorg and xfwm4 CPU at native vs SCALE
+#   pixel-budget --set SCALE         apply a scale (0.75 renders 1728x1080)
+#   pixel-budget --undo              back to native
+#
+# WARNING: changing the screen size makes the window manager move and resize
+# windows, and they are not put back. Run --measure deliberately, not while you
+# have a layout you care about. Needs no root, and nothing persists across a
+# logout.
+set -uo pipefail
+
+OUT=${OUT:-eDP-1}
+SECS=${SECS:-15}
+PROCS="Xorg xfwm4"
+
+native_mode() { xrandr --current | awk -v o="$OUT" '$1==o{f=1;next} f&&/\*/{print $1;exit}'; }
+
+cpu_of() {                      # cpu_of NAME -> jiffies used by that process
+  local pid total=0 t
+  for pid in $(pgrep -x "$1" || true); do
+    read -r -a f < "/proc/$pid/stat" 2>/dev/null || continue
+    t=$(( f[13] + f[14] ))
+    total=$(( total + t ))
+  done
+  echo "$total"
+}
+
+sample() {                      # sample LABEL SECONDS
+  local label=$1 secs=$2 p before after hz
+  hz=$(getconf CLK_TCK)
+  declare -A before
+  for p in $PROCS; do before[$p]=$(cpu_of "$p"); done
+  sleep "$secs"
+  for p in $PROCS; do
+    after=$(cpu_of "$p")
+    awk -v l="$label" -v n="$p" -v d=$(( after - before[$p] )) -v s="$secs" -v hz="$hz" \
+      'BEGIN{printf "  %-8s %-6s %6.2f%% of one CPU\n", l, n, d/hz/s*100}'
+  done
+}
+
+case "${1:-}" in
+  --set)
+    [ $# -ge 2 ] || { echo "usage: $0 --set SCALE" >&2; exit 2; }
+    xrandr --output "$OUT" --scale "$2x$2"
+    echo "scaled to $2 — framebuffer $(xrandr --current | awk '/current/{print $8 "x" $10}' | tr -d ',')"
+    echo "undo: $0 --undo" ;;
+  --undo)
+    xrandr --output "$OUT" --scale 1x1 --mode "$(native_mode)"
+    echo "back to native $(native_mode)" ;;
+  --measure)
+    scale=${2:-0.75}
+    echo "pixel-budget: ${SECS}s at native, ${SECS}s at scale $scale, ${SECS}s at native again"
+    echo "(windows will be moved and resized, and will not be put back)"
+    echo
+    trap 'xrandr --output "$OUT" --scale 1x1 >/dev/null 2>&1' EXIT INT TERM
+    sample native "$SECS"
+    xrandr --output "$OUT" --scale "${scale}x${scale}"; sleep 2
+    sample scaled "$SECS"
+    xrandr --output "$OUT" --scale 1x1; sleep 2
+    sample native "$SECS"
+    echo
+    echo "Interleaved once. If the two native arms disagree by as much as the"
+    echo "scaled arm differs from them, the measurement is of the machine's mood." ;;
+  *) sed -n '2,16p' "$0" | sed 's/^# \?//'; exit 0 ;;
+esac

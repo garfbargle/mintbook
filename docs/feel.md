@@ -59,6 +59,57 @@ as latency work.
 
 ---
 
+## Where each one ended up
+
+| | idea | state |
+|---|---|---|
+| 1 | Keyboard repeat | **applied** — 500 ms / 20 Hz → 200 / 40 |
+| 2 | Quiet the maintenance timers | built and measured; **needs one root command** |
+| 3 | Cap the sustained, not the burst | measured, built, **running** |
+| 4 | Priority for the desktop | measured by proxy, built; **needs one root command** |
+| 5 | Focus-follows-priority | built, **running** — reach is limited, see below |
+| 6 | Writeback in bytes | written, **unproven**; needs root |
+| 7 | Warm the page cache | built, **running** |
+| 8 | Remove a frame | **not measured** — not measurable from inside the machine |
+| 9 | Acknowledge input under 150 ms | **measured; already inside it.** Nothing changed |
+| 10 | Render fewer pixels | built, **deliberately not applied** |
+
+Three of the ten turned out differently from how they were written down. Item 2
+was worth having for a different reason than it claimed, item 6 lost its
+supporting evidence, and item 9 was already fine. Those are in the entries.
+
+## Tools this pass added
+
+All read-only or self-restoring, and none need root.
+
+| | |
+|---|---|
+| [`bin/burst-probe`](../bin/burst-probe) | Times interactive-length work under each CPU cap, interleaved |
+| [`bin/desktop-latency`](../bin/desktop-latency) | X round-trip latency under load, against a niced competitor |
+| [`bin/io-stall`](../bin/io-stall) | What a bulk write or a metadata storm does to the desktop |
+| [`bin/cold-read`](../bin/cold-read) | Cold application read time, with and without disk contention |
+| [`bin/pixel-budget`](../bin/pixel-budget) | Compositor cost of the Retina panel. Rearranges windows |
+| [`bin/quiet-timers`](../bin/quiet-timers) | `--check` lists every maintenance unit and what it is set to |
+| [`bin/desktop-nice`](../bin/desktop-nice) | `--check` lists the desktop's nice values |
+| [`bin/focus-priority`](../bin/focus-priority) | `--check` lists app scopes and their weights |
+| [`bin/warm-cache`](../bin/warm-cache) | `--check` lists what would be read, and free memory |
+| [`bin/turbo-budget`](../bin/turbo-budget) | `--check` reports the cap and whether the budget is armed |
+
+## What is left for root
+
+Three commands, in one block, none of which this session could run:
+
+```bash
+sudo bin/quiet-timers
+sudo install -m755 bin/desktop-nice /usr/local/sbin/mintbook-desktop-nice
+sudo install -m644 config/systemd/mintbook-desktop-nice.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now mintbook-desktop-nice.timer
+# and, only after the launch-during-write test in item 6:
+sudo install -m644 config/sysctl.d/99-mintbook-feel.conf /etc/sysctl.d/ && sudo sysctl -p /etc/sysctl.d/99-mintbook-feel.conf
+```
+
+---
+
 ## Ranked candidates
 
 ### 1. Keyboard repeat — **applied**, 500 ms / 20 Hz → 200 ms / 40 Hz
@@ -368,12 +419,82 @@ Not measured: whether a warmed Firefox actually *starts* faster, as opposed to
 reading faster. Proving that needs `drop_caches`, which needs root, and a real
 launch after a real boot.
 
-### 8. Remove a frame
+### 8. Remove a frame — **not measured, and here is why**
 
-Compositing adds a frame at 59.94 Hz — about 17 ms between input and photon.
-`xfwm4`'s `vblank_mode` is `auto`; `xpresent`, `glx` and `off` are measurably
-different on Intel. The macOS look needs compositing, so this is the free half of
-the question.
+Compositing adds a frame at 59.94 Hz: about **17 ms** between input and photon.
+`xfwm4`'s `/general/vblank_mode` is `auto`; the alternatives are `xpresent`,
+`glx` and `off`, and on Intel they are measurably different.
+
+Measurably — but not *here*. Input-to-photon latency is the time from a key
+being pressed to light leaving the panel, and nothing inside the machine can see
+the second half of that. A camera or a photodiode can; software cannot. The
+quantity that software *can* measure — compositor CPU — is not the quantity in
+question, and reporting it would be answering an easier question and hoping
+nobody notices.
+
+So this is left set to `auto`, and the toggle is written down rather than
+guessed at:
+
+```bash
+xfconf-query -c xfwm4 -p /general/vblank_mode -s xpresent   # or glx, or off
+xfwm4 --replace &                                           # the compositor must restart
+xfconf-query -c xfwm4 -p /general/vblank_mode -s auto       # undo
+```
+
+`off` will tear. The macOS look this machine is built around needs compositing,
+so `off` is not really on the table; the honest choice is between `auto`,
+`xpresent` and `glx`, decided by someone watching the screen.
+
+### 9. Acknowledge input in under 150 ms — **measured, and already inside it**
+
+The idea: what makes a machine feel fast is that *something* happens promptly,
+not that the work is finished. So the Spotlight launcher, which is the most-used
+interaction on this desktop, should paint within about 150 ms of Cmd+Space.
+
+Measured, it already does:
+
+```
+rofi process startup            47–50 ms
+all 153 .desktop files, warm      65 ms
+```
+
+`StartupNotify=true` is already set on every launcher entry in the dock, so
+application launches do raise a startup-notification sequence.
+
+The one change available — rofi's `drun-use-desktop-cache`, currently `false`,
+which would skip re-parsing those 153 files each time — is **not worth taking**.
+It saves a few tens of milliseconds inside a budget that is already met, and it
+buys a stale menu: newly installed applications do not appear until the cache is
+regenerated. Recorded here so nobody re-derives it.
+
+Nothing was changed for this item. That is the result, not an omission.
+
+### 10. Render fewer pixels — **built, deliberately not applied**
+
+2304×1440 at 168 DPI on an HD 5300: every frame the compositor draws is
+**3.3 megapixels**. Rendering fewer of them is the largest single lever left for
+UI smoothness on this GPU.
+
+[`bin/pixel-budget`](../bin/pixel-budget) will measure it — `--measure` samples
+Xorg and xfwm4 CPU at native, then at a reduced scale, then at native again, so
+the two native arms bracket the middle one and disagreement between them is
+visible as noise.
+
+**It was not run, and the change is not applied.** Two reasons, and the first is
+the honest one:
+
+1. What it spends is sharpness, on the Retina panel that is the entire point of
+   this machine. "Looks like macOS" is the project. A permanent trade of that for
+   frame rate is the owner's call, not a tuning script's.
+2. Changing the screen size makes the window manager move and resize every
+   window, and it does not put them back. That is a rude thing to do to a live
+   desktop without being asked.
+
+```bash
+bin/pixel-budget --measure 0.75    # ~45 s, and it will rearrange your windows
+bin/pixel-budget --set 0.75        # apply
+bin/pixel-budget --undo            # back to native
+```
 
 ### 9. Acknowledge input in under 150 ms
 
@@ -393,11 +514,16 @@ it the same way Reduce motion was measured.
 
 ---
 
-## Ordering
-
-1, 2 and 4 are cheap, reversible, and change nothing about what the machine
-computes. 3 and 5 are the interesting ones and both need building. 10 is the
-heretical one and is the only item here with a real downside.
+## What this pass was actually about
 
 Measure interactive-length tasks, not benchmarks. A throughput number cannot see
-any of this.
+any of this — and, run the other way, an interactive measurement cannot see
+throughput either, which is why item 3 had to be told that both of its
+contradictory sources were right.
+
+The two results worth carrying forward:
+
+- **The machine has about three seconds of turbo and no sustained fast state.**
+  Idle temperature is therefore a performance parameter, not a comfort one.
+- **Background I/O costs launches, not drawing.** Two probes aimed at the
+  compositor found nothing before one aimed at a cold read found 1.8x.
