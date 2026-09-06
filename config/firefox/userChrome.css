@@ -1,0 +1,92 @@
+/*
+ * Mintbook Firefox glass chrome.
+ *
+ * Firefox 155 on this X11/Xfwm desktop uses an ARGB window.  Its bundled skin
+ * normally paints an opaque white colour on the chrome document's body; that
+ * must be cleared or every translucent toolbar colour is pre-blended to white.
+ * This is deliberately translucency only: backdrop-filter caused a long first
+ * paint on the Broadwell GPU and is not worth the cost.
+ */
+
+:root {
+  --mint-glass-top: rgb(250 250 250 / 76%);
+  --mint-glass-bottom: rgb(205 205 205 / 58%);
+  --mint-glass-edge: rgb(255 255 255 / 72%);
+  --mint-glass-shadow: rgb(50 50 50 / 18%);
+  --mint-control-fill: rgb(255 255 255 / 48%);
+  --mint-control-hover: rgb(255 255 255 / 78%);
+  --mint-selected-tab: rgb(255 255 255 / 78%);
+}
+
+/* Crucial: expose the alpha from the ARGB Firefox window to Xfwm. */
+:root,
+body,
+#main-window {
+  background-color: transparent !important;
+  background-image: none !important;
+}
+
+#navigator-toolbox {
+  appearance: none !important;
+  background:
+    linear-gradient(180deg, var(--mint-glass-top), var(--mint-glass-bottom)) !important;
+  border-bottom: 1px solid rgb(255 255 255 / 52%) !important;
+  box-shadow: 0 2px 7px var(--mint-glass-shadow) !important;
+  color: rgb(45 45 45) !important;
+}
+
+#titlebar,
+#TabsToolbar,
+#nav-bar,
+#PersonalToolbar {
+  appearance: none !important;
+  background: transparent !important;
+  border: 0 !important;
+  color: inherit !important;
+}
+
+.tab-background[selected],
+#urlbar-background,
+#searchbar,
+.toolbarbutton-1 > .toolbarbutton-icon,
+.toolbarbutton-1 > .toolbarbutton-text,
+.toolbarbutton-1 > .toolbarbutton-badge-stack {
+  background-color: var(--mint-control-fill) !important;
+  border: 1px solid var(--mint-glass-edge) !important;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 58%), 0 1px 2px rgb(60 60 60 / 10%) !important;
+}
+
+.tab-background[selected] {
+  background: linear-gradient(180deg, var(--mint-selected-tab), rgb(240 240 240 / 62%)) !important;
+}
+
+.tab-background:not([selected]) {
+  background: rgb(255 255 255 / 24%) !important;
+  border: 1px solid rgb(255 255 255 / 26%) !important;
+}
+
+.toolbarbutton-1:hover:not([disabled]) > .toolbarbutton-icon,
+.toolbarbutton-1:hover:not([disabled]) > .toolbarbutton-text,
+.toolbarbutton-1:hover:not([disabled]) > .toolbarbutton-badge-stack {
+  background-color: var(--mint-control-hover) !important;
+}
+
+.toolbarbutton-1 > .toolbarbutton-icon,
+.toolbarbutton-1 > .toolbarbutton-text,
+.toolbarbutton-1 > .toolbarbutton-badge-stack {
+  border-radius: 8px !important;
+}
+
+.tab-label,
+#navigator-toolbox toolbarbutton,
+#urlbar-input,
+#urlbar-input-container,
+#urlbar-search-mode-indicator,
+#searchbar input {
+  color: rgb(45 45 45) !important;
+}
+
+#urlbar-background,
+#searchbar {
+  border-radius: 10px !important;
+}

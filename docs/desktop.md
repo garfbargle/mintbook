@@ -383,6 +383,48 @@ zoom-percent=150   hide-mode=intelligent   auto-pinning=false
 Theme copied from `~/.themes/WhiteSur-Light/plank/dock.theme` to
 `~/.local/share/plank/themes/WhiteSur/dock.theme`.
 
+### Firefox glass chrome
+
+Firefox's **Customize Toolbar → Title Bar** option is off, so its window
+controls share the tab-strip row instead of taking a separate xfwm4 titlebar.
+The tab strip and navigation bar are genuine translucent glass on this X11
+desktop; the working stylesheet is
+[`config/firefox/userChrome.css`](../config/firefox/userChrome.css), installed
+as `~/.mozilla/firefox/2e8csxhy.default-release/chrome/userChrome.css`.
+
+Firefox will only load the file when this preference is present in the profile's
+`user.js` (the profile must then be fully restarted):
+
+```js
+user_pref("toolkit.legacyUserProfileCustomizations.stylesheets", true);
+```
+
+The critical rule is the transparent `body` / `#main-window` backing layer.
+Firefox otherwise pre-blends the translucent toolbar against its opaque white
+chrome document, which looks like a solid white bar even though the X11 window
+has an ARGB visual. The style intentionally has **no `backdrop-filter`**:
+testing it caused a long first paint on the Broadwell GPU.
+
+This is a supported preference plus an **unsupported userChrome CSS hack**.
+Firefox UI selectors can change with a release, so keep this file small and
+expect to check it after an update.
+
+#### What can share the treatment
+
+| Surface | Glass route | Status here |
+|---|---|---|
+| Firefox (ARGB, client-side chrome) | Per-app userChrome CSS | Working |
+| XFCE panel and Plank | Their own RGBA/theme settings | Already translucent/fake-glass |
+| Ordinary xfwm4-decorated windows | xfwm4 theme/frame opacity | Can affect only the server-drawn frame |
+| ChatGPT and other opaque Electron CSD windows | The application must create a transparent window and render a translucent header | Not available as a desktop-wide setting |
+
+Xfwm4 cannot restyle a client-side header, and a compositor cannot isolate one
+part of an opaque Electron window. Compton is installed but intentionally not
+running: replacing xfwm4's compositor and applying an opacity rule would fade
+or blur an entire Electron window, including its content, rather than create a
+good header-only glass effect. Keep the system chrome on its native theme path;
+only add app-specific glass when that app exposes a transparent surface.
+
 ### Clock padding
 
 The clock is the last item on the bar, so its text ran into the screen edge. The
