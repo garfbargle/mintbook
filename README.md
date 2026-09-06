@@ -56,6 +56,10 @@ a time** (`qdepth_one`), so ordinary NVMe tuning advice does not apply — see
 [Performance](docs/performance.md) records a tuning pass from 2026-09-04 — what
 changed, what it was worth, and the six things that turned out to be wrong.
 
+[Desktop app performance](docs/app-performance.md) records the 2026-09-06
+Reduce motion change: 62% lower app CPU in the sampled active-task view,
+with raw measurements, undo steps, and the next-session handoff.
+
 After a kernel update, run `bin/doctor`. It checks every piece this machine needs —
 firmware, DKMS modules, the DSDT override, udev and systemd units, the panel — and
 tells you which one an update took away.

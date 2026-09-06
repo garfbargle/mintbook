@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""Read-only desktop CPU sampling. Percentages are fractions of ONE logical CPU.
+
+Run the same workload and interleave settings manually. No command lines,
+window titles, environment variables, or app content are included in output.
+Inactive/locked desktop samples are rejected; this is not an idle detector.
+"""
+import argparse
+import json
+import os
+import re
+import subprocess
+import time
+from pathlib import Path
+
+CLK = os.sysconf("SC_CLK_TCK")
+
+
+def session_state():
+    session = os.environ.get("XDG_SESSION_ID")
+    if not session:
+        return {"error": "XDG_SESSION_ID is unavailable"}
+    result = subprocess.run(
+        ["loginctl", "show-session", session, "-p", "Active", "-p", "LockedHint"],
+        capture_output=True, text=True, timeout=3, check=False,
+    )
+    if result.returncode:
+        return {"error": "could not query desktop session"}
+    return dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+
+
+def visible_session(state):
+    return state.get("Active") == "yes" and state.get("LockedHint") == "no"
+
+
+def processes():
+    result = {}
+    for path in Path("/proc").glob("[0-9]*"):
+        try:
+            name = (path / "comm").read_text().strip()
+            if name not in {"ChatGPT", "chrome", "chromium", "codex", "Xorg", "xfwm4", "pipewire"} and "genmon" not in name:
+                continue
+            stat = (path / "stat").read_text()
+            fields = stat[stat.rindex(")") + 2:].split()
+            # Electron may rewrite argv as one space-separated process title.
+            command = (path / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+            kind = re.search(r"--type=([^ ]+)", command)
+            role = kind[1] if kind else "main"
+            if role == "utility":
+                subtype = re.search(r"--utility-sub-type=([^ ]+)", command)
+                role = subtype[1] if subtype else role
+            result[path.name] = {
+                "name": name, "role": role, "start": fields[19],
+                "ticks": int(fields[11]) + int(fields[12]),
+                "child_ticks": int(fields[13]) + int(fields[14]),
+            }
+        except (OSError, ValueError, IndexError):
+            continue
+    return result
+
+
+def battery_watts():
+    battery = Path("/sys/class/power_supply/BAT0")
+    try:
+        if (battery / "status").read_text().strip() != "Discharging":
+            return None
+        return abs(int((battery / "current_now").read_text()) *
+                   int((battery / "voltage_now").read_text())) / 1e12
+    except (OSError, ValueError):
+        return None
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--seconds", type=int, default=25, help="sample duration, at least 5 seconds")
+    parser.add_argument("--label", default="unlabelled", help="setting and workload, e.g. motion-system-visible")
+    args = parser.parse_args()
+    if args.seconds < 5:
+        parser.error("--seconds must be at least 5")
+    states = [session_state()]
+    if not visible_session(states[0]):
+        print(json.dumps({"valid": False, "reason": "unlock and activate the desktop first", "session": states[0]}))
+        return 1
+
+    before = processes()
+    start = time.monotonic()
+    watts = []
+    power_status = set()
+    for tick in range(args.seconds):
+        time.sleep(1)
+        value = battery_watts()
+        power_status.add(value is not None)
+        if value is not None:
+            watts.append(value)
+        if (tick + 1) % 5 == 0:
+            states.append(session_state())
+    after = processes()
+    elapsed = time.monotonic() - start
+    states.append(session_state())
+    rows = []
+    for pid, current in after.items():
+        old = before.get(pid)
+        if old is None or old["start"] != current["start"]:
+            continue
+        rows.append({
+            "pid": int(pid), "name": current["name"], "role": current["role"],
+            "cpu_pct": round(100 * (current["ticks"] - old["ticks"]) / CLK / elapsed, 2),
+            "exited_children_cpu_pct": round(100 * (current["child_ticks"] - old["child_ticks"]) / CLK / elapsed, 2),
+        })
+    valid = all(visible_session(state) for state in states) and len(power_status) == 1
+    print(json.dumps({
+        "label": args.label, "valid": valid, "seconds": round(elapsed, 2),
+        "reason": "session/power stable; workload must be controlled manually" if valid else "session or power source changed; discard comparison",
+        "cpu_units": "percent of one logical CPU (400% is all four threads)",
+        "scope": "processes present at both endpoints; exited-child CPU is separate; short-lived processes may be missed",
+        "chatgpt_cpu_pct": round(sum(row["cpu_pct"] for row in rows if row["name"] == "ChatGPT"), 2),
+        "battery_w_mean": round(sum(watts) / len(watts), 2) if watts and len(power_status) == 1 else None,
+        "battery_w_range": [round(min(watts), 2), round(max(watts), 2)] if watts else None,
+        "processes": sorted(rows, key=lambda row: row["cpu_pct"] + row["exited_children_cpu_pct"], reverse=True),
+    }, indent=2))
+    return 0 if valid else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

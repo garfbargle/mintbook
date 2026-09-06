@@ -159,6 +159,17 @@ All read-only unless stated. `--check` / no-argument forms need no root.
   ~0.20 W of savings that was purely drift. See
   [hardware.md](hardware.md#result-mei-runtime-pm-measured-2026-09-04).
 
+## Follow-up: desktop app rendering (2026-09-06)
+
+**Reduce motion → On**, retained after two interleaved System/On comparisons.
+While the active task was visible, app CPU averaged **105.1% → 39.9% of one
+logical CPU** (62% lower). GPU-process and Xorg CPU rose again when System was
+restored, then fell again on On. This is reduced rendering overhead, not a claim
+that tasks finish 62% faster. Battery savings were not measured on AC.
+
+See [app-performance.md](app-performance.md) for all four samples, limitations,
+the setting and undo, and the read-only `bin/app-probe`.
+
 ## Still open
 
 - **`i915.enable_fbc`.** Whether FBC is actually on is a root-only debugfs read.

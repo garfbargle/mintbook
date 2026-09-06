@@ -1,0 +1,707 @@
+{
+  "date": "2026-09-06",
+  "app_version": "26.901.51231",
+  "kernel": "7.0.0-31-generic",
+  "original_setting": "system",
+  "retained_setting": "on",
+  "workload": "Same maximized active task, agent waiting on sampler, no assistant prose streamed during each sample. The visible tool row and conversation length evolved between samples.",
+  "power_note": "Charging; battery watts unavailable. Balanced / max_perf_pct=100 verified at the end; the sampler used for these records checked session and discharging status, not the CPU policy.",
+  "samples": [
+    {
+      "label": "system-1",
+      "valid": true,
+      "seconds": 26.28,
+      "reason": "session/power stable; workload must be controlled manually",
+      "cpu_units": "percent of one logical CPU (400% is all four threads)",
+      "scope": "processes present at both endpoints; exited-child CPU is separate; short-lived processes may be missed",
+      "chatgpt_cpu_pct": 114.78,
+      "battery_w_mean": null,
+      "battery_w_range": null,
+      "processes": [
+        {
+          "pid": 2355,
+          "name": "ChatGPT",
+          "role": "gpu-process",
+          "cpu_pct": 72.27,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 2425,
+          "name": "ChatGPT",
+          "role": "renderer",
+          "cpu_pct": 39.62,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 933,
+          "name": "Xorg",
+          "role": "main",
+          "cpu_pct": 28.35,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 1466,
+          "name": "xfwm4",
+          "role": "main",
+          "cpu_pct": 7.42,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 1507,
+          "name": "panel-19-genmon",
+          "role": "main",
+          "cpu_pct": 0.49,
+          "exited_children_cpu_pct": 3.16
+        },
+        {
+          "pid": 1127,
+          "name": "pipewire",
+          "role": "main",
+          "cpu_pct": 3.62,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 2461,
+          "name": "codex",
+          "role": "main",
+          "cpu_pct": 2.17,
+          "exited_children_cpu_pct": 0.23
+        },
+        {
+          "pid": 2284,
+          "name": "ChatGPT",
+          "role": "main",
+          "cpu_pct": 1.45,
+          "exited_children_cpu_pct": 0.46
+        },
+        {
+          "pid": 1520,
+          "name": "panel-22-genmon",
+          "role": "main",
+          "cpu_pct": 0.23,
+          "exited_children_cpu_pct": 0.88
+        },
+        {
+          "pid": 1516,
+          "name": "panel-23-genmon",
+          "role": "main",
+          "cpu_pct": 0.08,
+          "exited_children_cpu_pct": 0.88
+        },
+        {
+          "pid": 1514,
+          "name": "panel-18-genmon",
+          "role": "main",
+          "cpu_pct": 0.11,
+          "exited_children_cpu_pct": 0.61
+        },
+        {
+          "pid": 2424,
+          "name": "ChatGPT",
+          "role": "renderer",
+          "cpu_pct": 0.72,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 1513,
+          "name": "panel-17-genmon",
+          "role": "main",
+          "cpu_pct": 0.04,
+          "exited_children_cpu_pct": 0.53
+        },
+        {
+          "pid": 1515,
+          "name": "panel-21-genmon",
+          "role": "main",
+          "cpu_pct": 0.08,
+          "exited_children_cpu_pct": 0.42
+        },
+        {
+          "pid": 3661,
+          "name": "ChatGPT",
+          "role": "renderer",
+          "cpu_pct": 0.49,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 2358,
+          "name": "ChatGPT",
+          "role": "network.mojom.NetworkService",
+          "cpu_pct": 0.23,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 1128,
+          "name": "pipewire",
+          "role": "main",
+          "cpu_pct": 0.0,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 2304,
+          "name": "ChatGPT",
+          "role": "zygote",
+          "cpu_pct": 0.0,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 2305,
+          "name": "ChatGPT",
+          "role": "zygote",
+          "cpu_pct": 0.0,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 2311,
+          "name": "ChatGPT",
+          "role": "zygote",
+          "cpu_pct": 0.0,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 2367,
+          "name": "ChatGPT",
+          "role": "storage.mojom.StorageService",
+          "cpu_pct": 0.0,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 3710,
+          "name": "ChatGPT",
+          "role": "renderer",
+          "cpu_pct": 0.0,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 5654,
+          "name": "ChatGPT",
+          "role": "on_device_model.mojom.OnDeviceModelService",
+          "cpu_pct": 0.0,
+          "exited_children_cpu_pct": 0.0
+        }
+      ]
+    },
+    {
+      "label": "on-1",
+      "valid": true,
+      "seconds": 26.09,
+      "reason": "session/power stable; workload must be controlled manually",
+      "cpu_units": "percent of one logical CPU (400% is all four threads)",
+      "scope": "processes present at both endpoints; exited-child CPU is separate; short-lived processes may be missed",
+      "chatgpt_cpu_pct": 45.88,
+      "battery_w_mean": null,
+      "battery_w_range": null,
+      "processes": [
+        {
+          "pid": 2425,
+          "name": "ChatGPT",
+          "role": "renderer",
+          "cpu_pct": 18.63,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 2355,
+          "name": "ChatGPT",
+          "role": "gpu-process",
+          "cpu_pct": 15.1,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 2284,
+          "name": "ChatGPT",
+          "role": "main",
+          "cpu_pct": 6.13,
+          "exited_children_cpu_pct": 0.42
+        },
+        {
+          "pid": 933,
+          "name": "Xorg",
+          "role": "main",
+          "cpu_pct": 5.52,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 2424,
+          "name": "ChatGPT",
+          "role": "renderer",
+          "cpu_pct": 4.22,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 1127,
+          "name": "pipewire",
+          "role": "main",
+          "cpu_pct": 3.07,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 1507,
+          "name": "panel-19-genmon",
+          "role": "main",
+          "cpu_pct": 0.31,
+          "exited_children_cpu_pct": 2.19
+        },
+        {
+          "pid": 1466,
+          "name": "xfwm4",
+          "role": "main",
+          "cpu_pct": 1.46,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 2461,
+          "name": "codex",
+          "role": "main",
+          "cpu_pct": 0.88,
+          "exited_children_cpu_pct": 0.15
+        },
+        {
+          "pid": 2367,
+          "name": "ChatGPT",
+          "role": "storage.mojom.StorageService",
+          "cpu_pct": 0.96,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 1520,
+          "name": "panel-22-genmon",
+          "role": "main",
+          "cpu_pct": 0.19,
+          "exited_children_cpu_pct": 0.61
+        },
+        {
+          "pid": 1516,
+          "name": "panel-23-genmon",
+          "role": "main",
+          "cpu_pct": 0.08,
+          "exited_children_cpu_pct": 0.61
+        },
+        {
+          "pid": 1514,
+          "name": "panel-18-genmon",
+          "role": "main",
+          "cpu_pct": 0.08,
+          "exited_children_cpu_pct": 0.42
+        },
+        {
+          "pid": 2358,
+          "name": "ChatGPT",
+          "role": "network.mojom.NetworkService",
+          "cpu_pct": 0.42,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 3661,
+          "name": "ChatGPT",
+          "role": "renderer",
+          "cpu_pct": 0.42,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 1515,
+          "name": "panel-21-genmon",
+          "role": "main",
+          "cpu_pct": 0.08,
+          "exited_children_cpu_pct": 0.27
+        },
+        {
+          "pid": 1513,
+          "name": "panel-17-genmon",
+          "role": "main",
+          "cpu_pct": 0.0,
+          "exited_children_cpu_pct": 0.19
+        },
+        {
+          "pid": 1128,
+          "name": "pipewire",
+          "role": "main",
+          "cpu_pct": 0.0,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 2304,
+          "name": "ChatGPT",
+          "role": "zygote",
+          "cpu_pct": 0.0,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 2305,
+          "name": "ChatGPT",
+          "role": "zygote",
+          "cpu_pct": 0.0,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 2311,
+          "name": "ChatGPT",
+          "role": "zygote",
+          "cpu_pct": 0.0,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 3710,
+          "name": "ChatGPT",
+          "role": "renderer",
+          "cpu_pct": 0.0,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 5654,
+          "name": "ChatGPT",
+          "role": "on_device_model.mojom.OnDeviceModelService",
+          "cpu_pct": 0.0,
+          "exited_children_cpu_pct": 0.0
+        }
+      ]
+    },
+    {
+      "label": "system-2",
+      "valid": true,
+      "seconds": 26.26,
+      "reason": "session/power stable; workload must be controlled manually",
+      "cpu_units": "percent of one logical CPU (400% is all four threads)",
+      "scope": "processes present at both endpoints; exited-child CPU is separate; short-lived processes may be missed",
+      "chatgpt_cpu_pct": 95.44,
+      "battery_w_mean": null,
+      "battery_w_range": null,
+      "processes": [
+        {
+          "pid": 2355,
+          "name": "ChatGPT",
+          "role": "gpu-process",
+          "cpu_pct": 66.65,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 933,
+          "name": "Xorg",
+          "role": "main",
+          "cpu_pct": 27.04,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 2425,
+          "name": "ChatGPT",
+          "role": "renderer",
+          "cpu_pct": 25.71,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 1466,
+          "name": "xfwm4",
+          "role": "main",
+          "cpu_pct": 6.86,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 1127,
+          "name": "pipewire",
+          "role": "main",
+          "cpu_pct": 3.96,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 1507,
+          "name": "panel-19-genmon",
+          "role": "main",
+          "cpu_pct": 0.46,
+          "exited_children_cpu_pct": 3.05
+        },
+        {
+          "pid": 2284,
+          "name": "ChatGPT",
+          "role": "main",
+          "cpu_pct": 1.41,
+          "exited_children_cpu_pct": 0.38
+        },
+        {
+          "pid": 2461,
+          "name": "codex",
+          "role": "main",
+          "cpu_pct": 1.52,
+          "exited_children_cpu_pct": 0.11
+        },
+        {
+          "pid": 1520,
+          "name": "panel-22-genmon",
+          "role": "main",
+          "cpu_pct": 0.34,
+          "exited_children_cpu_pct": 0.84
+        },
+        {
+          "pid": 1514,
+          "name": "panel-18-genmon",
+          "role": "main",
+          "cpu_pct": 0.23,
+          "exited_children_cpu_pct": 0.88
+        },
+        {
+          "pid": 1516,
+          "name": "panel-23-genmon",
+          "role": "main",
+          "cpu_pct": 0.08,
+          "exited_children_cpu_pct": 0.99
+        },
+        {
+          "pid": 2424,
+          "name": "ChatGPT",
+          "role": "renderer",
+          "cpu_pct": 0.91,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 1515,
+          "name": "panel-21-genmon",
+          "role": "main",
+          "cpu_pct": 0.19,
+          "exited_children_cpu_pct": 0.42
+        },
+        {
+          "pid": 1513,
+          "name": "panel-17-genmon",
+          "role": "main",
+          "cpu_pct": 0.04,
+          "exited_children_cpu_pct": 0.53
+        },
+        {
+          "pid": 3661,
+          "name": "ChatGPT",
+          "role": "renderer",
+          "cpu_pct": 0.53,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 2358,
+          "name": "ChatGPT",
+          "role": "network.mojom.NetworkService",
+          "cpu_pct": 0.23,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 1128,
+          "name": "pipewire",
+          "role": "main",
+          "cpu_pct": 0.0,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 2304,
+          "name": "ChatGPT",
+          "role": "zygote",
+          "cpu_pct": 0.0,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 2305,
+          "name": "ChatGPT",
+          "role": "zygote",
+          "cpu_pct": 0.0,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 2311,
+          "name": "ChatGPT",
+          "role": "zygote",
+          "cpu_pct": 0.0,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 2367,
+          "name": "ChatGPT",
+          "role": "storage.mojom.StorageService",
+          "cpu_pct": 0.0,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 3710,
+          "name": "ChatGPT",
+          "role": "renderer",
+          "cpu_pct": 0.0,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 5654,
+          "name": "ChatGPT",
+          "role": "on_device_model.mojom.OnDeviceModelService",
+          "cpu_pct": 0.0,
+          "exited_children_cpu_pct": 0.0
+        }
+      ]
+    },
+    {
+      "label": "on-2",
+      "valid": true,
+      "seconds": 26.09,
+      "reason": "session/power stable; workload must be controlled manually",
+      "cpu_units": "percent of one logical CPU (400% is all four threads)",
+      "scope": "processes present at both endpoints; exited-child CPU is separate; short-lived processes may be missed",
+      "chatgpt_cpu_pct": 33.91,
+      "battery_w_mean": null,
+      "battery_w_range": null,
+      "processes": [
+        {
+          "pid": 2355,
+          "name": "ChatGPT",
+          "role": "gpu-process",
+          "cpu_pct": 15.79,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 2425,
+          "name": "ChatGPT",
+          "role": "renderer",
+          "cpu_pct": 15.75,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 933,
+          "name": "Xorg",
+          "role": "main",
+          "cpu_pct": 5.29,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 1127,
+          "name": "pipewire",
+          "role": "main",
+          "cpu_pct": 2.99,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 1507,
+          "name": "panel-19-genmon",
+          "role": "main",
+          "cpu_pct": 0.23,
+          "exited_children_cpu_pct": 1.34
+        },
+        {
+          "pid": 1466,
+          "name": "xfwm4",
+          "role": "main",
+          "cpu_pct": 1.38,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 2284,
+          "name": "ChatGPT",
+          "role": "main",
+          "cpu_pct": 1.15,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 2461,
+          "name": "codex",
+          "role": "main",
+          "cpu_pct": 0.92,
+          "exited_children_cpu_pct": 0.08
+        },
+        {
+          "pid": 1520,
+          "name": "panel-22-genmon",
+          "role": "main",
+          "cpu_pct": 0.15,
+          "exited_children_cpu_pct": 0.57
+        },
+        {
+          "pid": 1514,
+          "name": "panel-18-genmon",
+          "role": "main",
+          "cpu_pct": 0.11,
+          "exited_children_cpu_pct": 0.54
+        },
+        {
+          "pid": 2424,
+          "name": "ChatGPT",
+          "role": "renderer",
+          "cpu_pct": 0.57,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 1515,
+          "name": "panel-21-genmon",
+          "role": "main",
+          "cpu_pct": 0.15,
+          "exited_children_cpu_pct": 0.31
+        },
+        {
+          "pid": 3661,
+          "name": "ChatGPT",
+          "role": "renderer",
+          "cpu_pct": 0.34,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 1516,
+          "name": "panel-23-genmon",
+          "role": "main",
+          "cpu_pct": 0.0,
+          "exited_children_cpu_pct": 0.31
+        },
+        {
+          "pid": 2358,
+          "name": "ChatGPT",
+          "role": "network.mojom.NetworkService",
+          "cpu_pct": 0.31,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 1128,
+          "name": "pipewire",
+          "role": "main",
+          "cpu_pct": 0.0,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 1513,
+          "name": "panel-17-genmon",
+          "role": "main",
+          "cpu_pct": 0.0,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 2304,
+          "name": "ChatGPT",
+          "role": "zygote",
+          "cpu_pct": 0.0,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 2305,
+          "name": "ChatGPT",
+          "role": "zygote",
+          "cpu_pct": 0.0,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 2311,
+          "name": "ChatGPT",
+          "role": "zygote",
+          "cpu_pct": 0.0,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 2367,
+          "name": "ChatGPT",
+          "role": "storage.mojom.StorageService",
+          "cpu_pct": 0.0,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 3710,
+          "name": "ChatGPT",
+          "role": "renderer",
+          "cpu_pct": 0.0,
+          "exited_children_cpu_pct": 0.0
+        },
+        {
+          "pid": 5654,
+          "name": "ChatGPT",
+          "role": "on_device_model.mojom.OnDeviceModelService",
+          "cpu_pct": 0.0,
+          "exited_children_cpu_pct": 0.0
+        }
+      ]
+    }
+  ]
+}
