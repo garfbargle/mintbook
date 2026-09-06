@@ -1,0 +1,11 @@
+# User service. Reads the apps you actually launch into the page cache, once,
+# a few minutes after login — using memory that is otherwise idle to remove the
+# wait on a disk that takes one command at a time. See docs/feel.md.
+[Unit]
+Description=mintbook warm cache — read the apps you launch into RAM
+
+[Service]
+Type=oneshot
+ExecStart=%h/mintbook/bin/warm-cache
+Nice=19
+IOSchedulingClass=idle

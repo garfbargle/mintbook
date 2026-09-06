@@ -1,0 +1,11 @@
+# Late enough not to compete with logging in, which is the one moment the disk
+# is already the bottleneck.
+[Unit]
+Description=Warm the page cache after login settles
+
+[Timer]
+OnStartupSec=3min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# warm-cache — put the apps you actually launch into the page cache.
+#
+# This disk takes one command at a time, so a cold launch is dominated by
+# waiting for it. There is normally over 2 GB of RAM sitting free. Reading each
+# app's binary and its shared libraries into the page cache spends memory that
+# is otherwise idle to remove that wait.
+#
+#   warm-cache --check     what would be read, and how much memory is free
+#   warm-cache             read it in
+#
+# Needs no root. Nothing is written and nothing persists: the kernel is free to
+# drop any of it again under memory pressure, which is the correct behaviour.
+# See docs/feel.md.
+set -uo pipefail
+
+# The apps worth the RAM. Anything absent is skipped.
+APPS=${APPS:-"firefox google-chrome chrome thunar xfce4-terminal rofi plank cursor"}
+
+size_mb() {           # size_mb FILE... -> total megabytes
+  stat -Lc%s -- "$@" 2>/dev/null | awk '{t+=$1} END{printf "%.0f", t/1048576}'
+}
+
+# Resolving an app to its files is not just `command -v`. firefox and
+# google-chrome are wrapper scripts, and their real weight — libxul.so is 177 MB —
+# is dlopened at runtime, so it appears in no ldd output. Take the install
+# directory's own shared objects as well when there is one.
+app_dir() {
+  local a=$1 d
+  for d in "/usr/lib/$a" "/opt/$a" "/opt/google/$a" "/usr/lib/${a%%-*}"; do
+    [ -d "$d" ] && { echo "$d"; return 0; }
+  done
+  return 1
+}
+
+files_for() {         # files_for APP -> binary, its libraries, its install dir
+  local bin dir found=1
+  if bin=$(command -v "$1" 2>/dev/null); then
+    bin=$(readlink -f "$bin")
+    echo "$bin"
+    ldd "$bin" 2>/dev/null | awk '/=> \//{print $3} /^\t\//{print $1}'
+    found=0
+  fi
+  if dir=$(app_dir "$1"); then
+    find "$dir" -maxdepth 1 -type f \( -name '*.so' -o -name '*.so.*' -o -perm -u+x \) 2>/dev/null
+    found=0
+  fi
+  return $found
+}
+
+mode=${1:-warm}
+case "$mode" in --check|warm) ;; *) echo "usage: $0 [--check]" >&2; exit 2 ;; esac
+
+all=()
+for app in $APPS; do
+  mapfile -t f < <(files_for "$app" || true)
+  if [ ${#f[@]} -eq 0 ]; then
+    printf '%-18s %s\n' "$app" "not installed"
+    continue
+  fi
+  printf '%-18s %s MB\n' "$app" "$(size_mb "${f[@]}")"
+  all+=("${f[@]}")
+done
+
+[ ${#all[@]} -eq 0 ] && { echo "nothing to warm"; exit 0; }
+
+# Deduplicate: most of these share the same libc, GTK and Mesa.
+mapfile -t uniq < <(printf '%s\n' "${all[@]}" | sort -u)
+echo
+printf 'total              %s MB\n' "$(size_mb "${uniq[@]}")"
+
+if [ "$mode" = --check ]; then
+  echo
+  echo "free memory: $(awk '/MemAvailable/{printf "%.1f GB available", $2/1048576}' /proc/meminfo)"
+  exit 0
+fi
+
+echo
+echo "reading..."
+t0=$(date +%s%N)
+for f in "${uniq[@]}"; do cat -- "$f" > /dev/null 2>&1 || true; done
+t1=$(date +%s%N)
+printf 'read %s MB in %d ms\n' "$(size_mb "${uniq[@]}")" "$(( (t1-t0)/1000000 ))"
+echo
+echo "A cold read of one 177 MB library on this disk is ~880 ms; warm, ~85 ms."
+echo "Run again and the time above should collapse — that is the whole effect."
