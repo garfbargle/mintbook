@@ -9,14 +9,14 @@
  */
 
 :root {
-  /* Smoky silver: between the dark panel and bright dock, without blur. */
-  --mint-glass-top: rgb(160 165 171 / 88%);
-  --mint-glass-bottom: rgb(119 124 131 / 82%);
-  --mint-glass-edge: rgb(255 255 255 / 54%);
-  --mint-glass-shadow: rgb(25 28 32 / 24%);
-  --mint-control-fill: rgb(255 255 255 / 43%);
-  --mint-control-hover: rgb(255 255 255 / 66%);
-  --mint-selected-tab: rgb(255 255 255 / 62%);
+  /* Dense silver: a restrained glass sheen rather than a visible backdrop. */
+  --mint-glass-top: rgb(205 208 212 / 94%);
+  --mint-glass-bottom: rgb(174 178 184 / 90%);
+  --mint-glass-edge: rgb(255 255 255 / 64%);
+  --mint-glass-shadow: rgb(45 48 53 / 20%);
+  --mint-control-fill: rgb(255 255 255 / 58%);
+  --mint-control-hover: rgb(255 255 255 / 78%);
+  --mint-selected-tab: rgb(255 255 255 / 76%);
 }
 
 /* Crucial: expose the alpha from the ARGB Firefox window to Xfwm. */
