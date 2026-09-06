@@ -68,6 +68,13 @@ spending a whole core. Chrome's `chrome://gpu` claims hardware decode and is
 describing the driver, not itself. Hardware H.264 *encode* is advertised by the
 driver and crashes.
 
+[Feel](docs/feel.md) asks a different question from the other passes: not how
+much work the machine does, but how fast it feels. It records one measurement —
+under load the package hits its **95 °C** limit in under three seconds and holds
+**1700–1900 MHz** of a 2400 MHz maximum, on AC — which means the machine has
+about three seconds of turbo and no sustained fast state to protect. Then ten
+ranked candidates, none applied yet.
+
 `bin/firefox-video` applies the two prefs that make YouTube serve H.264 — the one
 format the GPU can decode — and `bin/firefox-video --undo` takes them back out.
 Firefox needs nothing else: it hardware-decodes H.264 out of the box here.
