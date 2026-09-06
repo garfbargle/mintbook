@@ -22,7 +22,10 @@ PSTATE=/sys/devices/system/cpu/intel_pstate/max_perf_pct
 
 BUDGET=${BUDGET:-8}        # seconds of uncapped time granted per burst
 TRIGGER=${TRIGGER:-25}     # % of total CPU that counts as a burst (one core of four)
-QUIET=${QUIET:-10}         # % below which the machine counts as gone quiet again
+QUIET=${QUIET:-15}         # % below which the machine counts as gone quiet again
+QUIET_FOR=${QUIET_FOR:-8}  # consecutive quiet samples needed to re-arm (8 = 2 s)
+COOLDOWN=${COOLDOWN:-45}   # re-arm after this long regardless, so a busy desktop
+                           # cannot park the budget in "spent" forever
 PERIOD=${PERIOD:-0.25}     # sampling period, seconds
 MINGAP=${MINGAP:-3}        # minimum seconds between profile requests
 
@@ -66,7 +69,7 @@ nap() { read -r -t "$1" -u 9 _ || true; }
 
 prev_busy=0 prev_total=0 busy_pct=0
 state=normal            # normal | boosted | spent
-boost_until=0 last_req=0
+boost_until=0 last_req=0 spent_at=0 quiet_run=0
 baseline_pct=0
 mine=""                 # the last profile this script asked for
 
@@ -126,9 +129,20 @@ while :; do
       if (( busy_pct < QUIET )); then
         request "$(profile_for "$baseline_pct")" && state=normal   # burst over
       elif (( now >= boost_until )); then
-        request "$(profile_for "$baseline_pct")" && state=spent    # sustained: take the cap
+        request "$(profile_for "$baseline_pct")" && { state=spent; spent_at=$now; quiet_run=0; }
       fi ;;
+    # Re-arming needs the machine to be quiet for a stretch, not for one sample —
+    # and it happens anyway after COOLDOWN. A desktop with a live Electron app in
+    # it is rarely below 15% for even a moment, and the first version of this
+    # parked here permanently because of exactly that.
     spent)
-      if (( busy_pct < QUIET )); then state=normal; fi ;;
+      if (( busy_pct < QUIET )); then
+        quiet_run=$(( quiet_run + 1 ))
+      else
+        quiet_run=0
+      fi
+      if (( quiet_run >= QUIET_FOR || now - spent_at >= COOLDOWN )); then
+        state=normal; quiet_run=0
+      fi ;;
   esac
 done

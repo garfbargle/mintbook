@@ -268,7 +268,32 @@ systemctl --user disable --now mintbook-turbo-budget.service  # undo
 ```
 
 Tunable through the environment: `BUDGET` (8 s), `TRIGGER` (25% of total CPU),
-`QUIET` (10%), `MINGAP` (3 s between requests).
+`QUIET` (15%), `QUIET_FOR` (8 samples), `COOLDOWN` (45 s), `MINGAP` (3 s).
+
+**A bug found by testing it on battery, which is the only state where it does
+anything.** The first version re-armed when a single sample fell below 10% of
+total CPU. On a desktop with a live Electron application in it, that essentially
+never happens — so after one sustained burst the budget parked in `spent` and
+never gave another. It was verified on AC, where the daemon stands down and the
+fault is invisible. Re-arming now needs the machine quiet for a stretch, *or*
+`COOLDOWN` seconds regardless, and a four-cycle trace confirms it:
+
+```
+state=normal → request balanced → state=boosted → request power-saver → state=spent
+state=normal → request balanced → state=boosted → request power-saver → state=spent
+                                                                    ... ×4
+```
+
+**And a limitation that trace also shows.** Under *continuous* background load —
+an agent, a sync, a busy Electron app — the budget is spent on that load, on a
+cycle of eight uncapped seconds per cooldown, and may simply not be available at
+the moment you click. The trigger is CPU, and CPU cannot tell your click apart
+from a background thread. Tying it to input instead of load is the obvious next
+version and has not been written.
+
+If the daemon is killed with `SIGKILL` while boosted, the cap stays at 100 until
+something else asserts it — the next AC transition, or `power-apply --reassert`.
+`SIGTERM`, which is what `systemctl --user stop` sends, restores it.
 
 Not measured: what the extra 8-second sprints cost in battery life or in
 temperature over a real session. The sprints are short and the chassis was
