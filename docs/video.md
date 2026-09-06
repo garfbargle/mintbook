@@ -4,6 +4,11 @@
 Forcing H.264 instead of AV1 is a real but modest win: about **11% less Chrome CPU**
 and roughly a **quarter fewer dropped frames**. It does not make 720p60 playable.
 
+**The hardware decoder itself is fine — and costs one fourteenth of the CPU.**
+GStreamer's `vah264dec` decodes 720p60 at 22% of one core where software needs 176%.
+Chrome just will not use it. **Hardware H.264 encode, by contrast, is not gated but
+broken:** the i965 encoder advertises the entrypoint and then aborts.
+
 ## The headline correction
 
 [hardware.md](hardware.md) said, from a `chrome://gpu` export: *"Decode was already
@@ -96,6 +101,58 @@ this GPU demonstrably has.** `vainfo` reports `VAProfileH264High : VAEntrypointV
 under i965. Chrome will not touch it. Not yet tested here — Firefox is installed and
 has its own VA-API path (`media.ffmpeg.vaapi.enabled`), and `gst-launch-1.0` is
 installed for a decoder-level test that takes the browser out of the picture entirely.
+
+## The decoder works. Chrome is simply not using it.
+
+Taking the browser out of the picture entirely, with GStreamer decoding a local
+file to `fakesink` — no window, no compositing, decode only. The clip is 1500
+frames of 720p60 H.264 High profile, 25.0 seconds, encoded locally with `x264enc`
+so that nothing had to be downloaded.
+
+| Run | Decoder | Wall | CPU of one core | CPU seconds |
+|---|---|---:|---:|---:|
+| sw-1 | `avdec_h264` | 4.63 s | 167% | 7.76 |
+| hw-1 | `vah264dec` | 2.52 s | 21% | 0.53 |
+| sw-2 | `avdec_h264` | 4.25 s | 180% | 7.68 |
+| hw-2 | `vah264dec` | 2.56 s | 23% | 0.60 |
+| sw-3 | `avdec_h264` | 4.46 s | 180% | 8.05 |
+| hw-3 | `vah264dec` | 2.52 s | 23% | 0.57 |
+| **software mean** | | **4.45 s** | **176%** | **7.83** |
+| **hardware mean** | | **2.53 s** | **22%** | **0.57** |
+
+**Hardware decode costs about one fourteenth of the CPU** — 0.023 CPU-seconds per
+second of video against 0.313 — and finishes in a little over half the wall time.
+The three repetitions are tight: the widest software spread is 0.38 s of wall time
+against a 1.92 s effect.
+
+The absolute software number is optimistic, not pessimistic: `videotestsrc
+pattern=ball` is far easier to decode than real footage, so a real 720p60 stream
+costs *more* than 176% of a core in software. The ratio is the finding.
+
+**So this machine has a working, very cheap H.264 decoder, and Chrome leaves the
+whole thing on the table.** That reframes `enhanced-h264ify` from "the fix" to "a
+consolation prize": it saves 11% of Chrome's CPU by picking a codec Chrome then
+decodes in software anyway.
+
+## Hardware H.264 *encode* is not merely gated — it is broken
+
+[hardware.md](hardware.md) reasoned that since `vainfo` reports
+`VAProfileH264High : VAEntrypointEncSlice` under i965, the encoder existed and only
+Chrome's gate stood in the way. **The entrypoint is advertised and the encoder
+aborts.** Both GStreamer plugins, same result:
+
+```
+gst-launch-1.0: i965_encoder.c:1692: intel_enc_hw_context_init:
+        Assertion `encoder_context->mfc_context' failed.
+```
+
+`vah264enc` and the older `vaapih264enc` both dump core on the first frame at
+720p60. Under iHD the element does not register at all, matching the "no encode
+entrypoint" finding already recorded.
+
+**There is no working H.264 hardware encoder on this machine, in any driver.**
+Chrome's refusal to use it costs nothing. Close this thread for good: an
+advertised VA-API entrypoint is a claim, and this one is false.
 
 ## Method
 

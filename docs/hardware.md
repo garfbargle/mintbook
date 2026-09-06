@@ -562,9 +562,15 @@ Two further pieces of evidence that the encode path is never even reached:
 
 **Conclusion: stop chasing this.** Hardware H.264 encode in this Chrome build is
 not reachable by configuration. It costs nothing for playback, which is decode.
-If hardware encode is ever actually needed — screen recording, not video calls in
-Chrome — reach for a VA-API-aware tool directly rather than the browser; `i965`
-exposes the entrypoint and `gst-launch-1.0` is installed.
+
+> **Followed up the same day, and the advice that was here was wrong.** This
+> section suggested reaching for `gst-launch-1.0` instead, on the grounds that
+> i965 exposes `VAEntrypointEncSlice`. It does expose it, and **the encoder
+> aborts**: `i965_encoder.c:1692: intel_enc_hw_context_init: Assertion
+> `encoder_context->mfc_context' failed`, from both `vah264enc` and
+> `vaapih264enc`, on the first frame. There is no working hardware H.264
+> encoder on this machine under any driver. An advertised VA-API entrypoint is
+> a claim, not a capability. See [video.md](video.md).
 
 Raw export: [2026-09-06-chrome-gpu-i965.txt](measurements/2026-09-06-chrome-gpu-i965.txt).
 
