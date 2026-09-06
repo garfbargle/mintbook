@@ -72,7 +72,7 @@ XFCE panel stores normalized RGBA doubles.
 | `size` | 52 |
 | `icon-size` | 36 |
 | `background-style` | 1 (solid colour) |
-| `background-rgba` | `0.13, 0.13, 0.14, 0.55` — dark translucent glass |
+| `background-rgba` | `0.357, 0.376, 0.412, 0.702` — pearl-derived slate glass; leaves light panel icons legible |
 
 Plugin order (`plugin-ids`), left to right:
 
