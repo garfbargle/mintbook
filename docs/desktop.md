@@ -474,6 +474,7 @@ would use in a GTK app.
 /commands/custom/<Shift><Super>numbersign   = ~/.local/bin/screenshot -f  # Cmd+Shift+3
 /commands/custom/<Shift><Super>dollar       = ~/.local/bin/screenshot -r  # Cmd+Shift+4
 /commands/custom/<Shift><Super>percent      = ~/.local/bin/screenshot -w  # Cmd+Shift+5
+/commands/custom/<Shift><Super>asciicircum = ~/.local/bin/appearance-snapshot tweak  # Cmd+Shift+6
 ```
 
 Copy/paste is deliberately unchanged: **Ctrl+C / Ctrl+V** everywhere,
@@ -490,12 +491,20 @@ Cmd-like key (Spotlight), so the macOS chords are the ones that work:
 | **Cmd+Shift+3** | whole screen | `~/Pictures/Screenshots/Screenshot_*.png` |
 | **Cmd+Shift+4** | drag a region (click, drag, release) | same |
 | **Cmd+Shift+5** | current window | same |
+| **Cmd+Shift+6** | desktop, Firefox, and ChatGPT appearance set | `~/Pictures/Appearance/<timestamp>_tweak/` |
 
 They run [`bin/screenshot`](../bin/screenshot) → `xfce4-screenshooter -$mode -s $file`,
 then a **160ms full-screen white flash**. Confirmed 2026-09-01: fullscreen write
 of a 2304×1440 PNG in under a second, flash visible after the file exists.
 
 The old Print bindings stay in xfconf in case an external keyboard appears.
+
+`Cmd+Shift+6` runs [`bin/appearance-snapshot`](../bin/appearance-snapshot).
+It saves `desktop.png`, then visible `firefox.png` and `chatgpt.png`, and restores
+the previously focused window. For an intentional comparison label, run
+`appearance-snapshot before` and `appearance-snapshot after` from a terminal;
+the output path is printed for each set. It has no flash, dialog, upload, or
+additional screenshot dependency.
 
 #### The snap flash
 

@@ -19,6 +19,7 @@
 /commands/custom/<Shift><Super>dollar      /home/cobo/.local/bin/screenshot -r
 /commands/custom/<Shift><Super>numbersign  /home/cobo/.local/bin/screenshot -f
 /commands/custom/<Shift><Super>percent     /home/cobo/.local/bin/screenshot -w
+/commands/custom/<Shift><Super>asciicircum /home/cobo/.local/bin/appearance-snapshot tweak
 /commands/custom/<Super>e                  thunar
 /commands/custom/Super_L                   /bin/true
 /commands/custom/<Super>p                  xfce4-display-settings --minimal

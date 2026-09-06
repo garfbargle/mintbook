@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# appearance-snapshot - capture a compact visual record for desktop-theme tweaks.
+# Usage: appearance-snapshot [label]
+#
+# Saves the whole desktop plus visible Firefox and ChatGPT windows, then restores
+# the window that was focused before the capture. Uses the installed XFCE tool;
+# it neither uploads files nor opens a save dialog.
+set -euo pipefail
+
+root="$HOME/Pictures/Appearance"
+label=${1:-tweak}
+label=$(printf '%s' "$label" | tr -cs '[:alnum:]_-' '_')
+stamp=$(date +%Y-%m-%d_%H-%M-%S)
+out="$root/${stamp}_${label}"
+mkdir -p "$out"
+
+active=$(xdotool getactivewindow 2>/dev/null || true)
+
+capture_fullscreen() {
+  xfce4-screenshooter -f -s "$out/desktop.png"
+}
+
+capture_window() {
+  local name=$1
+  local class=$2
+  local id
+  id=$(xdotool search --onlyvisible --class "$class" 2>/dev/null | head -n1 || true)
+  [ -n "$id" ] || return 0
+
+  xdotool windowactivate --sync "$id"
+  xfce4-screenshooter -w -s "$out/$name.png"
+}
+
+capture_fullscreen
+capture_window firefox firefox
+capture_window chatgpt Chatgpt
+
+if [ -n "$active" ] && xdotool getwindowname "$active" >/dev/null 2>&1; then
+  xdotool windowactivate --sync "$active"
+fi
+
+printf '%s\n' "$out"
