@@ -381,6 +381,11 @@ systemctl --user enable --now mintbook-focus-priority.service   # installed and 
 systemctl --user disable --now mintbook-focus-priority.service  # undo, and it clears what it set
 ```
 
+One sharp edge: because the script clears every weight it set when it exits,
+running a second copy by hand and stopping it wipes the weights the *service*
+had set, and the service will not notice until the focus next changes. Use
+`--check`, not a second instance.
+
 Not measured: whether this changes anything a person can feel, as opposed to
 changing numbers in `cpu.weight`. With one scope in play it very likely does not
 yet. The measurement to make is `bin/desktop-latency`-shaped, with a real second
