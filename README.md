@@ -68,6 +68,10 @@ spending a whole core. Chrome's `chrome://gpu` claims hardware decode and is
 describing the driver, not itself. Hardware H.264 *encode* is advertised by the
 driver and crashes.
 
+`bin/firefox-video` applies the two prefs that make YouTube serve H.264 — the one
+format the GPU can decode — and `bin/firefox-video --undo` takes them back out.
+Firefox needs nothing else: it hardware-decodes H.264 out of the box here.
+
 After a kernel update, run `bin/doctor`. It checks every piece this machine needs —
 firmware, DKMS modules, the DSDT override, udev and systemd units, the panel — and
 tells you which one an update took away.

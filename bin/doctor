@@ -153,9 +153,22 @@ MAPPED=$(for p in $(pgrep -f 'chrome|cursor|claude-desktop|firefox' 2>/dev/null)
 case "$MAPPED" in
   '')                      warn "VA-API in use" "no browser or Electron app running to check" ;;
   *i965*iHD*|*iHD*i965*)   warn "VA-API in use" "both mapped ($MAPPED) — some apps predate the fix; restart them" ;;
-  *i965*)                  ok   "VA-API in use" "i965 (Broadwell, has H.264 encode)" ;;
+  *i965*)                  ok   "VA-API in use" "i965 (Broadwell) — H.264 decode; its encode entrypoint aborts" ;;
   *iHD*)                   warn "VA-API in use" "iHD — Gen9+ driver, no encode on this chip; log out to pick up i965" ;;
 esac
+
+# Firefox is the only browser here that can reach the H.264 decoder, and it only
+# gets the chance once YouTube is pushed off AV1. Two prefs, applied by
+# bin/firefox-video. Optional tuning, so this warns rather than fails.
+FFINI=$HOME/.mozilla/firefox/profiles.ini
+FFPROF=$(awk -F= '/^\[Install/{i=1;next} /^\[/{i=0} i&&$1=="Default"{print $2;exit}' "$FFINI" 2>/dev/null)
+if [ -z "${FFPROF:-}" ]; then
+  :
+elif grep -q "mintbook firefox-video" "$HOME/.mozilla/firefox/$FFPROF/user.js" 2>/dev/null; then
+  ok "firefox video prefs" "VP9/AV1 off — YouTube serves H.264, which decodes on the GPU"
+else
+  warn "firefox video prefs" "not applied — run bin/firefox-video (see docs/video.md)"
+fi
 
 section "Audio"
 if grep -q '^snd_hda_codec_cs420x ' /proc/modules; then ok "CS4208 codec module" "snd_hda_codec_cs420x"; else bad "CS4208 codec module" "not loaded"; fi

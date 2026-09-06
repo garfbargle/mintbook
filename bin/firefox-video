@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+# firefox-video — make YouTube serve H.264 to Firefox, so this GPU's decoder
+# can do the work instead of the CPU. No root. Idempotent. See docs/video.md.
+#
+#   firefox-video            # apply
+#   firefox-video --check    # show what it would do, change nothing
+#   firefox-video --undo     # put both prefs back to their defaults
+#
+# Two prefs, and only two:
+#
+#   media.mediasource.vp9.enabled = false
+#   media.av1.enabled             = false
+#
+# Broadwell has decode silicon for H.264 and VP8 and nothing else. YouTube's
+# default for this machine is AV1, which decodes on the CPU and drops a fifth
+# of the frames at 720p60. Turning off both VP9 and AV1 leaves H.264 as the
+# best format YouTube can offer, and that one runs on the GPU.
+#
+# BOTH are required, measured 2026-09-06: with only AV1 off, YouTube falls back
+# to VP9 and Firefox decodes it in software with no VA driver loaded at all.
+#
+# Deliberately NOT here:
+#   media.ffmpeg.vaapi.enabled          — not a pref in Firefox 155. It is
+#                                         absent from libxul.so. Every guide
+#                                         still recommends it; it does nothing.
+#   media.hardware-video-decoding.*     — already on by default. Firefox
+#   gfx.webrender.all                     hardware-decodes H.264 here out of
+#   gfx.x11-egl.force-enabled             the box, with no prefs at all, and
+#   MOZ_X11_EGL=1                         all of these were measured to be
+#                                         unnecessary. Setting them anyway
+#                                         would be cargo cult.
+#   media.webm.enabled = false          — would work, and is far too broad. It
+#                                         disables WebM everywhere, not just on
+#                                         YouTube. The two prefs above are enough.
+#
+# This does nothing for Chrome or Thorium: no Chromium can reach this GPU's
+# decoder at all. See the do-not-re-test table in docs/video.md.
+set -uo pipefail
+
+MODE=apply
+case "${1-}" in
+  --check) MODE=check ;;
+  --undo)  MODE=undo ;;
+  "")      ;;
+  *) echo "usage: $0 [--check|--undo]" >&2; exit 2 ;;
+esac
+
+INI=$HOME/.mozilla/firefox/profiles.ini
+[ -f "$INI" ] || { echo "no Firefox profiles.ini at $INI" >&2; exit 1; }
+
+# The [Install...] section names the profile Firefox actually starts with.
+# Fall back to the [ProfileN] carrying Default=1.
+rel=$(awk -F= '/^\[Install/{i=1;next} /^\[/{i=0} i&&$1=="Default"{print $2;exit}' "$INI")
+if [ -z "$rel" ]; then
+  rel=$(awk -F= '/^\[Profile/{p="";d=""} $1=="Path"{p=$2} $1=="Default"&&$2==1{print p;exit}' "$INI")
+fi
+[ -n "$rel" ] || { echo "could not determine the default profile from $INI" >&2; exit 1; }
+
+PROFILE=$HOME/.mozilla/firefox/$rel
+[ -d "$PROFILE" ] || { echo "profile directory missing: $PROFILE" >&2; exit 1; }
+USERJS=$PROFILE/user.js
+PREFSJS=$PROFILE/prefs.js
+
+BEGIN='// >>> mintbook firefox-video'
+END='// <<< mintbook firefox-video'
+
+# Firefox rewrites prefs.js when it exits, so anything we do here while it is
+# running is silently discarded. Refuse rather than pretend.
+if pgrep -u "$(id -u)" -x firefox-bin >/dev/null 2>&1 || pgrep -u "$(id -u)" -f '/usr/lib/firefox/firefox' >/dev/null 2>&1; then
+  if [ "$MODE" != check ]; then
+    echo "Firefox is running. Quit it first — it rewrites prefs.js on exit and" >&2
+    echo "would discard this change." >&2
+    exit 1
+  fi
+  echo "note: Firefox is running; apply/undo would refuse until it is quit."
+fi
+
+applied=0
+grep -qF "$BEGIN" "$USERJS" 2>/dev/null && applied=1
+
+echo "profile: $PROFILE"
+echo "user.js: $([ -f "$USERJS" ] && echo present || echo absent)"
+echo "block:   $([ "$applied" -eq 1 ] && echo installed || echo "not installed")"
+
+case $MODE in
+check)
+  if [ "$applied" -eq 1 ]; then
+    echo "would do nothing; the block is already there."
+  else
+    echo "would append to user.js:"
+    echo "    media.mediasource.vp9.enabled = false"
+    echo "    media.av1.enabled             = false"
+  fi
+  grep -nE 'media\.(mediasource\.vp9|av1)\.enabled' "$PREFSJS" 2>/dev/null \
+    | sed 's/^/  prefs.js currently: /'
+  exit 0
+  ;;
+
+apply)
+  if [ "$applied" -eq 1 ]; then
+    echo "already applied; nothing to do."
+    exit 0
+  fi
+  {
+    echo "$BEGIN"
+    echo "// Broadwell decodes H.264 in hardware and VP9/AV1 not at all."
+    echo "// Undo with: bin/firefox-video --undo    See docs/video.md."
+    echo 'user_pref("media.mediasource.vp9.enabled", false);'
+    echo 'user_pref("media.av1.enabled", false);'
+    echo "$END"
+  } >> "$USERJS"
+  echo "applied. Start Firefox and play a video; verify with:"
+  echo "  grep -l _drv_video /proc/*/maps"
+  ;;
+
+undo)
+  if [ "$applied" -eq 1 ]; then
+    sed -i "/$(printf '%s' "$BEGIN" | sed 's/[][\.*^$/]/\\&/g')/,/$(printf '%s' "$END" | sed 's/[][\.*^$/]/\\&/g')/d" "$USERJS"
+    # A user.js left with nothing but blank lines is litter; remove it.
+    grep -q '[^[:space:]]' "$USERJS" 2>/dev/null || rm -f "$USERJS"
+    echo "removed the block from user.js."
+  else
+    echo "no block in user.js."
+  fi
+  # Deleting the block is not enough on its own: Firefox has already copied
+  # both values into prefs.js as user-set, and they would survive. Strip them
+  # so the prefs go back to being absent, which is the default.
+  if [ -f "$PREFSJS" ] && grep -qE 'media\.(mediasource\.vp9|av1)\.enabled' "$PREFSJS"; then
+    sed -i -E '/user_pref\("media\.(mediasource\.vp9|av1)\.enabled"/d' "$PREFSJS"
+    echo "cleared both prefs from prefs.js; they return to their defaults."
+  fi
+  echo "undone."
+  ;;
+esac

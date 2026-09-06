@@ -40,8 +40,9 @@ older H.264 helps in any browser, and is what makes the Firefox result possible 
 ### What to do
 
 1. **Watch video in Firefox.** This is the whole win. Nothing else comes close.
-2. **In Firefox, turn off VP9 and AV1** so YouTube sends H.264, which is the format
-   the hardware can decode. Prefs are listed below.
+2. **Run `bin/firefox-video`** once, with Firefox closed — already done. It turns
+   off VP9 and AV1 so YouTube sends H.264, the one format the hardware can decode.
+   Two prefs; `--undo` reverses it; `bin/doctor` warns if it goes missing.
 3. **Prefer Thorium over Chrome** for everything else. It is measurably the better
    Chromium on this machine — just not a video player.
 4. `enhanced-h264ify` in Chrome or Thorium is a small free improvement, worth having,
@@ -284,36 +285,46 @@ path into a Firefox page the way there is over Chrome's DevTools protocol, and t
 title trick only works on a page we control. The local-clip result above is the
 frame-drop evidence; this table is CPU and decoder identity only.
 
-### The configuration that was tested
+### The settings, narrowed to what is actually required (2026-09-06)
 
-In a throwaway profile:
+**Two prefs. That is all.** Applied by [`bin/firefox-video`](../bin/firefox-video),
+checked by `bin/doctor`, reversed with `bin/firefox-video --undo`.
 
 ```
-media.hardware-video-decoding.enabled       true      // the actual VA-API gate
-media.hardware-video-decoding.force-enabled true
-media.mediasource.vp9.enabled               false     // make YouTube serve H.264
-media.av1.enabled                           false
-media.webm.enabled                          false
-gfx.webrender.all                           true
-gfx.x11-egl.force-enabled                   true
+media.mediasource.vp9.enabled = false
+media.av1.enabled             = false
 ```
 
-plus `MOZ_X11_EGL=1` in the environment.
+The first pass set eight prefs and an environment variable, and said honestly that
+it had not isolated which mattered. It has now been isolated, and **almost none of
+them did**:
 
-**Which of these are actually required was not isolated** — they were set together
-and the result was measured as a set. `media.hardware-video-decoding.enabled` is
-certainly load-bearing, since flipping that one alone turned VA-API off and the
-frame drops on. `media.webm.enabled=false` is the most suspicious of the rest: it
-is heavier than needed and will affect sites beyond YouTube. Narrowing this to the
-minimum set is the obvious next job, and none of it is installed on the real
-profile yet.
+| Setting | Verdict |
+|---|---|
+| `media.mediasource.vp9.enabled=false` | **Required.** Without it YouTube serves VP9 |
+| `media.av1.enabled=false` | **Required.** Without it YouTube serves AV1 |
+| `media.hardware-video-decoding.enabled` | Unnecessary — already on by default |
+| `media.hardware-video-decoding.force-enabled` | Unnecessary |
+| `gfx.webrender.all` | Unnecessary |
+| `gfx.x11-egl.force-enabled` | Unnecessary |
+| `MOZ_X11_EGL=1` | Unnecessary |
+| `media.webm.enabled=false` | Unnecessary **and far too broad** — kills WebM everywhere |
+| `media.ffmpeg.vaapi.enabled` | Does not exist in Firefox 155 |
 
-Two things that are **not** the gate, despite looking like it:
-`media.ffmpeg.vaapi.enabled`, which every guide still recommends, **is not a pref in
-Firefox 155 at all** — it is absent from `libxul.so`, so setting it does nothing.
-And the log description stays `ffmpeg video decoder` whether or not VA-API is in
-use; it is not a hardware indicator. Check the RDD process for a mapped
-`*_drv_video.so` instead.
+**Firefox hardware-decodes H.264 here out of the box.** A profile with *no prefs at
+all* played the 720p60 clip with `i965_drv_video.so` mapped in the RDD process and
+**0.7%** of frames dropped. Nothing needed switching on; the decoder was always
+reachable. All the two prefs do is stop YouTube from sending a format the hardware
+cannot decode.
+
+**Both are needed, not either.** With AV1 disabled alone, YouTube falls back to VP9
+and Firefox decodes it with `ffvpx`, no VA driver loaded — measured, not assumed.
+
+The installer writes a marked block into the profile's `user.js`. Undo removes that
+block **and** strips both prefs from `prefs.js`, because Firefox copies user.js
+values into prefs.js as user-set, so deleting user.js alone would leave VP9 and AV1
+switched off forever. Both paths were exercised on the real profile, and both
+`doctor` branches with them.
 
 ### What to do
 
@@ -358,14 +369,15 @@ Only video playback was measured. General browsing, page-load, memory, and
 extension behaviour were **not** compared, and the desktop-app work in
 [app-performance.md](app-performance.md) is about a different application again.
 
-Two practical caveats before making Firefox the default browser:
+One practical caveat remains before making Firefox the default browser:
 
 - **Firefox does not follow this desktop's scaling.** It keeps its own, and needs
   `layout.css.devPixelsPerPx` set by hand, or it will look wrong on a 226-DPI
-  panel. See [display.md](display.md).
-- **The pref set below has not been applied to the real profile**, and has not been
-  narrowed to its minimum. `media.webm.enabled=false` in particular is heavier than
-  needed and affects sites beyond YouTube.
+  panel. See [display.md](display.md). This is not set, and `firefox-video` does
+  not touch it — it is a matter of taste, not a measurement.
+
+The pref caveat that used to sit here is **resolved**: the set was narrowed from
+eight prefs to two, and applied to the real profile on 2026-09-06.
 
 The honest summary: **use Firefox to watch video, use Thorium for browsing**, until
 someone measures the rest.
