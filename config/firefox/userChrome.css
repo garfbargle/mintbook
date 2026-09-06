@@ -9,11 +9,11 @@
  */
 
 :root {
-  /* Dense silver: a restrained glass sheen rather than a visible backdrop. */
-  --mint-glass-top: rgb(205 208 212 / 94%);
-  --mint-glass-bottom: rgb(174 178 184 / 90%);
-  --mint-glass-edge: rgb(255 255 255 / 64%);
-  --mint-glass-shadow: rgb(45 48 53 / 20%);
+  /* Dense pearl: a restrained glass sheen rather than a visible backdrop. */
+  --mint-glass-top: rgb(229 231 234 / 96%);
+  --mint-glass-bottom: rgb(202 205 210 / 92%);
+  --mint-glass-edge: rgb(255 255 255 / 70%);
+  --mint-glass-shadow: rgb(65 68 74 / 18%);
   --mint-control-fill: rgb(255 255 255 / 58%);
   --mint-control-hover: rgb(255 255 255 / 78%);
   --mint-selected-tab: rgb(255 255 255 / 76%);
