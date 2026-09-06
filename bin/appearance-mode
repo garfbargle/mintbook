@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# appearance-mode - switch Mintbook's system chrome between pearl light and slate dark.
+# Usage: appearance-mode auto|light|dark|toggle|--refresh
+set -euo pipefail
+
+root="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+state_dir="$HOME/.config/mintbook"
+mode_file="$state_dir/appearance.mode"
+env_file="$state_dir/system-chrome.env"
+mode=${1:-}
+applied_file="$state_dir/appearance.applied"
+
+if [ "$mode" = --refresh ]; then
+  mode=$(cat "$mode_file" 2>/dev/null || printf auto)
+fi
+
+if [ "$mode" = toggle ]; then
+  [ "$(cat "$mode_file" 2>/dev/null || true)" = light ] && mode=dark || mode=light
+fi
+case "$mode" in
+  light)
+    rgba=(0.8431372549 0.8549019608 0.8705882353 0.8588235294)
+    foreground='#2d3036'
+    css="$root/config/gtk-3.0/panel-light.css"
+    ;;
+  dark)
+    rgba=(0.3568627451 0.3764705882 0.4117647059 0.7019607843)
+    foreground='#ffffff'
+    css="$root/config/gtk-3.0/panel-dark.css"
+    ;;
+  auto)
+    period=$(redshift -p -c "$HOME/.config/redshift.conf" 2>/dev/null | awk -F: '/^Period:/ {gsub(/^[[:space:]]+/, "", $2); print $2; exit}')
+    case "$period" in Night|Transition) target=dark ;; *) target=light ;; esac
+    printf '%s\n' auto > "$mode_file"
+    "$0" "$target"
+    printf '%s\n' auto > "$mode_file"
+    exit 0
+    ;;
+  *) echo "usage: $0 auto|light|dark|toggle|--refresh" >&2; exit 2 ;;
+esac
+
+mkdir -p "$state_dir" "$HOME/.config/gtk-3.0"
+printf '%s\n' "$mode" > "$mode_file"
+if [ "$(cat "$applied_file" 2>/dev/null || true)" = "$mode" ]; then
+  exit 0
+fi
+printf 'PANEL_FOREGROUND=%q\n' "$foreground" > "$env_file"
+install -m644 "$css" "$HOME/.config/gtk-3.0/gtk.css"
+
+xfconf-query -c xfce4-panel -p /panels/panel-1/background-rgba \
+  -t double -s "${rgba[0]}" -t double -s "${rgba[1]}" \
+  -t double -s "${rgba[2]}" -t double -s "${rgba[3]}"
+
+for generator in generate-wifi-genmon.py generate-bt-genmon.py generate-power-genmon.py generate-night-genmon.py generate-appearance-genmon.py; do
+  MINTBOOK_PANEL_FG="$foreground" python3 "$root/icons/$generator"
+done
+
+xfce4-panel -r
+printf '%s\n' "$mode" > "$applied_file"
+printf 'system chrome: %s\n' "$mode"

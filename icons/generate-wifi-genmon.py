@@ -15,7 +15,7 @@ import math, os
 
 GLYPH  = 34             # glyph box, px - tuned to sit with the panel icon-size
 PAD_X  = 7              # horizontal breathing room baked into the canvas
-COLOR  = '#ffffff'
+COLOR  = os.environ.get('MINTBOOK_PANEL_FG', '#ffffff')
 
 # Wide-and-short proportions: a large SPAN keeps the arcs broad and stops the
 # glyph looking tall. RADII are capped so the widest band still fits the box.

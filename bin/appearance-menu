@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+"""Small pointer-anchored picker for Mintbook system-chrome appearance."""
+import os
+import subprocess
+import sys
+import gi
+gi.require_version('Gtk', '3.0')
+from gi.repository import Gtk, Gdk
+
+APPLY = os.path.expanduser('~/.local/bin/appearance-mode')
+STATE = os.path.expanduser('~/.config/mintbook/appearance.mode')
+MODES = (('auto', 'Auto', 'Follow sunset and sunrise'), ('light', 'Light', 'Pearl system chrome'), ('dark', 'Dark', 'Slate system chrome'))
+
+def current():
+    try: return open(STATE).read().strip()
+    except OSError: return 'auto'
+
+def main():
+    cur = current()
+    win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
+    win.set_decorated(False); win.set_skip_taskbar_hint(True); win.set_skip_pager_hint(True)
+    win.set_keep_above(True); win.set_type_hint(Gdk.WindowTypeHint.POPUP_MENU)
+    css = Gtk.CssProvider(); css.load_from_data(b'''window { background:#212124; } button { color:white; background:transparent; border:0; border-radius:10px; padding:8px 14px; } button:hover, button.current { background:rgba(255,255,255,.15); } label.sub { color:rgba(255,255,255,.58); font-size:11px; }''')
+    Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, margin_top=10, margin_bottom=10, margin_start=10, margin_end=10); win.add(box)
+    for key, title, sub in MODES:
+        button = Gtk.Button(); inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        inner.pack_start(Gtk.Label(label=title, xalign=0), False, False, 0)
+        label = Gtk.Label(label=sub, xalign=0); label.get_style_context().add_class('sub'); inner.pack_start(label, False, False, 0)
+        button.add(inner)
+        if key == cur: button.get_style_context().add_class('current')
+        button.connect('clicked', lambda _b, m=key: (subprocess.run([APPLY, m]), Gtk.main_quit()))
+        box.pack_start(button, False, False, 0)
+    win.connect('key-press-event', lambda _w, e: Gtk.main_quit() if e.keyval == Gdk.KEY_Escape else False)
+    display = Gdk.Display.get_default(); _s, x, y = display.get_default_seat().get_pointer().get_position()
+    win.show_all(); win.move(x - 20, 56 if y < 64 else y + 8); win.present(); Gtk.main()
+
+if __name__ == '__main__':
+    main(); sys.exit(0)

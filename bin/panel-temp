@@ -2,6 +2,8 @@
 # CPU package temperature for xfce4-genmon-plugin.
 # Finds coretemp by name (hwmon numbering is not stable across boots).
 t=""
+PANEL_FOREGROUND='#ffffff'
+[ -r "$HOME/.config/mintbook/system-chrome.env" ] && . "$HOME/.config/mintbook/system-chrome.env"
 for h in /sys/class/hwmon/hwmon*; do
     [ "$(cat "$h/name" 2>/dev/null)" = "coretemp" ] || continue
     for f in "$h"/temp*_input; do
@@ -29,7 +31,7 @@ printf '%s' "$c" > "$SF"
 # warn as the fanless Core M approaches its throttle point
 if   [ "$c" -ge 90 ]; then col='#ff5f56'
 elif [ "$c" -ge 80 ]; then col='#ffbd2e'
-else                       col='#ffffff'
+else                       col="$PANEL_FOREGROUND"
 fi
 
 # Pad to a constant 3 digits with U+2007 FIGURE SPACE (exactly one digit wide)

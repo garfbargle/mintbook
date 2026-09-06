@@ -10,7 +10,7 @@ Output: ~/.local/share/mintbook/power/{power-saver,balanced,performance}.svg
 """
 import os
 
-GLYPH, PAD_X, COLOR = 34, 7, '#ffffff'
+GLYPH, PAD_X, COLOR = 34, 7, os.environ.get('MINTBOOK_PANEL_FG', '#ffffff')
 
 # 16x16 Adwaita status/power-profile-*-symbolic (filled paths)
 ICONS = {

@@ -64,6 +64,23 @@ Each renderer has its own format, so the palette is translated rather than
 shared as literal CSS: Firefox uses `rgb()` values, Plank uses `R;;G;;B;;A`, and
 XFCE panel stores normalized RGBA doubles.
 
+### System-chrome appearance mode
+
+The sun/moon indicator beside Night Light is a separate `genmon-24` plugin.
+Click it for **Auto**, **Light**, or **Dark**. Auto is the default and checks
+Redshift's period once a minute, so the panel changes at the same sunset/sunrise
+boundary as Night Light without starting another daemon or altering Night Light's
+own mode.
+
+[`bin/appearance-mode`](../bin/appearance-mode) applies the surface, panel-only
+foreground CSS, and regenerated Mintbook status icons together. It writes the
+desired mode to `~/.config/mintbook/appearance.mode`; `auto` remains there even
+when the currently applied surface is Light or Dark. The custom Wi-Fi,
+Bluetooth, power, Night Light, CPU, and temperature indicators therefore switch
+with the bar. Branded or third-party tray icons retain the appearance supplied
+by their own app—forcing those through one colour would destroy their identity
+or require per-app patches.
+
 ### Top bar (xfce4-panel, `panel-1`)
 
 | Setting | Value |
@@ -72,7 +89,7 @@ XFCE panel stores normalized RGBA doubles.
 | `size` | 52 |
 | `icon-size` | 36 |
 | `background-style` | 1 (solid colour) |
-| `background-rgba` | `0.357, 0.376, 0.412, 0.702` — pearl-derived slate glass; leaves light panel icons legible |
+| `background-rgba` | Mode-managed: pearl light (`0.843, 0.855, 0.871, 0.859`) or slate dark (`0.357, 0.376, 0.412, 0.702`) |
 
 Plugin order (`plugin-ids`), left to right:
 

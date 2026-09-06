@@ -12,7 +12,7 @@ Output: ~/.local/share/mintbook/bt/bt-{on,off}.svg
 """
 import os
 
-GLYPH, PAD_X, COLOR = 34, 7, '#ffffff'
+GLYPH, PAD_X, COLOR = 34, 7, os.environ.get('MINTBOOK_PANEL_FG', '#ffffff')
 
 # 16x16 WhiteSur bluetooth-symbolic
 RUNE = (

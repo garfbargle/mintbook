@@ -107,11 +107,21 @@ def area_path(hist):
         pts.append(f'{x:.1f} {y:.1f}')
     return f'M0 {H} L' + ' L'.join(pts) + f' L{W} {H} Z'
 
+def panel_foreground():
+    try:
+        for line in open(os.path.expanduser('~/.config/mintbook/system-chrome.env')):
+            if line.startswith('PANEL_FOREGROUND='):
+                return line.split('=', 1)[1].strip().strip("'\"")
+    except OSError:
+        pass
+    return '#ffffff'
+
 def render(hist, path_out):
+    color = panel_foreground()
     d = area_path(hist)
     body = '' if not d else (
         f'  <g mask="url(#fade)">\n'
-        f'    <path d="{d}" fill="#ffffff" fill-opacity="0.82"/>\n'
+        f'    <path d="{d}" fill="{color}" fill-opacity="0.82"/>\n'
         f'  </g>\n')
     svg = (
 f'''<svg width="{W}" height="{H}" viewBox="0 0 {W} {H}" xmlns="http://www.w3.org/2000/svg">

@@ -1,0 +1,13 @@
+/* Mintbook dark system-chrome mode: panel-only light foreground. */
+.xfce4-panel.background,
+.xfce4-panel.background label,
+.xfce4-panel.background image,
+.xfce4-panel.background button,
+.xfce4-panel.background button label,
+.xfce4-panel.background button image {
+  color: #ffffff;
+}
+
+.xfce4-panel.background button:hover {
+  background-color: rgba(255, 255, 255, 0.12);
+}
