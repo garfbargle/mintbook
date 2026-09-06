@@ -1,0 +1,13 @@
+# Re-assert after boot and periodically, because Xorg and the panel are
+# restarted by logging out and back in, and a oneshot at graphical.target would
+# then be stale. The script renices five pids; it costs nothing to repeat.
+[Unit]
+Description=Re-assert desktop priority
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

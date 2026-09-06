@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# desktop-latency — how long the X server takes to answer while the machine is busy.
+#
+# The desktop, the compositor and the X server all run at nice 0, competing on
+# two cores with whatever else is running. This measures whether priority
+# separation actually protects them, by loading the machine twice — once with
+# the load at nice 0, once at nice 19 — and timing X round trips under each.
+#
+# It is a proxy, and says so: it nices the *competitor* down, because raising
+# the desktop up needs CAP_SYS_NICE. The mechanism under test is the same one.
+#
+# xdpyinfo is the probe: one fork, then a few hundred X round trips, so its
+# wall time is dominated by how quickly the server gets scheduled.
+#
+# No root. Nothing persists. See docs/feel.md.
+set -uo pipefail
+
+CYCLES=${1:-4}
+SAMPLES=${SAMPLES:-12}
+THREADS=${THREADS:-4}
+SECS=${SECS:-7}
+
+command -v xdpyinfo >/dev/null || { echo "needs xdpyinfo (x11-utils)" >&2; exit 1; }
+[ -n "${DISPLAY:-}" ] || { echo "needs an X display" >&2; exit 1; }
+
+TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+
+load_start() {                      # load_start NICE
+  local n=$1 i
+  for i in $(seq 1 "$THREADS"); do
+    nice -n "$n" timeout "$SECS" bash -c 'while :; do :; done' &
+  done
+}
+
+arm() {                             # arm LABEL NICE
+  local label=$1 n=$2 i t0 t1
+  load_start "$n"
+  sleep 1                           # let the load settle and the governor react
+  for i in $(seq 1 "$SAMPLES"); do
+    t0=$(date +%s%N); xdpyinfo >/dev/null 2>&1; t1=$(date +%s%N)
+    echo $(( (t1-t0)/1000000 )) >> "$TMP/$label"
+    sleep 0.15
+  done
+  wait 2>/dev/null
+}
+
+echo "desktop-latency: $CYCLES interleaved pairs, $THREADS-thread load, $SAMPLES X round-trip samples per arm"
+echo
+
+# A quiet reference, so the numbers under load have something to mean.
+for i in $(seq 1 "$SAMPLES"); do
+  t0=$(date +%s%N); xdpyinfo >/dev/null 2>&1; t1=$(date +%s%N)
+  echo $(( (t1-t0)/1000000 )) >> "$TMP/idle"
+done
+
+for i in $(seq 1 "$CYCLES"); do
+  echo "cycle $i"
+  arm competing 0
+  arm niced     19
+done
+
+echo
+python3 - "$TMP" <<'PY'
+import sys, pathlib, statistics
+d = pathlib.Path(sys.argv[1])
+def pct(v, p):
+    v = sorted(v); k = min(len(v)-1, int(round((p/100)*(len(v)-1))))
+    return v[k]
+res = {}
+for name in ("idle", "competing", "niced"):
+    f = d / name
+    if not f.exists(): continue
+    v = [int(x) for x in f.read_text().split()]
+    res[name] = v
+    print(f"  {name:<10} n={len(v):<3} median {statistics.median(v):6.0f} ms   "
+          f"p95 {pct(v,95):6.0f} ms   max {max(v):6.0f} ms")
+if "competing" in res and "niced" in res:
+    c, n = res["competing"], res["niced"]
+    dm = statistics.median(c) - statistics.median(n)
+    print(f"\n  nicing the competitor down moves the median X round trip by {dm:+.0f} ms")
+    if abs(dm) <= 2:
+        print("  NOT MEASURABLE at this resolution.")
+PY

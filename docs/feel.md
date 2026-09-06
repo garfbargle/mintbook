@@ -211,28 +211,91 @@ temperature over a real session. The sprints are short and the chassis was
 already reaching 95 C under any sustained load, but that is an argument, not a
 number.
 
-### 4. Nice the things you look at *up*
+### 4. Nice the things you look at — **measured, built, needs one root command**
 
-`Xorg`, `xfwm4` and `plank` all run at nice **0**, competing on two cores with
-whatever is compiling. Everything visible goes through them. `Nice=-5` on the
-compositor and X server makes the machine slower at work in order to make it
-feel faster while working — which is the correct trade for a laptop.
+`Xorg`, `xfwm4`, `xfsettingsd`, `xfdesktop`, `xfce4-panel` and `plank` all run
+at nice **0**, competing on two cores with whatever else is running. Everything
+visible goes through them, so on a saturated machine the desktop is what gets
+preempted: the machine is not slower, it only looks it.
 
-### 5. Focus-follows-priority
+[`bin/desktop-latency`](../bin/desktop-latency) measures that, by loading the
+machine twice and timing X round trips under each arm:
 
-systemd already puts each app in its own cgroup scope
-(`app-com.anthropic.Claude-*.scope`). `xprop -spy _NET_ACTIVE_WINDOW` → pid →
-scope → raise `cpu.weight` and `io.weight` on the focused app, lower it on the
-rest. On two cores, background Electron renderers competing with the foreground
-one is the most-felt contention on this machine.
+```
+idle       median  16 ms   p95  34 ms
+competing  median  40 ms   p95  64 ms      load at nice 0
+niced      median  27 ms   p95  41 ms      load at nice 19
+```
 
-Blocked on one thing: only the **memory** controller is currently delegated to
-those scopes. `cpu.weight` and `io.weight` do not exist there until `+cpu +io`
-is enabled down the `cgroup.subtree_control` chain.
+Load costs the X server **+24 ms** of median round trip; separating priorities
+returns **13 ms**, and p95 falls from 64 ms to 41 ms. Raw:
+[2026-09-06-desktop-latency.md](measurements/2026-09-06-desktop-latency.md).
 
-What *is* available today is `memory.min` on the focused app, so the thing you
-are looking at never has its pages reclaimed to zram. With `swappiness=180`
-that stutter on returning to a backgrounded window is real.
+That measurement is a **proxy**: it nices the competitor *down*, because raising
+Xorg up needs `CAP_SYS_NICE`. [`bin/desktop-nice`](../bin/desktop-nice) does it
+from the other end, at nice −5, installed as a timer so it survives the logout
+that restarts Xorg and the panel. `--check` is read-only; `--undo` puts
+everything back to 0.
+
+Not yet applied: needs root.
+
+```bash
+sudo install -m755 bin/desktop-nice /usr/local/sbin/mintbook-desktop-nice
+sudo install -m644 config/systemd/mintbook-desktop-nice.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now mintbook-desktop-nice.timer
+```
+
+This makes the machine slower at work in order to keep it responsive while
+working. That is the right trade for a laptop, and it is a trade, not a win.
+
+### 5. Focus-follows-priority — **built, running**
+
+systemd puts each application in its own cgroup scope.
+[`bin/focus-priority`](../bin/focus-priority) follows `_NET_ACTIVE_WINDOW`,
+resolves the focused window to its scope, and gives that scope `cpu.weight`
+**400** against **50** for everything else, plus `memory.low` of 512 MB so the
+app you are looking at is the last thing reclaimed to zram — which matters at
+`swappiness=180`.
+
+A cgroup is the right unit here. The focused window belongs to one process, but
+its renderers, GPU process and helpers are all in the same scope, so weighting
+the scope weights the whole application without enumerating it.
+
+It costs nothing between windows: `xprop -spy` blocks until the focus actually
+changes. There is no polling loop.
+
+Two things had to be solved, and both are worth recording:
+
+- **`cpu.weight` did not exist on application scopes.** The `cpu` controller is
+  available to `app.slice` but was not in its `cgroup.subtree_control`, and
+  systemd only enables it there when a unit *inside* `app.slice` asks for it —
+  which no desktop-launched scope does. The subtree is delegated to this user,
+  so the script enables it itself, idempotently. Every scope simply gains the
+  default weight of 100.
+- **`_NET_ACTIVE_WINDOW` returns two window ids** (`0x5400004, 0x0`). Taking the
+  last field, which is the obvious thing to write, yields `0x0` and resolves
+  nothing — silently, because every lookup after it just fails. The first
+  version of this script did exactly that and weighted the focused app *down*.
+
+**Its reach is smaller than it looks, and that is the honest caveat.** Only
+applications launched into their own systemd scope can be weighted. On this
+desktop right now there is exactly **one** such scope. Anything launched by a
+route that does not create a scope lands in the session's own cgroup, where
+there is nothing to separate. `bin/focus-priority --check` lists what exists.
+
+`io.weight` is not available at all: the `io` controller is not enabled at the
+system level, and `io.weight` is a BFQ feature — see the note under item 2 about
+why BFQ is not on this machine.
+
+```bash
+systemctl --user enable --now mintbook-focus-priority.service   # installed and running
+systemctl --user disable --now mintbook-focus-priority.service  # undo, and it clears what it set
+```
+
+Not measured: whether this changes anything a person can feel, as opposed to
+changing numbers in `cpu.weight`. With one scope in play it very likely does not
+yet. The measurement to make is `bin/desktop-latency`-shaped, with a real second
+application competing.
 
 ### 6. Writeback in bytes, not percent
 

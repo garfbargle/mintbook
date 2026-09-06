@@ -1,0 +1,16 @@
+# Raise the priority of the processes you are looking at.
+#
+# Xorg, xfwm4, xfsettingsd, xfdesktop and plank all run at nice 0 by default,
+# competing on two cores with whatever is compiling. Everything visible goes
+# through them, so on a saturated machine the desktop is what gets preempted —
+# the machine is not slower, it only looks it.
+#
+# This makes the machine slower at work in order to keep it responsive while
+# working, which is the correct trade for a laptop. See docs/feel.md.
+[Unit]
+Description=Renice the mintbook desktop above background work
+After=graphical.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/mintbook-desktop-nice
