@@ -9,13 +9,21 @@ overhead. Keep future comparisons within one workload and interleave settings.
 
 ## Handoff for the next session
 
-- Leave Reduce motion **On**. The preference lives in the app's own settings;
-  this repository records it but does not automatically apply it on a new install.
+- Leave Reduce motion **On**. The preference is set from the app's own settings
+  UI, and it persists to `~/.codex/config.toml` as
+  `reduced-motion-preference = "on"` under `[desktop]` — so it can be checked from
+  a script, but this repository does not apply it on a new install.
 - The user wants improvements tackled **one at a time, highest value first**.
-  Next is actual H.264 hardware decoding in video playback: verify the selected
-  codec and decoder before proposing browser changes. i965 is already installed
-  and loaded; do not repeat the driver fix or assume a mapped library proves
-  hardware decoding for a particular video.
+- **Video, updated 2026-09-06.** Chrome's *capability* side is now fully settled:
+  decode is hardware for h264 and vp8 and nothing else, encode is unreachable by
+  configuration. See [hardware.md](hardware.md), Encode with i965 live. Do not
+  re-run `chrome://gpu` exports or try more flags.
+  What is **still unmeasured** is the only lever left: whether pushing a site to
+  serve H.264 instead of VP9/AV1 actually lowers CPU and heat here, and by how
+  much. Measure that on one real video before recommending any extension —
+  `MediaSource.isTypeSupported` can be overridden from the DevTools protocol to
+  force the codec, so the A/B needs no install. Never assume a mapped library
+  proves hardware decoding for a particular video.
 - Subsequent candidates are a fresh real-workload Sustained-profile comparison,
   remaining panel overhead, and sleep recovery. Those were not changed here.
 - Preserve the distinction between reduced CPU overhead, task completion speed,

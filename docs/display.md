@@ -74,6 +74,13 @@ is h264 baseline/main/high and vp8, and nothing else. Decode was **already hardw
 accelerated before** the driver change — see [hardware.md](hardware.md), What Chrome
 actually does. Encode was not.
 
+Re-checked 2026-09-06 with i965 confirmed live in Chrome's GPU process: the decode
+list is **identical**, and encode is **still software-only** under every flag tried,
+including `--ignore-gpu-blocklist`. That closes the question the earlier session left
+open — it is Chrome's gate, not the driver. See [hardware.md](hardware.md),
+Encode with i965 live. **The only remaining playback lever is still codec selection:
+getting sites to serve H.264 instead of VP9/AV1. That has not been measured here.**
+
 ## Screenshots
 
 `xfce4-screenshooter` is the only screenshot tool installed (no `scrot`, `maim`, or

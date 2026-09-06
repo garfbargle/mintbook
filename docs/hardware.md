@@ -508,6 +508,64 @@ login** — that is the discriminator. If encode is still software-only with i96
 the cause is (2) and it needs a Chrome flag, not a driver. Worth chasing only if you
 do video calls or screen recording; it does nothing for playback.
 
+### Encode with i965 live — the discriminator, answered (2026-09-06)
+
+**It is cause (2): Chrome's own gate, not the driver.** Re-exported `chrome://gpu`
+from Chrome 152.0.7977.82 with `i965_drv_video.so` confirmed mapped in the GPU
+process, and encode is *still* software-only.
+
+| | i965 live, 2026-09-06 |
+|---|---|
+| VA driver mapped in GPU process | **`i965_drv_video.so`** |
+| Video Decode | **Hardware accelerated** |
+| Decode profiles | h264 baseline / main / high, vp8 — 16x16 to 4096x4096 |
+| Video Encode | **Software only. Hardware acceleration disabled** |
+| Encode profiles | *(still empty)* |
+| GL path | `gl=egl-angle, angle=opengl`, ozone x11, Mesa 25.2.8 |
+
+The decode list is byte-for-byte what iHD produced, so **the driver swap changed
+nothing Chrome can see**. It was still worth doing for encode-capable *other*
+consumers — `vainfo` under i965 reports `VAEntrypointEncSlice` for H.264, MPEG-2
+and JPEG — but Chrome does not use it.
+
+Four flag combinations were tried, each on a throwaway `--user-data-dir`, each
+re-exporting `chrome://gpu`. **All four still reported software-only encode with
+an empty profile list:**
+
+| Flags | Result |
+|---|---|
+| *(none)* | software only |
+| `--ignore-gpu-blocklist` | software only |
+| `--enable-features=VaapiVideoEncoder` | software only |
+| `--enable-features=AcceleratedVideoEncoder` | software only |
+
+`--ignore-gpu-blocklist` ruling it out is the important one: **it is not the GPU
+blocklist.** `Problems Detected` lists `video_encode` under `Disabled Features`
+with no `crbug` reference, unlike every genuine blocklist entry on the same page,
+which carries one.
+
+Two further pieces of evidence that the encode path is never even reached:
+
+- `--vmodule=*vaapi*=2,*video_encode*=2` produced **no VA-API log lines at all**.
+  A gated-but-attempted initialisation would log; this does not start.
+- The binary exports the feature name `AcceleratedVideoEncoder` and the switch
+  `disable-accelerated-video-encode`, but **no corresponding enable switch**.
+  There is no supported knob to turn on.
+
+**Conclusion: stop chasing this.** Hardware H.264 encode in this Chrome build is
+not reachable by configuration. It costs nothing for playback, which is decode.
+If hardware encode is ever actually needed — screen recording, not video calls in
+Chrome — reach for a VA-API-aware tool directly rather than the browser; `i965`
+exposes the entrypoint and `gst-launch-1.0` is installed.
+
+Raw export: [2026-09-06-chrome-gpu-i965.txt](measurements/2026-09-06-chrome-gpu-i965.txt).
+
+Method, for repeating this without clicking through the UI: launch Chrome on a
+throwaway profile with `--remote-debugging-port`, then read `chrome://gpu` over
+the DevTools protocol. `document.body.innerText` returns **empty** — the page
+builds its content inside the shadow root of an `<info-view>` element, so the
+extraction has to walk `shadowRoot` recursively.
+
 > **Restarting Chrome is not enough** — but the reason given here was wrong, and
 > logging out would not have fixed it either. `/etc/environment.d` is not read by
 > the session at all. See
