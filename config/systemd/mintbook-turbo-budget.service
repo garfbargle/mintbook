@@ -1,0 +1,23 @@
+# User service. Runs bin/turbo-budget for the life of the session: while a CPU
+# cap is in force, the first few seconds of every burst run uncapped, then the
+# cap comes back until the machine goes quiet. See docs/feel.md.
+#
+# No root, and no privileged helper of its own: it writes a profile name to
+# /run/mintbook-power/want, the channel the panel already uses.
+#
+# Install:  systemctl --user enable --now mintbook-turbo-budget.service
+# Undo:     systemctl --user disable --now mintbook-turbo-budget.service
+[Unit]
+Description=mintbook turbo budget — uncapped bursts, capped sustained load
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/mintbook/bin/turbo-budget
+Restart=on-failure
+RestartSec=5
+Nice=-1
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=default.target
