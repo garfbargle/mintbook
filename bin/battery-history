@@ -1,0 +1,787 @@
+#!/usr/bin/env python3
+"""Battery history — where the charge went, and what spent it.
+
+The log is written by bin/panel-battery, one line a minute, off the same
+genmon tick that draws the bar icon. Nothing runs for this window until you
+open it. See docs/battery.md for the format and for what the numbers do and
+do not mean.
+
+The per-application watts are a *fit*, not a guess and not a model: every
+sample carries the measured discharge power and the CPU the machine did in the
+same minute, so
+
+    watts = base + k x busy-cores
+
+is solved by least squares over the discharging samples in view, and an
+application's energy is k x its own CPU seconds. `base` is the floor — screen,
+radios, chipset — that no process is responsible for. What this cannot see is
+in the footer and in the docs, and it is not nothing: GPU work, disk, and a
+process that holds a radio awake while using no CPU are all invisible to it.
+"""
+import math
+import os
+import subprocess
+import sys
+import time
+
+import gi
+gi.require_version('Gtk', '3.0')
+gi.require_version('PangoCairo', '1.0')
+import cairo                                                       # noqa: E402
+from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo        # noqa: E402
+
+HOME = os.path.expanduser('~')
+LOG = os.environ.get('MINTBOOK_BAT_LOG', f'{HOME}/.cache/mintbook/battery/history')
+APPLIED = f'{HOME}/.config/mintbook/appearance.applied'
+CLK = os.sysconf('SC_CLK_TCK')
+
+SC = round((Gdk.Screen.get_default().get_resolution() or 96) / 96.0, 3) or 1.0
+W, PAD, GAP, SHADOW, RADIUS, CARD = 720, 18, 12, 18, 20, 14
+RANGES = [('3h', 3 * 3600), ('12h', 12 * 3600), ('24h', 24 * 3600),
+          ('3d', 3 * 86400)]
+
+LIGHT = {
+    'top': (233, 235, 238, .985), 'bottom': (206, 209, 214, .975),
+    'edge': (255, 255, 255, .75), 'rim': (65, 68, 74, .18),
+    'fg': (45, 48, 54), 'tile': (255, 255, 255, .55),
+    'tile_edge': (255, 255, 255, .65), 'track': (65, 68, 74, .13),
+    'hair': (65, 68, 74, .13), 'seg': (65, 68, 74, .10),
+    'seg_on': (255, 255, 255, .95),
+    'green': (52, 199, 89), 'amber': (255, 159, 10), 'red': (255, 59, 48),
+    'blue': (10, 132, 255),
+}
+DARK = {
+    'top': (104, 109, 119, .975), 'bottom': (72, 76, 84, .968),
+    'edge': (255, 255, 255, .18), 'rim': (0, 0, 0, .35),
+    'fg': (255, 255, 255), 'tile': (255, 255, 255, .12),
+    'tile_edge': (255, 255, 255, .10), 'track': (255, 255, 255, .16),
+    'hair': (255, 255, 255, .12), 'seg': (0, 0, 0, .20),
+    'seg_on': (255, 255, 255, .28),
+    'green': (48, 209, 88), 'amber': (255, 214, 10), 'red': (255, 69, 58),
+    'blue': (10, 132, 255),
+}
+
+# comm is 15 characters of kernel truncation and a build system's opinion.
+# These are the ones this machine actually shows.
+PRETTY = {
+    'firefox-bin': 'Firefox', 'firefox': 'Firefox', 'thunderbird': 'Thunderbird',
+    'claude-desktop': 'Claude', 'ChatGPT': 'ChatGPT', 'code': 'VS Code',
+    'Xorg': 'X server', 'kthreadd': 'Kernel', 'xfwm4': 'Window manager',
+    'xfce4-panel': 'Panel', 'xfdesktop': 'Desktop', 'pipewire': 'PipeWire',
+    'pipewire-pulse': 'PipeWire', 'wireplumber': 'PipeWire',
+    'NetworkManager': 'NetworkManager', 'gnome-terminal-': 'Terminal',
+    'xfce4-terminal': 'Terminal', 'nemo': 'Files', 'thermald': 'thermald',
+    'systemd-journal': 'Journal', 'nvidia': 'nvidia',
+}
+
+
+def pretty(name):
+    return PRETTY.get(name, name.replace('_', ' '))
+
+
+# ------------------------------------------------------------------- reading
+
+def read_file(path, default=''):
+    try:
+        with open(path) as f:
+            return f.read().strip() or default
+    except OSError:
+        return default
+
+
+def load(max_seconds):
+    """The log, parsed once. One line is
+
+        ts pct st mW dt dtotal dbusy [app:jiffies ...]
+    """
+    cutoff = time.time() - max_seconds
+    rows = []
+    try:
+        with open(LOG) as f:
+            for line in f:
+                p = line.split()
+                if len(p) < 7:
+                    continue
+                try:
+                    ts = int(p[0])
+                    if ts < cutoff:
+                        continue
+                    apps = {}
+                    for field in p[7:]:
+                        name, _, j = field.rpartition(':')
+                        if name:
+                            apps[name] = apps.get(name, 0) + int(j)
+                    rows.append({
+                        'ts': ts, 'pct': int(p[1]), 'st': p[2],
+                        'w': int(p[3]) / 1000.0, 'dt': int(p[4]),
+                        'total': int(p[5]), 'busy': int(p[6]), 'apps': apps})
+                except ValueError:
+                    continue
+    except OSError:
+        return []
+    return rows
+
+
+def battery_facts():
+    b = '/sys/class/power_supply/BAT0'
+    def n(name, d=0):
+        try:
+            return int(read_file(f'{b}/{name}', str(d)))
+        except ValueError:
+            return d
+    design = n('charge_full_design')
+    return {'pct': n('capacity'), 'status': read_file(f'{b}/status', 'Unknown'),
+            'health': (n('charge_full') * 100 // design) if design else 0,
+            'cycles': n('cycle_count'), 'temp': n('temp') / 10.0,
+            'wh': n('charge_full') * n('voltage_min_design') / 1e12}
+
+
+def fit(rows):
+    """base watts and watts-per-busy-core, by least squares on the samples in
+    view. Returns (base, k, n) or (None, None, n) when there is not enough to
+    fit — which is a thing to say, not a thing to invent a number for."""
+    xs, ys = [], []
+    for r in rows:
+        if r['st'] != 'D' or r['dt'] <= 0 or r['total'] <= 0 or r['w'] <= 0:
+            continue
+        xs.append(r['busy'] / CLK / r['dt'])          # busy cores
+        ys.append(r['w'])
+    n = len(xs)
+    if n < 20:
+        return None, None, n
+    mx, my = sum(xs) / n, sum(ys) / n
+    sxx = sum((x - mx) ** 2 for x in xs)
+    sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    if sxx < 1e-6:
+        return None, None, n
+    k = sxy / sxx
+    base = my - k * mx
+    if k <= 0 or base < 0:
+        return None, None, n
+    return base, k, n
+
+
+def energy(rows, base, k):
+    """Wh measured, Wh attributed per application, Wh on the floor."""
+    total = seconds = 0.0
+    apps, cpu = {}, {}
+    for r in rows:
+        if r['st'] != 'D' or r['dt'] <= 0:
+            continue
+        total += r['w'] * r['dt'] / 3600.0
+        seconds += r['dt']
+        for name, j in r['apps'].items():
+            cpu[name] = cpu.get(name, 0.0) + j / CLK
+    floor = (base or 0) * seconds / 3600.0
+    if k:
+        for name, secs in cpu.items():
+            apps[name] = k * secs / 3600.0
+    return total, apps, cpu, floor, seconds
+
+
+# ------------------------------------------------------------------- drawing
+
+def rgba(cr, c, alpha=None):
+    a = c[3] if len(c) > 3 else 1.0
+    cr.set_source_rgba(c[0] / 255, c[1] / 255, c[2] / 255,
+                       a if alpha is None else a * alpha)
+
+
+def rrect(cr, x, y, w, h, r):
+    r = max(0, min(r, w / 2, h / 2))
+    cr.new_sub_path()
+    cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
+    cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
+    cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
+    cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
+    cr.close_path()
+
+
+def text(cr, s, x, y, size, color, alpha=1.0, weight='normal',
+         align=None, width=0, tnum=False):
+    layout = PangoCairo.create_layout(cr)
+    font = Pango.FontDescription('Inter Semi-Bold' if weight == 'bold' else 'Inter')
+    font.set_absolute_size(size * Pango.SCALE)
+    layout.set_font_description(font)
+    if tnum:
+        attrs = Pango.AttrList()
+        attrs.insert(Pango.attr_font_features_new('tnum=1'))
+        layout.set_attributes(attrs)
+    layout.set_text(str(s), -1)
+    layout.set_ellipsize(Pango.EllipsizeMode.END)
+    if width:
+        layout.set_width(int(width * Pango.SCALE))
+        layout.set_alignment({'center': Pango.Alignment.CENTER,
+                              'right': Pango.Alignment.RIGHT}.get(
+                                  align, Pango.Alignment.LEFT))
+    rgba(cr, color, alpha)
+    cr.move_to(x, y)
+    PangoCairo.show_layout(cr, layout)
+    return layout.get_pixel_size()
+
+
+def hhmm(seconds):
+    seconds = int(seconds)
+    h, m = divmod(seconds // 60, 60)
+    if h:
+        return f'{h}h {m:02d}m'
+    if m:
+        return f'{m}m {seconds % 60:02d}s'
+    return f'{seconds}s'
+
+
+def wh(v):
+    return f'{v:.2f} Wh' if v < 10 else f'{v:.1f} Wh'
+
+
+# --------------------------------------------------------------------- panes
+
+class Pane:
+    """A card with a height and a draw. The window stacks them."""
+    h = 0
+
+    def __init__(self, win):
+        self.win = win
+
+    @property
+    def c(self):
+        return self.win.colors
+
+    def card(self, cr, w, h):
+        rrect(cr, 0, 0, w, h, CARD)
+        rgba(cr, self.c['tile'])
+        cr.fill_preserve()
+        rgba(cr, self.c['tile_edge'])
+        cr.set_line_width(1)
+        cr.stroke()
+
+    def draw(self, cr, w):
+        pass
+
+    def motion(self, x, y):
+        return False
+
+    def leave(self):
+        return False
+
+
+class ChargePane(Pane):
+    """Charge over the range, the power source under it, and a readout that
+    follows the pointer."""
+    h = 208
+    L, R, T, B = 46, 18, 34, 40      # plot margins inside the card
+
+    def __init__(self, win):
+        super().__init__(win)
+        self.cursor = None
+
+    # -- geometry
+
+    def plot(self, w):
+        return self.L, self.T, w - self.L - self.R, self.h - self.T - self.B
+
+    def x_of(self, ts, w):
+        x, _y, pw, _ph = self.plot(w)
+        t0, t1 = self.win.t0, self.win.t1
+        return x + pw * (ts - t0) / max(1, t1 - t0)
+
+    def draw(self, cr, w):
+        rows = self.win.rows
+        self.card(cr, w, self.h)
+        px, py, pw, ph = self.plot(w)
+        text(cr, 'Charge', 18, 12, 10.5, self.c['fg'], .9, 'bold')
+        if self.cursor is not None:
+            r = self.cursor
+            head = (f"{time.strftime('%a %H:%M', time.localtime(r['ts']))}   "
+                    f"{r['pct']}%   {r['w']:.1f} W")
+        else:
+            head = self.win.headline
+        text(cr, head, 0, 12, 10.5, self.c['fg'], .72 if self.cursor else .5,
+             align='right', width=w - 18, tnum=True)
+
+        # gridlines at 0 / 50 / 100, labelled once
+        for frac, label in ((0.0, '0'), (0.5, '50'), (1.0, '100')):
+            y = py + ph - ph * frac
+            cr.move_to(px, round(y) + .5)
+            cr.line_to(px + pw, round(y) + .5)
+            rgba(cr, self.c['hair'], .55 if frac else 1.0)
+            cr.set_line_width(1)
+            cr.stroke()
+            text(cr, label, 0, y - 8, 8.5, self.c['fg'], .40,
+                 align='right', width=px - 8, tnum=True)
+
+        if len(rows) < 2:
+            text(cr, 'Not enough history yet — one sample a minute, from the '
+                     'moment the bar icon was installed.',
+                 px, py + ph / 2 - 8, 9.5, self.c['fg'], .4)
+            return
+
+        # A gap (dt == 0) is a suspend or a panel restart, and the line must
+        # break there rather than draw a slope across four hours of sleep.
+        segments, cur = [], []
+        for r in rows:
+            if r['dt'] <= 0 and cur:
+                segments.append(cur)
+                cur = []
+            cur.append(r)
+        if cur:
+            segments.append(cur)
+
+        for seg in segments:
+            if len(seg) < 2:
+                continue
+            pts = [(self.x_of(r['ts'], w), py + ph - ph * r['pct'] / 100.0)
+                   for r in seg]
+            cr.move_to(pts[0][0], py + ph)
+            for qx, qy in pts:
+                cr.line_to(qx, qy)
+            cr.line_to(pts[-1][0], py + ph)
+            cr.close_path()
+            rgba(cr, self.c['green'], .14)
+            cr.fill()
+            cr.move_to(*pts[0])
+            for qx, qy in pts[1:]:
+                cr.line_to(qx, qy)
+            rgba(cr, self.c['green'], .85)
+            cr.set_line_width(1.6)
+            cr.set_line_join(cairo.LINE_JOIN_ROUND)
+            cr.stroke()
+
+        # the power source, as a strip under the axis
+        sy = py + ph + 8
+        rrect(cr, px, sy, pw, 5, 2.5)
+        rgba(cr, self.c['fg'], .10)
+        cr.fill()
+        start = None
+        for i, r in enumerate(rows):
+            plugged = r['st'] in ('C', 'F')
+            if plugged and start is None:
+                start = r['ts']
+            elif not plugged and start is not None:
+                x0, x1 = self.x_of(start, w), self.x_of(rows[i - 1]['ts'], w)
+                rrect(cr, x0, sy, max(2, x1 - x0), 5, 2.5)
+                rgba(cr, self.c['green'], .75)
+                cr.fill()
+                start = None
+        if start is not None:
+            x0, x1 = self.x_of(start, w), self.x_of(rows[-1]['ts'], w)
+            rrect(cr, x0, sy, max(2, x1 - x0), 5, 2.5)
+            rgba(cr, self.c['green'], .75)
+            cr.fill()
+
+        self.ticks(cr, w, px, py, pw, ph)
+        if self.cursor is not None:
+            self.readout(cr, w, px, py, pw, ph)
+
+    def ticks(self, cr, w, px, py, pw, ph):
+        span = self.win.t1 - self.win.t0
+        step = (900 if span <= 4 * 3600 else 3600 if span <= 13 * 3600
+                else 3 * 3600 if span <= 26 * 3600 else 12 * 3600)
+        fmt = '%H:%M' if span <= 26 * 3600 else '%a %H:%M'
+        t = self.win.t0 - self.win.t0 % step + step
+        while t < self.win.t1:
+            x = self.x_of(t, w)
+            cr.move_to(round(x) + .5, py)
+            cr.line_to(round(x) + .5, py + ph)
+            rgba(cr, self.c['hair'], .5)
+            cr.set_line_width(1)
+            cr.stroke()
+            text(cr, time.strftime(fmt, time.localtime(t)), x - 30,
+                 py + ph + 18, 8.5, self.c['fg'], .40, align='center', width=60)
+            t += step
+
+    def readout(self, cr, w, px, py, pw, ph):
+        """The line and the dot. The numbers go in the card's own corner
+        rather than into a floating chip, which has nothing to collide with
+        and nowhere to be clipped."""
+        r = self.cursor
+        x = self.x_of(r['ts'], w)
+        cr.move_to(round(x) + .5, py)
+        cr.line_to(round(x) + .5, py + ph)
+        rgba(cr, self.c['fg'], .30)
+        cr.set_line_width(1)
+        cr.stroke()
+        y = py + ph - ph * r['pct'] / 100.0
+        cr.arc(x, y, 4.5, 0, 2 * math.pi)
+        rgba(cr, self.c['tile'], 1.0)
+        cr.fill()
+        cr.arc(x, y, 3.2, 0, 2 * math.pi)
+        rgba(cr, self.c['green'])
+        cr.fill()
+
+    def motion(self, x, y):
+        rows = self.win.rows
+        if not rows or not (0 <= y <= self.h):
+            return self.leave()
+        px, _py, pw, _ph = self.plot(self.win.content_w)
+        if not (px - 4 <= x <= px + pw + 4):
+            return self.leave()
+        f = max(0.0, min(1.0, (x - px) / max(1, pw)))
+        want = self.win.t0 + f * (self.win.t1 - self.win.t0)
+        near = min(rows, key=lambda r: abs(r['ts'] - want))
+        if near is not self.cursor:
+            self.cursor = near
+            return True
+        return False
+
+    def leave(self):
+        if self.cursor is not None:
+            self.cursor = None
+            return True
+        return False
+
+
+class AppsPane(Pane):
+    """Where the discharge went, by application."""
+    LEAD, LINE = 46, 26
+
+    def __init__(self, win, count):
+        super().__init__(win)
+        self.count = count
+        self.h = self.LEAD + self.LINE * max(1, count) + 16
+
+    def draw(self, cr, w):
+        self.card(cr, w, self.h)
+        text(cr, 'Energy by application', 18, 12, 10.5, self.c['fg'], .9, 'bold')
+        text(cr, self.win.range_label, 0, 13, 9.5, self.c['fg'], .45,
+             align='right', width=w - 18)
+        rows = self.win.ranked
+        if not rows:
+            text(cr, self.win.no_fit_reason, 18, self.LEAD + 2, 9.5,
+                 self.c['fg'], .45, width=w - 36)
+            return
+        peak = max(v for _n, v, _c in rows) or 1.0
+        # Fixed columns, each with its own box: right-aligning a long string
+        # in a box that starts at the card edge lets it run back over the
+        # column to its left, which is how "screen, radios, chipset" ended up
+        # printed through a percentage.
+        name_w, bar_x = 150, 182
+        wh_end, share_end, time_end = w - 250, w - 176, w - 18
+        bar_w = wh_end - 90 - bar_x
+        for i, (name, watt_hours, cpu_seconds) in enumerate(rows):
+            y = self.LEAD + i * self.LINE
+            floor = name == '\x00floor'
+            colour = self.c['fg'] if floor else self.c['green']
+            rrect(cr, bar_x, y + 4, max(3, bar_w * watt_hours / peak), 9, 4.5)
+            rgba(cr, colour, .28 if floor else .55)
+            cr.fill()
+            text(cr, 'System floor' if floor else pretty(name), 18, y, 10,
+                 self.c['fg'], .55 if floor else .92, width=name_w)
+            text(cr, wh(watt_hours), wh_end - 90, y, 10, self.c['fg'], .85,
+                 align='right', width=90, tnum=True)
+            share = 100.0 * watt_hours / max(1e-6, self.win.total_wh)
+            text(cr, f'{share:.0f}%', share_end - 54, y, 10, self.c['fg'], .45,
+                 align='right', width=54, tnum=True)
+            text(cr, 'screen · radios · chipset' if floor else hhmm(cpu_seconds),
+                 time_end - 158, y, 10, self.c['fg'], .45,
+                 align='right', width=158)
+
+
+class StatsPane(Pane):
+    """Three numbers, the way a settings pane states them."""
+    h = 72
+
+    def draw(self, cr, w):
+        self.card(cr, w, self.h)
+        cells = self.win.stats
+        cw = w / len(cells)
+        for i, (label, value, note) in enumerate(cells):
+            x = i * cw
+            if i:
+                cr.move_to(round(x) + .5, 16)
+                cr.line_to(round(x) + .5, self.h - 16)
+                rgba(cr, self.c['hair'])
+                cr.set_line_width(1)
+                cr.stroke()
+            text(cr, label, x, 13, 9, self.c['fg'], .45,
+                 align='center', width=cw)
+            text(cr, value, x, 27, 17, self.c['fg'], .95, 'bold',
+                 align='center', width=cw, tnum=True)
+            text(cr, note, x, 50, 8.5, self.c['fg'], .40,
+                 align='center', width=cw)
+
+
+# -------------------------------------------------------------------- window
+
+class Window:
+    def __init__(self):
+        self.mode = 'dark' if read_file(APPLIED, 'light') == 'dark' else 'light'
+        self.colors = DARK if self.mode == 'dark' else LIGHT
+        self.range_i = 1
+        self.hit = None
+        self.all_rows = load(RANGES[-1][1])
+        self.facts = battery_facts()
+        self.content_w = W - 2 * PAD
+        self.compute()
+
+        self.win = win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
+        win.set_title('Battery')
+        win.set_decorated(False)
+        win.set_resizable(False)
+        win.set_app_paintable(True)
+        win.set_position(Gtk.WindowPosition.CENTER)
+        visual = Gdk.Screen.get_default().get_rgba_visual()
+        if visual:
+            win.set_visual(visual)
+        win.connect('draw', self.draw_background)
+        win.connect('key-press-event', self.on_key)
+        win.connect('destroy', Gtk.main_quit)
+
+        self.area = Gtk.DrawingArea()
+        self.area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK
+                             | Gdk.EventMask.BUTTON_RELEASE_MASK
+                             | Gdk.EventMask.POINTER_MOTION_MASK
+                             | Gdk.EventMask.LEAVE_NOTIFY_MASK)
+        self.area.connect('draw', self.on_draw)
+        self.area.connect('button-press-event', self.on_press)
+        self.area.connect('button-release-event', self.on_release)
+        self.area.connect('motion-notify-event', self.on_motion)
+        self.area.connect('leave-notify-event', lambda *_a: self.on_leave())
+        box = Gtk.Box()
+        for setter in (box.set_margin_top, box.set_margin_bottom,
+                       box.set_margin_start, box.set_margin_end):
+            setter(round(SHADOW * SC))
+        box.pack_start(self.area, False, False, 0)
+        win.add(box)
+        self.relayout()
+        win.show_all()
+
+    # ---- the numbers
+
+    HEAD, FOOT = 52, 30
+
+    def relayout(self):
+        self.height = (self.HEAD + sum(p.h for p in self.panes)
+                       + GAP * len(self.panes) + self.FOOT + 2 * PAD)
+        self.area.set_size_request(round(W * SC), round(self.height * SC))
+
+    def compute(self):
+        span = RANGES[self.range_i][1]
+        now = time.time()
+        self.rows = [r for r in self.all_rows if r['ts'] >= now - span]
+        self.t1 = int(now)
+        self.t0 = int(now - span)
+        base, k, n = fit(self.rows)
+        self.base, self.k, self.n_fit = base, k, n
+        total, apps, cpu, floor, seconds = energy(self.rows, base, k)
+        self.total_wh, self.floor_wh, self.on_battery = total, floor, seconds
+        ranked = sorted(apps.items(), key=lambda kv: -kv[1])
+        ranked = [(name, v, cpu.get(name, 0.0)) for name, v in ranked
+                  if v >= 0.005][:7]
+        if base is not None and floor > 0:
+            ranked.append(('\x00floor', floor, 0.0))
+            ranked.sort(key=lambda t: -t[1])
+        self.ranked = ranked
+        self.no_fit_reason = (
+            f'Not enough discharging samples to fit yet — {n} of the 20 this '
+            'needs. Run on battery for twenty minutes and it fills in.')
+        self.panes = [ChargePane(self), StatsPane(self),
+                      AppsPane(self, len(self.ranked))]
+
+    @property
+    def range_label(self):
+        return {'3h': 'over the last 3 hours', '12h': 'over the last 12 hours',
+                '24h': 'over the last 24 hours',
+                '3d': 'over the last 3 days'}[RANGES[self.range_i][0]]
+
+    @property
+    def headline(self):
+        if not self.rows:
+            return ''
+        drop = self.rows[0]['pct'] - self.rows[-1]['pct']
+        return (f"now {self.rows[-1]['pct']}%   "
+                + (f'down {drop}' if drop > 0 else f'up {-drop}')
+                + ' points')
+
+    @property
+    def stats(self):
+        f = self.facts
+        avg = (self.total_wh * 3600 / self.on_battery) if self.on_battery else 0
+        return [
+            ('Used on battery', wh(self.total_wh),
+             f'over {hhmm(self.on_battery)} unplugged'),
+            ('Average draw', f'{avg:.1f} W' if avg else '—',
+             (f'floor {self.base:.1f} W' if self.base
+              else 'not enough samples')),
+            ('Battery health', f"{f['health']}%" if f['health'] else '—',
+             f"{f['cycles']} cycles · {f['temp']:.0f} °C"),
+        ]
+
+    @property
+    def footnote(self):
+        if self.base is None:
+            return ('Per-application watts need twenty discharging samples to '
+                    'fit against. Charge and time are measured regardless.')
+        return (f'Fitted on {self.n_fit} discharging samples: '
+                f'{self.base:.1f} W floor + {self.k:.1f} W per busy core. '
+                'CPU only — GPU, disk and radio time are not in it.')
+
+    # ---- drawing
+
+    def on_draw(self, _w, cr):
+        cr.set_antialias(cairo.ANTIALIAS_BEST)
+        cr.scale(SC, SC)
+        self.draw_header(cr)
+        y = self.HEAD + PAD
+        for pane in self.panes:
+            cr.save()
+            cr.translate(PAD, y)
+            cr.rectangle(0, 0, self.content_w, pane.h)
+            cr.clip()
+            pane.draw(cr, self.content_w)
+            cr.restore()
+            pane.y = y
+            y += pane.h + GAP
+        text(cr, self.footnote, PAD, y - GAP + 12, 8.5, self.colors['fg'], .38,
+             width=self.content_w - 40)
+        return False
+
+    def draw_header(self, cr):
+        c = self.colors
+        text(cr, 'Battery', PAD, PAD + 4, 15, c['fg'], .95, 'bold')
+        # range segment, right of the title, left of the close button
+        th, tw = 26, 168
+        x0, ty = W - PAD - 34 - tw, PAD + 2
+        rrect(cr, x0, ty, tw, th, 8)
+        rgba(cr, c['seg'])
+        cr.fill()
+        sw = tw / len(RANGES)
+        self.range_rects = []
+        for i, (label, _s) in enumerate(RANGES):
+            sx = x0 + i * sw
+            self.range_rects.append((sx, ty, sw, th))
+            if i == self.range_i:
+                rrect(cr, sx + 2, ty + 2, sw - 4, th - 4, 6.5)
+                rgba(cr, c['seg_on'])
+                cr.fill()
+            elif self.hit == ('range', i):
+                rrect(cr, sx + 2, ty + 2, sw - 4, th - 4, 6.5)
+                rgba(cr, c['fg'], .07)
+                cr.fill()
+            on = i == self.range_i
+            text(cr, label, sx, ty + th / 2 - 8, 9.5, c['fg'],
+                 .95 if on else .55, 'bold' if on else 'normal',
+                 align='center', width=sw)
+        cx, cy = W - PAD - 11, PAD + 15
+        self.close_rect = (cx - 13, cy - 13, 26, 26)
+        if self.hit == ('close', 0):
+            cr.arc(cx, cy, 13, 0, 2 * math.pi)
+            rgba(cr, c['fg'], .10)
+            cr.fill()
+        rgba(cr, c['fg'], .55)
+        cr.set_line_width(1.6)
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        for dx, dy in ((-1, -1), (-1, 1)):
+            cr.move_to(cx + dx * 5, cy + dy * 5)
+            cr.line_to(cx - dx * 5, cy - dy * 5)
+        cr.stroke()
+
+    def draw_background(self, _w, cr):
+        a = self.win.get_allocation()
+        cr.save()
+        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.set_source_rgba(0, 0, 0, 0)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_OVER)
+        cr.scale(SC, SC)
+        x = y = SHADOW
+        w, h = a.width / SC - 2 * SHADOW, a.height / SC - 2 * SHADOW
+        for i in range(SHADOW, 0, -1):
+            rrect(cr, x - i, y - i + 2, w + 2 * i, h + 2 * i, RADIUS + i)
+            cr.set_line_width(1.4)
+            cr.set_source_rgba(0, 0, 0, .06 * (1 - i / SHADOW) ** 2)
+            cr.stroke()
+        grad = cairo.LinearGradient(0, y, 0, y + h)
+        top, bot = self.colors['top'], self.colors['bottom']
+        grad.add_color_stop_rgba(0, top[0] / 255, top[1] / 255, top[2] / 255, top[3])
+        grad.add_color_stop_rgba(1, bot[0] / 255, bot[1] / 255, bot[2] / 255, bot[3])
+        rrect(cr, x, y, w, h, RADIUS)
+        cr.set_source(grad)
+        cr.fill_preserve()
+        rgba(cr, self.colors['rim'])
+        cr.set_line_width(1)
+        cr.stroke()
+        rrect(cr, x + .75, y + .75, w - 1.5, h - 1.5, RADIUS - .75)
+        rgba(cr, self.colors['edge'])
+        cr.set_line_width(1)
+        cr.stroke()
+        cr.restore()
+        return False
+
+    # ---- input
+
+    def header_hit(self, x, y):
+        cx, cy, cw, ch = self.close_rect
+        if cx <= x <= cx + cw and cy <= y <= cy + ch:
+            return ('close', 0)
+        for i, (sx, sy, sw, sh) in enumerate(getattr(self, 'range_rects', [])):
+            if sx <= x <= sx + sw and sy <= y <= sy + sh:
+                return ('range', i)
+        return None
+
+    def on_motion(self, _w, e):
+        x, y = e.x / SC, e.y / SC
+        hit = self.header_hit(x, y) if y < self.HEAD else None
+        redraw = hit != self.hit
+        self.hit = hit
+        for pane in self.panes:
+            if hasattr(pane, 'y') and pane.motion(x - PAD, y - pane.y):
+                redraw = True
+        if redraw:
+            self.area.queue_draw()
+        return True
+
+    def on_leave(self):
+        self.hit = None
+        for pane in self.panes:
+            pane.leave()
+        self.area.queue_draw()
+        return True
+
+    def on_press(self, _w, e):
+        x, y = e.x / SC, e.y / SC
+        self.pressed = self.header_hit(x, y) if y < self.HEAD else None
+        if self.pressed is None and y < self.HEAD:
+            # the header is the title bar this window does not have
+            self.win.begin_move_drag(e.button, int(e.x_root), int(e.y_root),
+                                     e.time)
+        return True
+
+    def on_release(self, _w, e):
+        x, y = e.x / SC, e.y / SC
+        hit = self.header_hit(x, y) if y < self.HEAD else None
+        if hit is not None and hit == getattr(self, 'pressed', None):
+            kind, i = hit
+            if kind == 'close':
+                Gtk.main_quit()
+            elif i != self.range_i:
+                self.range_i = i
+                self.compute()
+                self.relayout()
+                self.area.queue_draw()
+        self.pressed = None
+        return True
+
+    def on_key(self, _w, e):
+        if e.keyval in (Gdk.KEY_Escape, Gdk.KEY_q):
+            Gtk.main_quit()
+            return True
+        for i, (label, _s) in enumerate(RANGES):
+            if e.keyval == Gdk.KEY_1 + i:
+                self.range_i = i
+                self.compute()
+                self.relayout()
+                self.area.queue_draw()
+                return True
+        return False
+
+
+def main():
+    Window()
+    Gtk.main()
+
+
+if __name__ == '__main__':
+    Gdk.set_program_class('mintbook-battery-history')
+    main()
+    sys.exit(0)
