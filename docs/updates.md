@@ -173,6 +173,12 @@ all** — the files belong to you — so on this machine, where both apps are us
 installs, that phase is a progress bar and no prompt. A system-scope one goes
 through flatpak's own polkit action.
 
+Driven end to end on 2026-09-07, against a real out-of-date ref: the operation
+name, the delta progress and flatpak's own detail line (*1 delta parts, 3
+loose fetched; 75 KiB transferred in 1 sec*) all arrive and are drawn, the row
+takes a green tick, and the re-check follows. No prompt, as expected for a
+user install.
+
 ### The privileged half is aptkit, not us
 
 Nothing in mintbook runs as root to do this. Installing goes through
@@ -325,6 +331,32 @@ in the first place — `mintupdate` still opens the window it always did.
 
 ---
 
+## How the flatpak path got tested
+
+There was nothing out of date on this machine, and shipping a second install
+backend that had never installed anything was not worth doing twice in one
+day. So the state was manufactured: install a small app, roll it back a
+commit, let the popup update it, remove it again.
+
+Two things went wrong doing that, both worth keeping:
+
+- **The old commit needed an old runtime.** `com.github.tchx84.Flatseal` is
+  930 kB and its *current* build runs on `org.gnome.Platform//50`, which was
+  already here. The September 2025 build does not — it wants `//49`, and
+  downgrading pulled 1.1 GB of runtime down with it. The size of a flatpak
+  says nothing about the size of installing an old one.
+- **`flatpak uninstall --unused` is broader than "what I just added".** It
+  removed `org.freedesktop.Platform.codecs-extra`, which had been installed
+  all along and had simply stopped being referenced once the test app went.
+  It was reinstalled. `--unused` answers "is anything pointing at this now",
+  not "did you put this here", and those are different questions on a machine
+  where an app was uninstalled at any point in the past.
+
+The end state is byte-for-byte the list that was there before, which is the
+only reason this was worth doing at all.
+
+---
+
 ## Gotchas
 
 - **genmon cannot be told to draw nothing.** Given output with no `<txt>` and
@@ -339,6 +371,11 @@ in the first place — `mintupdate` still opens the window it always did.
   The fix is `updates-none.svg`, one transparent pixel, 34 high. Not zero-width:
   a zero-width SVG is not guaranteed to load, and a loader that refuses it puts
   us straight back to stdout on the bar.
+- **Flatpak's status line is a ref, not a name.** `operation.get_ref()` gives
+  `app/com.github.tchx84.Flatseal/x86_64/stable`, and the first version put
+  the middle of that on screen above a row labelled *Flatseal*. The installer
+  carries a ref→name map now, falling back to the ref for a dependency that
+  was never in the list.
 - **A local `failures = []` inside the worker silently ate every flatpak
   error.** `operation-error` is a signal: it fires on the transaction and
   appends to the closure's list, while the thread function had declared a list

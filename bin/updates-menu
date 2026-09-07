@@ -1373,10 +1373,15 @@ class Menu:
         # One transaction per installation. A user ref and a system ref cannot
         # share one, and mixing them would also mix one prompt with none.
         groups = {}
+        # Flatpak talks in refs and the list talks in names. Keep the mapping,
+        # or the status line reads "Updating com.github.tchx84.Flatseal…" over
+        # a row that says Flatseal.
+        titles = {}
         for row in rows:
             info = row.get('flatpak') or {}
-            groups.setdefault(info.get('scope', 'user'), []).append(
-                info.get('ref', ''))
+            ref = info.get('ref', '')
+            groups.setdefault(info.get('scope', 'user'), []).append(ref)
+            titles[ref] = row['name']
 
         self.fp_cancel = Gio.Cancellable()
         cancel = self.fp_cancel
@@ -1419,7 +1424,10 @@ class Menu:
 
         def on_operation(_trans, operation, progress):
             ref = operation.get_ref() or ''
-            GLib.idle_add(self.fp_status, ref.split('/')[1] if '/' in ref else ref)
+            name = titles.get(ref)
+            if not name:            # a dependency we did not ask for by name
+                name = ref.split('/')[1] if '/' in ref else ref
+            GLib.idle_add(self.fp_status, name)
             progress.connect('changed', on_progress, progress)
 
         def on_progress(_p, progress):
