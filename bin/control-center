@@ -73,13 +73,18 @@ COLW = (WIDTH - 2 * PAD - (COLS - 1) * GAP) / COLS
 ROWH = {'toggle': 66, 'segment': 58, 'slider': 58, 'meter': 66}
 SPAN = {'toggle': 2, 'segment': 4, 'slider': 4, 'meter': 2}
 
+# The popup glass. Canonical values live in config/theme/mintbook-glass.ini
+# under [PopupLight] / [PopupDark], and are hardcoded here the way
+# config/firefox/userChrome.css and the rofi palettes hardcode theirs: a popup
+# that has to find and parse a file before it can paint is a popup that can
+# fail to paint. Alphas are the same numbers, as 0-1 rather than 0-255.
 LIGHT = {
     'top': (229, 231, 234, .980), 'bottom': (202, 205, 210, .970),
     'edge': (255, 255, 255, .75), 'rim': (65, 68, 74, .18),
     'fg': (45, 48, 54), 'tile': (255, 255, 255, .55),
     'tile_hi': (255, 255, 255, .78), 'tile_edge': (255, 255, 255, .65),
     'track': (65, 68, 74, .13), 'fill': (255, 255, 255, .95),
-    'on_fill': (45, 48, 54), 'accent': (10, 132, 255),
+    'on_fill': (45, 48, 54), 'accent': (0, 122, 255),
     'seg': (65, 68, 74, .10), 'seg_on': (255, 255, 255, .95),
 }
 DARK = {
@@ -797,7 +802,11 @@ class Panel:
         if y + h > geo.y + geo.height:
             y = geo.y + geo.height - h
         win.move(x, y)
-        win.set_opacity(0.0)
+        # Gtk.Widget.set_opacity, not win.set_opacity: Gtk.Window overrides it
+        # with a deprecated variant, and PyGObject picks the override, so every
+        # popup open wrote a DeprecationWarning to stderr. genmon discards that
+        # stream; a terminal does not.
+        Gtk.Widget.set_opacity(win, 0.0)
         win.present()
         self.grab(gdk_win, w, h)
         self.fade_in()
@@ -809,7 +818,7 @@ class Panel:
             if self.closing:
                 return False
             f = min(1.0, (time.monotonic() - self.t0) / 0.11)
-            self.win.set_opacity(f * f * (3 - 2 * f))
+            Gtk.Widget.set_opacity(self.win, f * f * (3 - 2 * f))
             return f < 1.0
         GLib.timeout_add(16, step)
 

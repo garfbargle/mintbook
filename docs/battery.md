@@ -257,14 +257,20 @@ running, which doctor's other checks will have said more directly.
   The trim had not fired here, so nothing was actually lost — but it would have
   been. `SAMPLE_EVERY` also has a floor now; a hand-edited `0` was a division by
   zero on every tick.
-- **The `LIGHT`/`DARK` glass palettes are copied into four files** —
-  `bin/control-center`, `bin/battery-menu`, `bin/battery-history` and
-  `bin/wifi-menu` — with small drifts between them that are accidents rather
-  than decisions. They should come from one place, the way
-  `config/theme/mintbook-glass.ini` already does for GTK and rofi.
-- **`Gtk.Window.set_opacity` is deprecated** and warns on stderr on every
-  popup open. Harmless, and genmon discards the stream, but it is noise in
-  any run from a terminal.
+- ~~**The `LIGHT`/`DARK` glass palettes are copied into four files.**~~
+  **Done 2026-09-07.** They still are — a popup that has to find and parse a
+  file before it can paint is a popup that can fail to paint, and this is the
+  same convention `config/firefox/userChrome.css` and the rofi palettes already
+  follow. What changed is that the values are now identical in all four and are
+  recorded once, in `config/theme/mintbook-glass.ini` under `[PopupLight]` and
+  `[PopupDark]`. The drift that was actually there: `bin/battery-history` was
+  4/255 lighter on both gradient stops and off by one step on `hair` and
+  `tile`, and both it and `bin/control-center` used Apple's **dark**-appearance
+  blue (`#0A84FF`) in the light appearance, where it should be `#007AFF`.
+- ~~**`Gtk.Window.set_opacity` is deprecated.**~~ **Done 2026-09-07.**
+  `Gtk.Window` overrides `Gtk.Widget.set_opacity` with a deprecated variant and
+  PyGObject picks the override, so every popup open wrote a warning to stderr.
+  Calling `Gtk.Widget.set_opacity(win, …)` explicitly takes the widget one.
 - **Health is read but never watched.** `charge_full / charge_full_design` is
   **80.4% at 154 cycles** on 2026-09-07 (32.4 Wh of a design 40.3 Wh).
   [session-battery-thermals.md](session-battery-thermals.md) recorded **84–85%

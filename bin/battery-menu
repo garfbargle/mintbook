@@ -53,6 +53,11 @@ SC = round((Gdk.Screen.get_default().get_resolution() or 96) / 96.0, 3) or 1.0
 WIDTH, PAD, GAP, SHADOW, RADIUS, CARD = 320, 14, 10, 16, 18, 12
 CLK = os.sysconf('SC_CLK_TCK')
 
+# The popup glass. Canonical values live in config/theme/mintbook-glass.ini
+# under [PopupLight] / [PopupDark], and are hardcoded here the way
+# config/firefox/userChrome.css and the rofi palettes hardcode theirs: a popup
+# that has to find and parse a file before it can paint is a popup that can
+# fail to paint. Alphas are the same numbers, as 0-1 rather than 0-255.
 LIGHT = {
     'top': (229, 231, 234, .980), 'bottom': (202, 205, 210, .970),
     'edge': (255, 255, 255, .75), 'rim': (65, 68, 74, .18),
@@ -839,7 +844,11 @@ class Menu:
         if y + h > geo.y + geo.height:
             y = geo.y + geo.height - h
         win.move(x, y)
-        win.set_opacity(0.0)
+        # Gtk.Widget.set_opacity, not win.set_opacity: Gtk.Window overrides it
+        # with a deprecated variant, and PyGObject picks the override, so every
+        # popup open wrote a DeprecationWarning to stderr. genmon discards that
+        # stream; a terminal does not.
+        Gtk.Widget.set_opacity(win, 0.0)
         win.present()
         self.grab(gdk_win, w, h)
         self.t0 = time.monotonic()
@@ -848,7 +857,7 @@ class Menu:
             if self.closing:
                 return False
             f = min(1.0, (time.monotonic() - self.t0) / 0.11)
-            win.set_opacity(f * f * (3 - 2 * f))
+            Gtk.Widget.set_opacity(win, f * f * (3 - 2 * f))
             return f < 1.0
         GLib.timeout_add(16, step)
 
