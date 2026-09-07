@@ -258,14 +258,20 @@ Measured 2026-09-07, machine idle, warm page cache. Every popup behind the bar
 — this one, `bt-menu`, `wifi-menu`, `battery-menu` — is a fresh Python process
 per click, and pays the same startup before it can draw anything:
 
-| phase | ms |
-|---|---|
-| fork/exec + interpreter start, before `T0` | ~55 |
-| `import gi` + `require_version` | ~65 |
-| `from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo` | ~225 |
-| `Gtk.init` — X connect **and parse the GTK theme** | ~200 |
-| realize + first Pango layout (fontconfig) | ~40 |
-| **before any of this file's own code runs** | **~585** |
+| phase | ms | |
+|---|---|---|
+| fork/exec + interpreter start | ~55 | |
+| compile this file — 33–47 KB of source | ~35 | before `T0` |
+| `import gi` + `require_version` | ~65 | |
+| `from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo` | ~190 | |
+| `Gtk.init` — X connect **and parse the GTK theme** | ~200 | |
+| realize + first Pango layout (fontconfig) | ~40 | |
+| **before any of this file's own code runs** | **~585** | |
+
+The first two are both before `T0`, so no `MINTBOOK_*_TIME` number contains
+them. The typelib line was first measured at ~225 and settles at ~190 when
+runs are interleaved rather than taken back to back; treat run-to-run load as
+worth ±40 on any single figure here.
 
 Then the reads, the layout, the X map and the compositor. That is the ~1 second
 between the click and the popup, and it is why all four feel the same: the part
@@ -313,8 +319,65 @@ three differences are unattributed. The argument for no visual change is the
 grep, not the capture. The claim to check, if a difference ever shows up, is
 that one of them touches a themed widget after all.
 
-That leaves ~290 ms of typelib import, which no environment variable can move.
-Getting rid of it means not starting a process per click.
+### What was measured and left alone
+
+The theme was the only free win. Three more were measured on 2026-09-07 and
+all three were declined; they are written down so the next person does not
+re-derive them.
+
+**Python never caches bytecode for the script you name on the command line.**
+It caches every *imported module* into `__pycache__`, but `__main__` is
+recompiled from source on every launch, and these files are 33–47 KB:
+
+```
+compile 47 KB source :   32.9 ms
+unmarshal cached .pyc:    0.7 ms   (75 KB)
+```
+
+So ~33 ms of every click recompiles bytes that did not change — 40 ms for
+`wifi-menu`, 34 for `control-center`, 33 for `battery-menu`. It cannot be
+fixed inside one file: the compile has already happened before any of that
+file's own code runs, so the logic that would avoid it cannot live in the file
+it is avoiding. It needs each script split into a ~5-line stub plus a module
+Python is willing to cache. **Declined** — 33 ms is not worth turning "seven
+small executables in a directory" into launchers plus modules, which is the
+property the whole design is for.
+
+**Dropping the `Gtk` typelib.** `Gtk` is most of the import; `Gdk` + `Pango` +
+`PangoCairo` without it is cheaper. Interleaved, five runs:
+
+```
+with Gtk 189 ms    without Gtk 114 ms
+with Gtk 192 ms    without Gtk 185 ms
+with Gtk 311 ms    without Gtk 152 ms
+with Gtk 221 ms    without Gtk 168 ms
+with Gtk 216 ms    without Gtk 103 ms
+```
+
+Median ~216 → ~152. The second row is the honest one: the gap is noisy enough
+not to trust ~60 ms as more than an order of magnitude. And collecting it means
+rewriting the window and mainloop layer in four files from `Gtk.Window` /
+`Gtk.DrawingArea` / `Gtk.main()` to raw `Gdk.Window` + `GLib.MainLoop` —
+touching exactly the override-redirect and grab-at-time-0 behaviour in
+**Gotchas** below. **Declined:** the least certain win on the list, for the
+riskiest change.
+
+**`python3 -S`, to skip `site`.** Saves ~20 ms by not building the path, and
+then `gi` is not on the path:
+
+```
+ModuleNotFoundError: No module named 'gi'
+```
+
+The 0.03 s it appeared to take was the crash, not a fast start. **Dead end.**
+
+**A resident process** — a daemon holding Gtk imported, or a zygote forking
+after the import — is the only thing that removes the ~190 ms typelib import,
+because that is `libgirepository` building Python wrappers fresh in every
+process and no environment variable moves it. **Not pursued**, and its RAM cost
+was never measured, so there is no number here to argue from. The remaining
+~380 ms floor of interpreter, typelib and `Gtk.init` is the price of a process
+per click, and it is being paid deliberately.
 
 ---
 
