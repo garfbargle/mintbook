@@ -1,0 +1,1287 @@
+#!/usr/bin/env python3
+"""Bluetooth menu — the glass popup behind the bar's Bluetooth icon.
+
+macOS's Bluetooth menu: the radio switch, the devices you own and whether
+they are connected, what is left in them, and the things in range you have
+not paired yet. Until now Bluetooth was a toggle tile in the Control Center
+and the bar icon opened blueman-manager, which is a window, and a window is
+the wrong shape for "put the speaker back on".
+
+Drawn the way bin/wifi-menu and bin/battery-menu are — cairo on one
+override-redirect window, one DrawingArea, a list of rows — for the reasons
+in docs/control-center.md: genmon spawns a click command with no Gdk event
+behind it, and xfwm4 discards a Gtk.Menu grab at time 0.
+
+Three things worth knowing about the readings:
+
+  * everything comes from one D-Bus call. BlueZ's ObjectManager hands over the
+    adapter, every device, and each device's battery in a single reply that
+    costs 4 ms — so this polls it while the popup is open rather than
+    subscribing to PropertiesChanged, and a connection that lands elsewhere
+    shows up here within a second and a half.
+
+  * discovery cannot go through busctl. BlueZ ties a discovery session to the
+    D-Bus connection that asked for it, and busctl's connection dies with the
+    process, so `busctl call … StartDiscovery` starts a scan that stops again
+    immediately. Gio's connection lives as long as this process does, which is
+    exactly the window the scan should be open for. See set_scan().
+
+  * the scan stops while a device is connected. Inquiry and A2DP share one
+    radio, and the case where a speaker is playing is not the case where you
+    are pairing a mouse. The row says so rather than sitting there empty.
+
+Pairing goes through blueman-applet, which is still the BlueZ agent — a
+passkey or a confirmation appears in its dialog, not here. Connecting,
+disconnecting and pairing are all one click on the device's row.
+"""
+import glob
+import math
+import os
+import signal
+import subprocess
+import sys
+import threading
+import time
+
+T0 = time.monotonic()
+
+HOME = os.path.expanduser('~')
+APPLIED = f'{HOME}/.config/mintbook/appearance.applied'
+PIDFILE = f'{HOME}/.cache/mintbook/bt-menu.pid'
+PLUGIN = f'{HOME}/.local/share/mintbook/control-center/plugins/20-bluetooth'
+MANAGER = 'blueman-manager'
+
+
+def read_file(path, default=''):
+    try:
+        with open(path) as f:
+            return f.read().strip() or default
+    except OSError:
+        return default
+
+
+def rfkill():
+    """(soft, hard) for the Bluetooth switch, straight out of sysfs. Both
+    files are world-readable, so this needs neither root nor a fork — and a
+    switch that is rfkilled has to say so, or the toggle in the header is a
+    control that visibly does nothing."""
+    for d in sorted(glob.glob('/sys/class/rfkill/rfkill*')):
+        if read_file(f'{d}/type') == 'bluetooth':
+            return read_file(f'{d}/soft') == '1', read_file(f'{d}/hard') == '1'
+    return False, False
+
+
+SOFT, HARD = rfkill()
+
+
+def spawn(args):
+    try:
+        return subprocess.Popen(args, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, text=True)
+    except OSError:
+        return None
+
+
+# Before importing Gtk, as in bin/wifi-menu and bin/control-center: the GTK
+# import costs ~220 ms and this reading costs 15, so asking for it here makes
+# it free. Gio would do the same call in 4 ms, but not until Gtk is imported,
+# which is the 220 ms this is trying to hide behind.
+OBJ_P = spawn(['busctl', '--system', '--json=short', 'call', 'org.bluez', '/',
+               'org.freedesktop.DBus.ObjectManager', 'GetManagedObjects'])
+
+import gi                                                          # noqa: E402
+gi.require_version('Gtk', '3.0')
+gi.require_version('PangoCairo', '1.0')
+import cairo                                                       # noqa: E402
+from gi.repository import Gtk, Gdk, Gio, GLib, Pango, PangoCairo   # noqa: E402
+
+SC = round((Gdk.Screen.get_default().get_resolution() or 96) / 96.0, 3) or 1.0
+WIDTH, PAD, GAP, SHADOW, RADIUS, CARD = 320, 14, 10, 16, 18, 12
+
+# The popup glass. Canonical values live in config/theme/mintbook-glass.ini
+# under [PopupLight] / [PopupDark], and are hardcoded here the way
+# config/firefox/userChrome.css and the rofi palettes hardcode theirs: a popup
+# that has to find and parse a file before it can paint is a popup that can
+# fail to paint. Alphas are the same numbers, as 0-1 rather than 0-255.
+LIGHT = {
+    'top': (229, 231, 234, .980), 'bottom': (202, 205, 210, .970),
+    'edge': (255, 255, 255, .75), 'rim': (65, 68, 74, .18),
+    'fg': (45, 48, 54), 'tile': (255, 255, 255, .55),
+    'tile_hi': (255, 255, 255, .78), 'tile_edge': (255, 255, 255, .65),
+    'track': (65, 68, 74, .13), 'hair': (65, 68, 74, .12),
+    'field': (255, 255, 255, .80), 'field_edge': (65, 68, 74, .18),
+    'blue': (0, 122, 255), 'green': (52, 199, 89), 'red': (255, 59, 48),
+}
+DARK = {
+    'top': (104, 109, 119, .975), 'bottom': (74, 78, 86, .968),
+    'edge': (255, 255, 255, .18), 'rim': (0, 0, 0, .35),
+    'fg': (255, 255, 255), 'tile': (255, 255, 255, .13),
+    'tile_hi': (255, 255, 255, .20), 'tile_edge': (255, 255, 255, .10),
+    'track': (255, 255, 255, .16), 'hair': (255, 255, 255, .12),
+    'field': (0, 0, 0, .22), 'field_edge': (255, 255, 255, .16),
+    'blue': (10, 132, 255), 'green': (48, 209, 88), 'red': (255, 69, 58),
+}
+
+
+# ------------------------------------------------------------------- reading
+
+def unwrap(v):
+    """busctl --json=short wraps every variant as {"type": …, "data": …};
+    GVariant.unpack() hands the value over bare. Normalising the busctl reply
+    to the Gio shape is what lets one parser serve the read on the open path
+    and every read after it."""
+    if isinstance(v, dict):
+        if len(v) == 2 and 'type' in v and 'data' in v:
+            return unwrap(v['data'])
+        return {k: unwrap(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return [unwrap(x) for x in v]
+    return v
+
+
+def parse_objects(objs):
+    """BlueZ's whole tree, as (adapter, devices). Battery1 is a sibling
+    interface on the device object rather than a Device1 property, which is
+    why this reads interfaces and not just one of them."""
+    adapter, devices = None, []
+    for path in sorted(objs):
+        ifaces = objs[path]
+        a = ifaces.get('org.bluez.Adapter1')
+        if a is not None and adapter is None:
+            adapter = {'path': path, 'powered': bool(a.get('Powered')),
+                       'discovering': bool(a.get('Discovering'))}
+        d = ifaces.get('org.bluez.Device1')
+        if d is None:
+            continue
+        addr = d.get('Address') or ''
+        devices.append({
+            'path': path,
+            'adapter': d.get('Adapter') or '',
+            'addr': addr,
+            'name': d.get('Alias') or d.get('Name') or addr,
+            # BlueZ only sets Name once the device has advertised one. An
+            # unnamed BLE beacon is not something anyone means to pair with,
+            # and there are a dozen of them in range at any moment.
+            'named': bool(d.get('Name')),
+            'icon': d.get('Icon') or '',
+            'paired': bool(d.get('Paired')) or bool(d.get('Bonded')),
+            'connected': bool(d.get('Connected')),
+            'rssi': d.get('RSSI'),
+            'battery': (ifaces.get('org.bluez.Battery1') or {}).get('Percentage'),
+        })
+    if adapter is not None:
+        devices = [d for d in devices
+                   if not d['adapter'] or d['adapter'] == adapter['path']]
+    return adapter, devices
+
+
+def reap(proc, timeout=6):
+    if proc is None:
+        return ''
+    try:
+        return (proc.communicate(timeout=timeout)[0] or '').strip()
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        return ''
+
+
+# What BlueZ says, and what it means. The left column is the tail of the
+# D-Bus error verbatim; the right is the sentence a person would say. Anything
+# not in here still gets through, de-hyphenated — the map is for the handful
+# that actually come up, not a translation of all of BlueZ.
+BLUEZ_SAYS = {
+    'br-connection-page-timeout': 'No answer — is it switched on?',
+    'le-connection-timeout': 'No answer — is it switched on?',
+    'Page Timeout': 'No answer — is it switched on?',
+    'br-connection-profile-unavailable': 'Nothing here to connect to',
+    'br-connection-create-socket': 'Could not open the link',
+    'br-connection-busy': 'Busy — try again',
+    'br-connection-canceled': 'Connection cancelled',
+    'Authentication Failed': 'Pairing was refused',
+    'Authentication Canceled': 'Pairing cancelled',
+    'Authentication Timeout': 'Pairing timed out',
+    'Already Exists': 'Already connected',
+    'In Progress': 'Already working on that',
+    'Device or resource busy': 'Busy — try again',
+}
+
+
+def dbus_message(exc):
+    """`GDBus.Error:org.bluez.Error.Failed: br-connection-page-timeout` is the
+    whole of what BlueZ says when a speaker is off. The part after the last
+    colon is the only part that says anything, and BLUEZ_SAYS turns the ones
+    that come up here into a sentence — "Br connection page timeout" is a
+    log line, not an answer to why the speaker did not come on."""
+    msg = (getattr(exc, 'message', None) or str(exc) or '').strip()
+    tail = (msg.rsplit(':', 1)[-1] if ':' in msg else msg).strip()
+    if tail in BLUEZ_SAYS:
+        return BLUEZ_SAYS[tail]
+    tail = tail.replace('-', ' ')
+    return (tail[:1].upper() + tail[1:])[:64] or 'Failed'
+
+
+def set_power(on):
+    """Through the Control Center's own tile, so the switch here and the tile
+    there can never disagree — the same rule bin/wifi-menu follows for the
+    radio and bin/battery-menu for the power profile."""
+    value = 'on' if on else 'off'
+    if os.access(PLUGIN, os.X_OK):
+        subprocess.run([PLUGIN, 'set', value], timeout=15, capture_output=True)
+    else:
+        subprocess.run(['bluetoothctl', 'power', value], timeout=15,
+                       capture_output=True)
+
+
+# ------------------------------------------------------------------- drawing
+
+def rgba(cr, c, alpha=None):
+    a = c[3] if len(c) > 3 else 1.0
+    cr.set_source_rgba(c[0] / 255, c[1] / 255, c[2] / 255,
+                       a if alpha is None else a * alpha)
+
+
+def rrect(cr, x, y, w, h, r):
+    r = max(0, min(r, w / 2, h / 2))
+    cr.new_sub_path()
+    cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
+    cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
+    cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
+    cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
+    cr.close_path()
+
+
+def text(cr, s, x, y, size, color, alpha=1.0, weight='normal',
+         align=None, width=0, tnum=False):
+    layout = PangoCairo.create_layout(cr)
+    font = Pango.FontDescription('Inter Semi-Bold' if weight == 'bold' else 'Inter')
+    font.set_absolute_size(size * Pango.SCALE)   # SC already carries the DPI
+    layout.set_font_description(font)
+    if tnum:
+        attrs = Pango.AttrList()
+        attrs.insert(Pango.attr_font_features_new('tnum=1'))
+        layout.set_attributes(attrs)
+    layout.set_text(str(s), -1)
+    layout.set_ellipsize(Pango.EllipsizeMode.END)
+    if width:
+        layout.set_width(int(width * Pango.SCALE))
+        layout.set_alignment({'center': Pango.Alignment.CENTER,
+                              'right': Pango.Alignment.RIGHT}.get(
+                                  align, Pango.Alignment.LEFT))
+    rgba(cr, color, alpha)
+    cr.move_to(x, y)
+    PangoCairo.show_layout(cr, layout)
+    return layout.get_pixel_size()
+
+
+def bt_glyph(cr, x, y, s, color, alpha=1.0):
+    """The bind-rune, as one stroked path — the same six points the panel
+    icon's SVG traces, drawn rather than filled because at 22px a filled
+    outline turns into a blob."""
+    cr.save()
+    cr.translate(x, y)
+    rgba(cr, color, alpha)
+    cr.set_line_width(.10 * s)
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+    cr.set_line_join(cairo.LINE_JOIN_ROUND)
+    cr.move_to(.28 * s, .32 * s)
+    cr.line_to(.72 * s, .68 * s)
+    cr.line_to(.50 * s, .88 * s)
+    cr.line_to(.50 * s, .12 * s)
+    cr.line_to(.72 * s, .32 * s)
+    cr.line_to(.28 * s, .68 * s)
+    cr.stroke()
+    cr.restore()
+
+
+def device_glyph(cr, x, y, s, color, icon, alpha=1.0):
+    """One glyph per kind of thing BlueZ says it is. `Icon` is a freedesktop
+    icon name, and the handful below are the ones this machine will ever see;
+    anything else falls back to the rune, which is never wrong."""
+    kind = 'other'
+    if icon.startswith('audio-head'):
+        kind = 'headphones'
+    elif icon.startswith('audio'):
+        kind = 'speaker'
+    elif icon == 'input-keyboard':
+        kind = 'keyboard'
+    elif icon in ('input-mouse', 'input-tablet'):
+        kind = 'mouse'
+    elif icon.startswith('phone'):
+        kind = 'phone'
+    elif icon in ('computer', 'video-display'):
+        kind = 'computer'
+
+    if kind == 'other':
+        bt_glyph(cr, x, y, s, color, alpha)
+        return
+
+    cr.save()
+    cr.translate(x, y)
+    rgba(cr, color, alpha)
+    cr.set_line_width(.085 * s)
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+    cr.set_line_join(cairo.LINE_JOIN_ROUND)
+    if kind == 'speaker':
+        rrect(cr, .24 * s, .10 * s, .52 * s, .80 * s, .12 * s)
+        cr.stroke()
+        cr.arc(.50 * s, .62 * s, .16 * s, 0, 2 * math.pi)
+        cr.stroke()
+        cr.arc(.50 * s, .28 * s, .06 * s, 0, 2 * math.pi)
+        cr.fill()
+    elif kind == 'headphones':
+        cr.new_sub_path()
+        cr.arc(.50 * s, .52 * s, .34 * s, math.pi, 2 * math.pi)
+        cr.stroke()
+        rrect(cr, .10 * s, .50 * s, .18 * s, .34 * s, .08 * s)
+        cr.fill()
+        rrect(cr, .72 * s, .50 * s, .18 * s, .34 * s, .08 * s)
+        cr.fill()
+    elif kind == 'keyboard':
+        rrect(cr, .08 * s, .26 * s, .84 * s, .48 * s, .10 * s)
+        cr.stroke()
+        cr.move_to(.30 * s, .60 * s)
+        cr.line_to(.70 * s, .60 * s)
+        cr.stroke()
+        for cx in (.24, .40, .56, .72):
+            cr.arc(cx * s, .42 * s, .035 * s, 0, 2 * math.pi)
+            cr.fill()
+    elif kind == 'mouse':
+        rrect(cr, .28 * s, .10 * s, .44 * s, .80 * s, .22 * s)
+        cr.stroke()
+        cr.move_to(.50 * s, .24 * s)
+        cr.line_to(.50 * s, .40 * s)
+        cr.stroke()
+    elif kind == 'phone':
+        rrect(cr, .28 * s, .08 * s, .44 * s, .84 * s, .10 * s)
+        cr.stroke()
+        cr.arc(.50 * s, .78 * s, .045 * s, 0, 2 * math.pi)
+        cr.fill()
+    elif kind == 'computer':
+        rrect(cr, .12 * s, .18 * s, .76 * s, .52 * s, .08 * s)
+        cr.stroke()
+        cr.move_to(.04 * s, .82 * s)
+        cr.line_to(.96 * s, .82 * s)
+        cr.stroke()
+    cr.restore()
+
+
+def level_glyph(cr, x, y, s, color, level, alpha=1.0):
+    """Three rising bars for how loud a device in range is. Deliberately not
+    the Wi-Fi fan: this is RSSI on a different radio, and reusing that glyph
+    would say the two numbers are comparable."""
+    cr.save()
+    cr.translate(x, y)
+    for i, (h, lit) in enumerate(((.34, 1), (.60, 2), (.86, 3))):
+        rgba(cr, color, alpha if level >= lit else alpha * .22)
+        rrect(cr, i * .38 * s, (1 - h) * s, .22 * s, h * s, .07 * s)
+        cr.fill()
+    cr.restore()
+
+
+def tick(cr, x, y, s, color, alpha=1.0):
+    cr.save()
+    cr.translate(x, y)
+    rgba(cr, color, alpha)
+    cr.set_line_width(.15 * s)
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+    cr.set_line_join(cairo.LINE_JOIN_ROUND)
+    cr.move_to(.14 * s, .52 * s)
+    cr.line_to(.40 * s, .78 * s)
+    cr.line_to(.86 * s, .22 * s)
+    cr.stroke()
+    cr.restore()
+
+
+def chevron(cr, cx, cy, color, alpha):
+    rgba(cr, color, alpha)
+    cr.set_line_width(1.6)
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+    cr.move_to(cx - 2, cy - 4)
+    cr.line_to(cx + 2.5, cy)
+    cr.line_to(cx - 2, cy + 4)
+    cr.stroke()
+
+
+def switch(cr, x, y, on, colors, alpha=1.0):
+    w, h = 38, 22
+    rrect(cr, x, y, w, h, h / 2)
+    rgba(cr, colors['green'] if on else colors['track'], alpha)
+    cr.fill()
+    cr.arc(x + (w - h / 2 - 2 if on else h / 2 + 2), y + h / 2, h / 2 - 2,
+           0, 2 * math.pi)
+    cr.set_source_rgba(1, 1, 1, .98 * alpha)
+    cr.fill()
+
+
+def spinner(cr, cx, cy, r, color, phase):
+    cr.save()
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+    cr.set_line_width(r * .34)
+    for i in range(8):
+        a = i * math.pi / 4
+        rgba(cr, color, .12 + .5 * (((i - phase) % 8) / 8.0))
+        cr.move_to(cx + math.cos(a) * r * .5, cy + math.sin(a) * r * .5)
+        cr.line_to(cx + math.cos(a) * r, cy + math.sin(a) * r)
+        cr.stroke()
+    cr.restore()
+
+
+def bars(rssi):
+    """RSSI in dBm to lit bars. -55 is across the room, -85 is through a wall
+    and about to stop answering."""
+    if rssi is None:
+        return 0
+    if rssi >= -55:
+        return 3
+    if rssi >= -70:
+        return 2
+    if rssi >= -85:
+        return 1
+    return 0
+
+
+# ---------------------------------------------------------------------- rows
+
+class Row:
+    h = 0
+    interactive = False
+
+    def __init__(self, panel):
+        self.panel = panel
+        self.hit = None
+
+    @property
+    def c(self):
+        return self.panel.colors
+
+    def card(self, cr, w, h):
+        rrect(cr, 0, 0, w, h, CARD)
+        rgba(cr, self.c['tile'])
+        cr.fill_preserve()
+        rgba(cr, self.c['tile_edge'])
+        cr.set_line_width(1)
+        cr.stroke()
+
+    def lit(self, cr, w, y, h):
+        cr.save()
+        rrect(cr, 0, 0, w, self.h, CARD)
+        cr.clip()
+        cr.rectangle(0, y, w, h)
+        rgba(cr, self.c['fg'], .06)
+        cr.fill()
+        cr.restore()
+
+    def draw(self, cr, w):
+        pass
+
+    def test(self, x, y):
+        return None
+
+    def release(self, x, y):
+        pass
+
+
+class HeaderRow(Row):
+    """The radio switch, and what the radio is doing."""
+    h = 54
+    interactive = True
+
+    def draw(self, cr, w):
+        p = self.panel
+        self.card(cr, w, self.h)
+        if self.hit is not None:
+            self.lit(cr, w, 0, self.h)
+        bt_glyph(cr, 16, 14, 26, self.c['fg'], .9 if p.powered else .35)
+        text(cr, 'Bluetooth', 50, 12, 11.5, self.c['fg'], .95, 'bold')
+        text(cr, p.status, 50, 30, 9.5, self.c['fg'], .55, width=w - 118)
+        # A hard-blocked adapter is not a switch, it is a fact — draw it as
+        # one rather than offering a control the kernel will refuse.
+        switch(cr, w - 15 - 38, self.h / 2 - 11, p.powered, self.c,
+               .4 if HARD else 1.0)
+
+    def test(self, x, y):
+        return 'power' if self.panel.adapter and not HARD and x > WIDTH - 84 \
+            else None
+
+    def release(self, x, y):
+        if self.test(x, y):
+            self.panel.toggle_power()
+
+
+class OffRow(Row):
+    """What sits where the device list would be when there is nothing to
+    list — no adapter, rfkill, or the radio simply off."""
+    h = 62
+
+    def draw(self, cr, w):
+        self.card(cr, w, self.h)
+        p = self.panel
+        if HARD:
+            msg, sub = ('Blocked in hardware',
+                        'rfkill reports a hard block on hci0')
+        elif not p.adapter:
+            msg, sub = ('No Bluetooth adapter',
+                        'Nothing under /sys/class/bluetooth')
+        elif SOFT:
+            msg, sub = ('Bluetooth is blocked',
+                        'rfkill has hci0 soft blocked')
+        else:
+            msg, sub = ('Bluetooth is off',
+                        'Turn Bluetooth on to see your devices')
+        text(cr, msg, 15, 14, 10.5, self.c['fg'], .8)
+        text(cr, sub, 15, 33, 9.5, self.c['fg'], .45)
+
+
+class DeviceRow(Row):
+    """The devices you own. Connected first, then by name — which is the
+    order you want them in and not the order BlueZ hands them over."""
+    LEAD, LINE, MAX = 26, 34, 5
+    interactive = True
+
+    def __init__(self, panel):
+        super().__init__(panel)
+        self.top = 0
+        self.n = min(len(panel.known), self.MAX)
+        self.h = self.LEAD + self.LINE * max(1, self.n) + 8
+
+    @property
+    def visible(self):
+        return self.panel.known[self.top:self.top + self.MAX]
+
+    def draw(self, cr, w):
+        p = self.panel
+        self.card(cr, w, self.h)
+        text(cr, 'Devices', 15, 8, 9.5, self.c['fg'], .5)
+        if len(p.known) > self.MAX:
+            text(cr, f'{self.top + 1}–{self.top + self.n} of {len(p.known)}',
+                 0, 8, 9.5, self.c['fg'], .35, align='right', width=w - 15)
+
+        if not p.known:
+            text(cr, 'No paired devices', 15, self.LEAD + 8, 10.5,
+                 self.c['fg'], .4)
+            return
+
+        for i, dev in enumerate(self.visible):
+            y = self.LEAD + i * self.LINE
+            busy = p.busy.get(dev['path'])
+            if self.hit == i and not busy:
+                self.lit(cr, w, y, self.LINE)
+            device_glyph(cr, 15, y + 5, 24, self.c['fg'], dev['icon'],
+                         .95 if dev['connected'] else .55)
+            text(cr, dev['name'], 52, y + 3, 10.5, self.c['fg'],
+                 .95 if dev['connected'] else .82,
+                 'bold' if dev['connected'] else 'normal',
+                 width=w - 52 - 58)
+            text(cr, p.device_state(dev), 52, y + 18, 9, self.c['fg'],
+                 .8 if p.errors.get(dev['path']) else .45, width=w - 52 - 58)
+            if busy:
+                spinner(cr, w - 28, y + self.LINE / 2, 7, self.c['fg'], p.phase)
+            elif dev['connected']:
+                if dev['battery'] is not None:
+                    text(cr, f"{int(dev['battery'])}%", 0, y + 11, 9.5,
+                         self.c['fg'], .5, align='right', width=w - 36,
+                         tnum=True)
+                tick(cr, w - 28, y + self.LINE / 2 - 7, 14, self.c['green'], .95)
+
+    def test(self, x, y):
+        if not self.panel.known or y < self.LEAD:
+            return None
+        i = int((y - self.LEAD) // self.LINE)
+        return i if 0 <= i < len(self.visible) else None
+
+    def release(self, x, y):
+        i = self.test(x, y)
+        if i is not None:
+            self.panel.act(self.visible[i])
+
+    def scroll(self, direction):
+        extra = len(self.panel.known) - self.MAX
+        if extra <= 0:
+            return False
+        top = min(extra, max(0, self.top + (1 if direction > 0 else -1)))
+        if top == self.top:
+            return False
+        self.top = top
+        return True
+
+
+class NearbyRow(Row):
+    """Things in range that are not yours yet. A click pairs and connects;
+    the passkey, if there is one, comes up in blueman's agent dialog."""
+    LEAD, LINE, MAX = 26, 30, 4
+    interactive = True
+
+    def __init__(self, panel):
+        super().__init__(panel)
+        self.top = 0
+        self.n = min(len(panel.nearby), self.MAX)
+        self.h = self.LEAD + self.LINE * max(1, self.n) + 8
+
+    @property
+    def visible(self):
+        return self.panel.nearby[self.top:self.top + self.MAX]
+
+    def draw(self, cr, w):
+        p = self.panel
+        self.card(cr, w, self.h)
+        text(cr, 'Other Devices', 15, 8, 9.5, self.c['fg'], .5)
+        if p.scanning:
+            spinner(cr, w - 24, 14, 6, self.c['fg'], p.phase)
+        elif len(p.nearby) > self.MAX:
+            text(cr, f'{self.top + 1}–{self.top + self.n} of {len(p.nearby)}',
+                 0, 8, 9.5, self.c['fg'], .35, align='right', width=w - 15)
+
+        if not p.nearby:
+            text(cr, p.nearby_note, 15, self.LEAD + 6, 9.5, self.c['fg'], .4,
+                 width=w - 30)
+            return
+
+        for i, dev in enumerate(self.visible):
+            y = self.LEAD + i * self.LINE
+            busy = p.busy.get(dev['path'])
+            if self.hit == i and not busy:
+                self.lit(cr, w, y, self.LINE)
+            device_glyph(cr, 15, y + 4, 22, self.c['fg'], dev['icon'], .6)
+            err = p.errors.get(dev['path'])
+            label = dev['name'] if not err else f"{dev['name']} — {err}"
+            text(cr, label, 48, y + 6, 10.5, self.c['fg'], .82,
+                 width=w - 48 - 46)
+            if busy:
+                spinner(cr, w - 26, y + self.LINE / 2, 7, self.c['fg'], p.phase)
+            else:
+                level_glyph(cr, w - 32, y + 9, 13, self.c['fg'],
+                            bars(dev['rssi']), .5)
+
+    def test(self, x, y):
+        if not self.panel.nearby or y < self.LEAD:
+            return None
+        i = int((y - self.LEAD) // self.LINE)
+        return i if 0 <= i < len(self.visible) else None
+
+    def release(self, x, y):
+        i = self.test(x, y)
+        if i is not None:
+            self.panel.act(self.visible[i])
+
+    def scroll(self, direction):
+        extra = len(self.panel.nearby) - self.MAX
+        if extra <= 0:
+            return False
+        top = min(extra, max(0, self.top + (1 if direction > 0 else -1)))
+        if top == self.top:
+            return False
+        self.top = top
+        return True
+
+
+class FooterRow(Row):
+    h = 44
+    interactive = True
+
+    def draw(self, cr, w):
+        self.card(cr, w, self.h)
+        if self.hit is not None:
+            self.lit(cr, w, 0, self.h)
+        text(cr, 'Bluetooth Settings…', 15, self.h / 2 - 8, 10.5,
+             self.c['fg'], .92)
+        chevron(cr, w - 19, self.h / 2, self.c['fg'],
+                .55 if self.hit else .3)
+
+    def test(self, x, y):
+        return 'settings'
+
+    def release(self, x, y):
+        subprocess.Popen([MANAGER], start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.panel.close()
+
+
+# --------------------------------------------------------------------- panel
+
+class Menu:
+    def __init__(self):
+        self.mode = 'dark' if read_file(APPLIED, 'light') == 'dark' else 'light'
+        self.colors = DARK if self.mode == 'dark' else LIGHT
+        self.closing = False
+        self.press_row = None
+        self.scanning = False
+        self.phase = 0
+        self.busy = {}            # device path -> connect / disconnect / pair
+        self.errors = {}          # device path -> the last thing BlueZ said
+        self.wanted = None        # optimistic power state, until a read lands
+        self.gdk_win = None
+        self.geo = None
+        self.x = self.y = 0
+
+        self.bus = None
+        try:
+            self.bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        except Exception:
+            pass
+
+        try:
+            import json
+            data = json.loads(reap(OBJ_P) or '{}').get('data') or [{}]
+            self.adapter, self.devices = parse_objects(unwrap(data[0]))
+        except Exception:
+            self.adapter, self.devices = None, []
+
+        self.win = win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
+        win.set_decorated(False)
+        win.set_skip_taskbar_hint(True)
+        win.set_skip_pager_hint(True)
+        win.set_keep_above(True)
+        win.set_resizable(False)
+        win.set_app_paintable(True)
+        win.set_type_hint(Gdk.WindowTypeHint.POPUP_MENU)
+        visual = Gdk.Screen.get_default().get_rgba_visual()
+        if visual:
+            win.set_visual(visual)
+        win.connect('draw', self.draw_background)
+        win.connect('key-press-event', self.on_key)
+        win.connect('destroy', lambda *_a: self.close())
+
+        self.area = Gtk.DrawingArea()
+        self.area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK
+                             | Gdk.EventMask.BUTTON_RELEASE_MASK
+                             | Gdk.EventMask.POINTER_MOTION_MASK
+                             | Gdk.EventMask.SCROLL_MASK
+                             | Gdk.EventMask.LEAVE_NOTIFY_MASK)
+        self.area.connect('draw', self.on_draw)
+        self.area.connect('button-press-event', self.on_press)
+        self.area.connect('button-release-event', self.on_release)
+        self.area.connect('motion-notify-event', self.on_motion)
+        self.area.connect('scroll-event', self.on_scroll)
+        self.area.connect('leave-notify-event', self.on_leave)
+
+        box = Gtk.Box()
+        for setter in (box.set_margin_top, box.set_margin_bottom,
+                       box.set_margin_start, box.set_margin_end):
+            setter(round((SHADOW + PAD) * SC))
+        box.pack_start(self.area, False, False, 0)
+        win.add(box)
+
+        self.rows = []
+        self.rebuild()
+        win.show_all()
+
+    # ---- derived readings
+
+    @property
+    def powered(self):
+        if self.wanted is not None:
+            return self.wanted
+        return bool(self.adapter and self.adapter['powered'])
+
+    @property
+    def connected(self):
+        return [d for d in self.devices if d['connected']]
+
+    @property
+    def known(self):
+        """Paired devices: connected first, then by name."""
+        rows = [d for d in self.devices if d['paired']]
+        rows.sort(key=lambda d: (not d['connected'], d['name'].lower()))
+        return rows
+
+    @property
+    def nearby(self):
+        """In range, not paired, and it told us what it is called. Loudest
+        first, because the one you are holding is the loud one."""
+        rows = [d for d in self.devices if not d['paired'] and d['named']]
+        rows.sort(key=lambda d: (-(d['rssi'] if d['rssi'] is not None else -999),
+                                 d['name'].lower()))
+        return rows
+
+    @property
+    def nearby_note(self):
+        if self.connected:
+            return 'Not scanning while a device is connected'
+        if self.scanning:
+            return 'Looking…'
+        return 'Nothing new in range'
+
+    @property
+    def status(self):
+        if HARD:
+            return 'Blocked in hardware'
+        if not self.adapter:
+            return 'No adapter'
+        if not self.powered:
+            return 'Blocked' if SOFT else 'Off'
+        busy = set(self.busy.values())
+        if 'pair' in busy:
+            return 'Pairing…'
+        if 'connect' in busy:
+            return 'Connecting…'
+        conn = self.connected
+        if len(conn) == 1:
+            return conn[0]['name']
+        if conn:
+            return f'{len(conn)} devices connected'
+        # Not "Looking for devices…": the scan runs for as long as the popup
+        # is open, so that would be the permanent state of a line whose job
+        # is to say what changed. The spinner on Other Devices says it.
+        return 'On'
+
+    def device_state(self, dev):
+        err = self.errors.get(dev['path'])
+        if err:
+            return err
+        busy = self.busy.get(dev['path'])
+        if busy:
+            return {'connect': 'Connecting…', 'disconnect': 'Disconnecting…',
+                    'pair': 'Pairing…'}[busy]
+        if dev['connected']:
+            return 'Connected'
+        return 'Not connected'
+
+    # ---- layout
+
+    def build_rows(self):
+        rows = [HeaderRow(self)]
+        if not self.adapter or not self.powered:
+            rows.append(OffRow(self))
+        else:
+            rows.append(DeviceRow(self))
+            rows.append(NearbyRow(self))
+        rows.append(FooterRow(self))
+        return rows
+
+    def rebuild(self):
+        """The row set changes under the pointer — the scan lands, a device
+        connects — so the window is re-sized rather than built once. It hangs
+        off the top bar, so it only ever grows downward."""
+        keep = {type(r).__name__: r for r in self.rows}
+        self.rows = self.build_rows()
+        for row in self.rows:                 # carry the scroll positions over
+            old = keep.get(type(row).__name__)
+            if old is not None and hasattr(row, 'top'):
+                items = self.known if isinstance(row, DeviceRow) else self.nearby
+                row.top = min(old.top, max(0, len(items) - row.MAX))
+        self.height = (sum(r.h for r in self.rows) + GAP * (len(self.rows) - 1)
+                       + 2 * PAD)
+        self.area.set_size_request(round(WIDTH * SC),
+                                   round((self.height - 2 * PAD) * SC))
+        self.reposition()
+        self.area.queue_draw()
+
+    # ---- drawing
+
+    def on_draw(self, _w, cr):
+        cr.set_antialias(cairo.ANTIALIAS_BEST)
+        cr.scale(SC, SC)
+        y = 0
+        for row in self.rows:
+            cr.save()
+            cr.translate(0, y)
+            cr.rectangle(0, 0, WIDTH, row.h)
+            cr.clip()
+            row.draw(cr, WIDTH)
+            cr.restore()
+            y += row.h + GAP
+        return False
+
+    def draw_background(self, _w, cr):
+        a = self.win.get_allocation()
+        cr.save()
+        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.set_source_rgba(0, 0, 0, 0)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_OVER)
+        cr.scale(SC, SC)
+        x = y = SHADOW
+        w, h = a.width / SC - 2 * SHADOW, a.height / SC - 2 * SHADOW
+        for i in range(SHADOW, 0, -1):     # a soft edge, without a blur pass
+            rrect(cr, x - i, y - i + 2, w + 2 * i, h + 2 * i, RADIUS + i)
+            cr.set_line_width(1.4)
+            cr.set_source_rgba(0, 0, 0, .055 * (1 - i / SHADOW) ** 2)
+            cr.stroke()
+        grad = cairo.LinearGradient(0, y, 0, y + h)
+        top, bot = self.colors['top'], self.colors['bottom']
+        grad.add_color_stop_rgba(0, top[0] / 255, top[1] / 255, top[2] / 255, top[3])
+        grad.add_color_stop_rgba(1, bot[0] / 255, bot[1] / 255, bot[2] / 255, bot[3])
+        rrect(cr, x, y, w, h, RADIUS)
+        cr.set_source(grad)
+        cr.fill_preserve()
+        rgba(cr, self.colors['rim'])
+        cr.set_line_width(1)
+        cr.stroke()
+        rrect(cr, x + .75, y + .75, w - 1.5, h - 1.5, RADIUS - .75)
+        rgba(cr, self.colors['edge'])
+        cr.set_line_width(1)
+        cr.stroke()
+        cr.restore()
+        return False
+
+    # ---- input
+
+    def locate(self, ex, ey):
+        x, y = ex / SC, ey / SC
+        for row in self.rows:
+            if y < row.h:
+                return row, x, y
+            y -= row.h + GAP
+        return None, x, y
+
+    def on_motion(self, _w, e):
+        for row in self.rows:
+            row.hit = None
+        row, x, y = self.locate(e.x, e.y)
+        if row is not None and row.interactive:
+            row.hit = row.test(x, y)
+        self.area.queue_draw()
+        return True
+
+    def on_leave(self, *_a):
+        for row in self.rows:
+            row.hit = None
+        self.area.queue_draw()
+        return True
+
+    def on_scroll(self, _w, e):
+        row = self.locate(e.x, e.y)[0]
+        if not isinstance(row, (DeviceRow, NearbyRow)):
+            return False
+        if e.direction == Gdk.ScrollDirection.SMOOTH:
+            dy = e.get_scroll_deltas()[2]
+        else:
+            dy = 1 if e.direction == Gdk.ScrollDirection.DOWN else -1
+        if dy and row.scroll(dy):
+            self.area.queue_draw()
+        return True
+
+    def on_press(self, _w, e):
+        # Left button only. Every row action here either turns the radio off
+        # or reaches for another machine's radio, and a middle-click or a
+        # stray button 4/5 from a synthetic event should not reach one.
+        if e.button != 1:
+            return False
+        self.press_row = self.locate(e.x, e.y)[0]
+        return True
+
+    def on_release(self, _w, e):
+        if e.button != 1:
+            return False
+        row, x, y = self.locate(e.x, e.y)
+        if row is not None and row is self.press_row and row.interactive:
+            row.release(x, y)
+        self.press_row = None
+        return True
+
+    def on_key(self, _w, e):
+        if e.keyval in (Gdk.KEY_Escape, Gdk.KEY_q):
+            self.close()
+            return True
+        return False
+
+    # ---- actions
+
+    def toggle_power(self):
+        want = not self.powered
+        self.wanted = want                   # optimistic; the poll confirms
+        if not want:
+            self.set_scan(False)
+        self.rebuild()
+
+        def work():
+            set_power(want)
+            GLib.idle_add(self.powered_settled)
+        threading.Thread(target=work, daemon=True).start()
+
+    def powered_settled(self):
+        self.wanted = None
+        self.read_state()
+        return False
+
+    def dev_call(self, path, method, timeout):
+        self.bus.call_sync('org.bluez', path, 'org.bluez.Device1', method,
+                           None, None, Gio.DBusCallFlags.NONE, timeout, None)
+
+    def act(self, dev):
+        """One click, three meanings: connected disconnects, paired connects,
+        and anything else pairs first. macOS's menu makes the same call from
+        the same click, and there is nothing else a device row could mean."""
+        path = dev['path']
+        if path in self.busy or self.bus is None:
+            return
+        if dev['connected']:
+            action = 'disconnect'
+        elif dev['paired']:
+            action = 'connect'
+        else:
+            action = 'pair'
+        self.busy[path] = action
+        self.errors.pop(path, None)
+        # Inquiry and a link setup on one radio make each other slow and
+        # unreliable, so the scan stands down for the length of the attempt.
+        self.set_scan(False)
+        self.rebuild()
+        self.tick_spinner()
+
+        def work():
+            err = ''
+            try:
+                if action == 'disconnect':
+                    self.dev_call(path, 'Disconnect', 20000)
+                else:
+                    if action == 'pair':
+                        self.dev_call(path, 'Pair', 120000)
+                        self.trust(path)
+                    self.dev_call(path, 'Connect', 90000)
+            except Exception as exc:
+                err = dbus_message(exc)
+            GLib.idle_add(self.acted, path, err)
+        threading.Thread(target=work, daemon=True).start()
+
+    def trust(self, path):
+        """Trust what you have just paired, the way blueman does — an
+        untrusted device has to be connected by hand every time, and nobody
+        pairs a keyboard in order to do that."""
+        try:
+            self.bus.call_sync(
+                'org.bluez', path, 'org.freedesktop.DBus.Properties', 'Set',
+                GLib.Variant('(ssv)', ('org.bluez.Device1', 'Trusted',
+                                       GLib.Variant('b', True))),
+                None, Gio.DBusCallFlags.NONE, 8000, None)
+        except Exception:
+            pass
+
+    def acted(self, path, err):
+        self.busy.pop(path, None)
+        if err:
+            self.errors[path] = err
+        self.read_state()
+        return False
+
+    def set_scan(self, want):
+        """StartDiscovery through Gio, never through busctl: BlueZ ends a
+        discovery session when the D-Bus connection that opened it goes away,
+        and busctl's connection goes away as busctl exits. Gio's is this
+        process, which is the window the scan should be open for."""
+        if self.bus is None or not self.adapter or want == self.scanning:
+            return
+        try:
+            self.bus.call_sync(
+                'org.bluez', self.adapter['path'], 'org.bluez.Adapter1',
+                'StartDiscovery' if want else 'StopDiscovery',
+                None, None, Gio.DBusCallFlags.NONE, 6000, None)
+            self.scanning = want
+        except Exception:
+            self.scanning = False
+
+    @property
+    def may_scan(self):
+        return bool(self.adapter and self.powered and not self.busy
+                    and not self.connected)
+
+    def read_state(self):
+        """One D-Bus round trip for the adapter, every device and every
+        battery. It costs 4 ms on this chip, which is why this is a poll on
+        the main loop rather than a PropertiesChanged subscription and the
+        bookkeeping that would come with one."""
+        if self.closing or self.bus is None:
+            return False
+        try:
+            reply = self.bus.call_sync(
+                'org.bluez', '/', 'org.freedesktop.DBus.ObjectManager',
+                'GetManagedObjects', None, None, Gio.DBusCallFlags.NONE,
+                6000, None)
+            self.adapter, self.devices = parse_objects(reply.unpack()[0])
+        except Exception:
+            return False
+        if self.adapter is not None:
+            self.scanning = self.adapter['discovering'] and self.scanning
+        self.set_scan(self.may_scan)
+        # A device that has since gone takes its stale error with it, and so
+        # does one that has since connected — by blueman, by its own button,
+        # or by walking back into range. A row that says why it failed last
+        # time while sitting there connected is the wrong answer.
+        stale = {d['path'] for d in self.devices if d['connected']}
+        live = {d['path'] for d in self.devices}
+        self.errors = {p: m for p, m in self.errors.items()
+                       if p in live and p not in stale}
+        self.rebuild()
+        return False
+
+    def tick_poll(self):
+        def step():
+            if self.closing:
+                return False
+            self.read_state()
+            return True
+        GLib.timeout_add(1500, step)
+
+    def tick_spinner(self):
+        if getattr(self, '_spinning', False):
+            return
+        self._spinning = True
+
+        def step():
+            if self.closing or not (self.scanning or self.busy):
+                self._spinning = False
+                return False
+            self.phase = (self.phase + 1) % 8
+            self.area.queue_draw()
+            return True
+        GLib.timeout_add(90, step)
+
+    # ---- window
+
+    def place(self, px, py):
+        win = self.win
+        win.realize()
+        self.gdk_win = gdk_win = win.get_window()
+        if gdk_win is not None:
+            gdk_win.set_override_redirect(True)
+        w = self.pixel_width
+        display = Gdk.Display.get_default()
+        monitor = (display.get_monitor_at_point(px, py)
+                   or display.get_primary_monitor())
+        self.geo = geo = monitor.get_geometry()
+        edge = round(SHADOW * SC)
+        x = int(px - w + edge + round(24 * SC))
+        self.x = max(geo.x + 2, min(x, geo.x + geo.width - w + edge - 4))
+        self.y = 52 - edge + 4 if py < 64 else int(py) - edge + 8
+        self.reposition()
+        # Gtk.Widget.set_opacity, not win.set_opacity: Gtk.Window overrides it
+        # with a deprecated variant, and PyGObject picks the override, so every
+        # popup open wrote a DeprecationWarning to stderr. genmon discards that
+        # stream; a terminal does not.
+        Gtk.Widget.set_opacity(win, 0.0)
+        win.present()
+        self.grab()
+        self.t0 = time.monotonic()
+
+        def step():
+            if self.closing:
+                return False
+            f = min(1.0, (time.monotonic() - self.t0) / 0.11)
+            Gtk.Widget.set_opacity(win, f * f * (3 - 2 * f))
+            return f < 1.0
+        GLib.timeout_add(16, step)
+        # Not on the open path: StartDiscovery is a write to the radio, and
+        # the popup should be on screen before it goes out.
+        GLib.timeout_add(120, lambda: self.start_scan())
+        self.tick_poll()
+
+    def start_scan(self):
+        self.set_scan(self.may_scan)
+        if self.scanning:
+            self.tick_spinner()
+            self.rebuild()
+        return False
+
+    @property
+    def pixel_width(self):
+        return round(WIDTH * SC) + 2 * round((SHADOW + PAD) * SC)
+
+    @property
+    def pixel_height(self):
+        return (round((self.height - 2 * PAD) * SC)
+                + 2 * round((SHADOW + PAD) * SC))
+
+    def reposition(self):
+        """Run again after every rebuild. The popup hangs off the top bar and
+        grows downward as devices come into range, and this screen is 1440
+        tall — a long list would otherwise walk off the bottom edge."""
+        if self.geo is None:
+            return
+        y, bottom = self.y, self.geo.y + self.geo.height
+        h = self.pixel_height
+        if y + h > bottom:
+            y = max(self.geo.y, bottom - h)
+        self.win.move(self.x, y)
+
+    def grab(self):
+        """Pointer only. Nothing here takes typing — the one thing that would
+        have, a passkey, belongs to blueman's agent and appears in its own
+        focusable dialog."""
+        if self.gdk_win is None:
+            return
+        seat = Gdk.Display.get_default().get_default_seat()
+        try:
+            seat.grab(self.gdk_win, Gdk.SeatCapabilities.ALL_POINTING, True,
+                      None, None, None)
+        except Exception:
+            pass
+
+    def outside(self, e):
+        alloc = self.win.get_allocation()
+        edge = round(SHADOW * SC)
+        return not (edge < e.x < alloc.width - edge
+                    and edge < e.y < alloc.height - edge)
+
+    def close(self):
+        if self.closing:
+            return
+        self.closing = True
+        # Before the grab goes, and before Gtk.main_quit: a scan left running
+        # is a radio left transmitting, and this process owns the session.
+        self.set_scan(False)
+        try:
+            Gdk.Display.get_default().get_default_seat().ungrab()
+        except Exception:
+            pass
+        Gtk.main_quit()
+
+
+def single_instance():
+    """A second click on the bar icon closes the open menu, like macOS."""
+    os.makedirs(os.path.dirname(PIDFILE), exist_ok=True)
+    try:
+        pid = int(read_file(PIDFILE, '0'))
+    except ValueError:
+        pid = 0
+    # A stale pidfile must not make the bar icon unclickable, and the pid in it
+    # may since have been recycled by something else entirely — so check what
+    # is actually running under it before signalling anything.
+    if pid and pid != os.getpid():
+        try:
+            with open(f'/proc/{pid}/cmdline', 'rb') as f:
+                ours = b'bt-menu' in f.read()
+        except OSError:
+            ours = False
+        if ours:
+            try:
+                os.kill(pid, signal.SIGTERM)
+                return False        # it was up; this click was the dismiss
+            except OSError:
+                pass
+    with open(PIDFILE, 'w') as f:
+        f.write(str(os.getpid()))
+    return True
+
+
+def main():
+    if not single_instance():
+        return
+    seat = Gdk.Display.get_default().get_default_seat()
+    _s, px, py = seat.get_pointer().get_position()
+    menu = Menu()
+    signal.signal(signal.SIGTERM, lambda *_a: menu.close())
+    menu.win.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+    menu.win.connect(
+        'button-press-event',
+        lambda _w, e: menu.close() or True if menu.outside(e) else False)
+    menu.place(int(px), int(py))
+    if os.environ.get('MINTBOOK_BT_TIME'):
+        print(f'{(time.monotonic() - T0) * 1000:.0f} ms to on screen',
+              file=sys.stderr)
+    Gtk.main()
+
+
+if __name__ == '__main__':
+    Gdk.set_program_class('mintbook-bt-menu')
+    try:
+        main()
+    finally:
+        try:
+            if read_file(PIDFILE) == str(os.getpid()):
+                os.remove(PIDFILE)
+        except OSError:
+            pass
+    sys.exit(0)

@@ -3,7 +3,7 @@
 #
 # Blueman's tray icon lives in the systray plugin with everything else (Claude),
 # so it cannot be placed next to wifi on its own. This renders a matching-size
-# icon via genmon <img> and opens blueman-manager on click. The blueman applet
+# icon via genmon <img> and opens bin/bt-menu on click. The blueman applet
 # stays running as the BlueZ agent; only its tray icon is hidden.
 #
 # This was Python importing gi.repository. That import alone costs 190 ms on
@@ -11,9 +11,18 @@
 # loading GObject introspection to make one D-Bus call. dbus-send makes the
 # same call in 10 ms and prints something awk can read. See docs/desktop.md.
 DIR="$HOME/.local/share/mintbook/bt"
+MENU="$HOME/.local/bin/bt-menu"
+
+# The click used to open blueman-manager, which is a window; it opens
+# bin/bt-menu now, which is the popup, and which still has Bluetooth Settings…
+# in its footer for the things a popup should not try to be — pairing wizards,
+# per-profile audio routing, the file transfer. Falling back to blueman when
+# the menu is not installed is what makes `bt-panel-install --revert` a single
+# `rm`, the same way bin/panel-wifi falls back to nm-connection-editor.
+[ -x "$MENU" ] || MENU=blueman-manager
 
 # emitted on every path, including the early exits below
-printf '<click>blueman-manager</click>\n'
+printf '<click>%s</click>\n<iconclick>%s</iconclick>\n' "$MENU" "$MENU"
 
 emit() { printf '<img>%s/%s.svg</img>\n<tool>%b</tool>\n' "$DIR" "$1" "$2"; exit 0; }
 
