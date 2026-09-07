@@ -6,6 +6,20 @@ override prepended to `initrd.img-7.0.0-30-generic`. `serial0-0` is
 exists. Chip is **BCM4350C0** UART, ROM firmware `003.001.134` build 1532.
 No DKMS, no `.hcd`.
 
+This page is the radio: why there was no adapter and what makes one exist.
+**The desktop half — the bar icon and the popup behind it — is in
+[desktop.md](desktop.md#bluetooth-menu-binbt-menu).** Two installers, and they
+are easy to confuse:
+
+| | what it does | root? |
+|---|---|---|
+| [`bin/bt-install`](../bin/bt-install) | the DSDT override that makes `hci0` exist | **yes** |
+| [`bin/bt-panel-install`](../bin/bt-panel-install) | the bar icon and [`bin/bt-menu`](../bin/bt-menu) | no |
+
+`bin/bt-diag` and `bin/doctor` cover both: the DSDT checks are in doctor's
+Bluetooth section, the icon and menu checks run only once
+`~/.config/mintbook/bluetooth.conf` exists.
+
 ---
 
 ## Why there was no adapter

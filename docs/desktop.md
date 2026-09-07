@@ -127,25 +127,37 @@ Plugin order (`plugin-ids`), left to right:
 | 10 | xapp-status-plugin | mintUpdate, only when updates are available |
 | 19 | genmon | CPU sparkline |
 | 17 | genmon | CPU temperature |
+| 21 | genmon | Bluetooth — click opens [`bin/bt-menu`](../bin/bt-menu) |
 | 18 | genmon | Wi-Fi — click opens [`bin/wifi-menu`](../bin/wifi-menu) |
 | 26 | genmon | battery — click opens [`bin/battery-menu`](../bin/battery-menu); see [battery.md](battery.md) |
 | 25 | genmon | **Control Center** — see [control-center.md](control-center.md) |
 | 13 | clock | ` %a %-d %b  %H:%M  `, Inter 11, `digital-layout=3` (time only) |
 
-Right-to-left: **date/time, Control Center, battery, wifi, temperature, CPU,
-then the rest.** This follows the macOS convention — the clock is furthest
-right, then Control Center, then battery and Wi-Fi. Informational items (temp,
+Right-to-left: **date/time, Control Center, battery, wifi, bluetooth,
+temperature, CPU, then the rest.** This follows the macOS convention — the
+clock is furthest right, then Control Center, then battery, Wi-Fi and
+Bluetooth. Informational items (temp,
 CPU) sit inboard of the system status group, and anything unrecognised
 accumulates right-to-left from the far left of the group. mintUpdate's own icon
 appears in the xapp group (plugin-10) only when there are updates.
 
-**Bluetooth (21), power profile (22), night light (23), appearance (24) and
-volume (12) are no longer on the bar.** They are tiles in the Control Center,
-which is one icon and one click instead of five indicators polling all day.
-The rule the split follows is that a reading stays on the bar and a switch
-moves behind the click; the sections below describe what those indicators did
-and still apply to the tiles, which use the same backends. `bin/control-install
---revert` puts every one of them back.
+**Power profile (22), night light (23), appearance (24) and volume (12) are no
+longer on the bar.** They are tiles in the Control Center, which is one icon
+and one click instead of four indicators polling all day. The rule the split
+follows is that a reading stays on the bar and a switch moves behind the click;
+the sections below describe what those indicators did and still apply to the
+tiles, which use the same backends. `bin/control-install --revert` puts every
+one of them back.
+
+> **Bluetooth (21) went with them on 2026-09-06 and came back on 2026-09-07.**
+> Under the same rule, not around it: once the icon could answer *is the
+> speaker connected* without a click, it stopped being a switch that happened
+> to be sitting in the open and became a reading, which is what Wi-Fi always
+> was. The `20-bluetooth` tile stays where it is —
+> [`bin/bt-menu`](../bin/bt-menu) drives that plugin's `set` verb rather than
+> `bluetoothctl`, so the switch in the popup and the tile in the Control
+> Center cannot disagree. `bin/bt-panel-install --revert` takes the icon back
+> off and leaves the tile.
 
 **Reordering panel items:** XFCE has no macOS-style hold-a-key-and-drag. The
 equivalents are right-click any item → **Move** (then drag it along the bar), or
@@ -393,8 +405,9 @@ nmcli connection delete "<ssid>" && printf '%s\n' '<password>' \
 
 ### Bluetooth indicator (`plugin-21`, genmon)
 
-> **Off the bar since 2026-09-06** — this is the `20-bluetooth` Control
-> Center tile now. Everything below still describes how it reads BlueZ.
+> **Off the bar 2026-09-06, back on it 2026-09-07.** It was the `20-bluetooth`
+> Control Center tile alone for a day; it is now both, and the click opens
+> [`bin/bt-menu`](../bin/bt-menu) rather than `blueman-manager`.
 
 Runs [`bin/panel-bt`](../bin/panel-bt), icons from
 [`icons/generate-bt-genmon.py`](../icons/generate-bt-genmon.py).
@@ -402,9 +415,19 @@ Runs [`bin/panel-bt`](../bin/panel-bt), icons from
 Blueman's tray icon is a StatusNotifier item, so it lands in the systray plugin
 (plugin-8) alongside Claude and **cannot** be placed on its own. Same constraint as
 nm-applet / mintUpdate in xapp-status-plugin: one widget, one group. The genmon
-indicator sits immediately left of volume / right of wifi; click opens
-`blueman-manager`. Polls BlueZ over D-Bus every 5s. Dim icon when powered off;
-full white when on; tooltip lists connected devices.
+indicator sits immediately left of Wi-Fi, which is where macOS puts it. Polls
+BlueZ over D-Bus every 5s. Dim icon when powered off; full white when on;
+tooltip lists connected devices.
+
+**The icon does not change when a device connects**, and that is deliberate —
+macOS's does not either, and at 34px the difference between "on" and "on with
+something attached" is a distinction the glyph cannot carry. The tooltip names
+the devices and the popup shows their battery; the icon answers on/off.
+
+**What it costs (2026-09-07):** 17 ms of CPU per tick measured over 40 runs
+(26 ms wall), at the 5 s poll — **0.34% of a core**. That is the whole reason
+the reading is `dbus-send` piped through awk rather than anything that imports
+`gi`; see the paragraph below.
 
 It is a bash script that reads one `dbus-send` reply with awk. It used to be
 Python importing `gi.repository`, and that import alone was 190 ms of the
@@ -415,6 +438,80 @@ state this machine lands in when the SSDC regression eats hci0.
 
 blueman-applet stays running (pairing / secret agent). Only its tray icon is hidden,
 via `/plugins/plugin-8/hidden-items = blueman`.
+
+### Bluetooth menu ([`bin/bt-menu`](../bin/bt-menu))
+
+**Since 2026-09-07.** Clicking the bar icon opens a glass popup, not a window.
+Same construction as [`bin/wifi-menu`](../bin/wifi-menu) and
+[`bin/battery-menu`](../bin/battery-menu), for the same reasons
+([control-center.md](control-center.md)): cairo on one override-redirect
+window, one `DrawingArea`, a list of rows. `Bluetooth Settings…` in the footer
+still opens `blueman-manager` for the things a popup should not try to be —
+the pairing wizard, per-profile audio routing, file transfer.
+
+It shows the radio switch, your paired devices with their state and battery
+percentage, and the named devices in range that you have not paired. One click
+on a device row means one of three things and there is nothing else it could
+mean: connected disconnects, paired connects, anything else pairs and then
+connects. Connected devices sort first and are drawn in the semibold weight.
+
+**Everything comes from one D-Bus call.** BlueZ's `ObjectManager` hands over
+the adapter, every device, and each device's `Battery1` in a single reply that
+costs **4 ms** through Gio. That is cheap enough that the popup polls it every
+1.5 s while it is open instead of subscribing to `PropertiesChanged` and
+keeping the bookkeeping that would come with one — a speaker that connects
+from its own button, or from blueman, shows up here within a second and a half.
+The first read is the same call through `busctl --json=short` fired as a
+`Popen` *before* the GTK import, which is how it costs nothing: the GTK import
+is ~220 ms and the read is 15. **344 ms to on screen**, measured with
+`MINTBOOK_BT_TIME=1`.
+
+**Discovery cannot go through `busctl`.** BlueZ ties a discovery session to the
+D-Bus connection that asked for it, and `busctl`'s connection dies when
+`busctl` exits — so `busctl call … StartDiscovery` starts a scan that stops
+again immediately. Gio's connection lives as long as the process does, which is
+exactly the window the scan should be open for. `close()` calls `StopDiscovery`
+before it gives up the grab, and the `SIGTERM` handler goes through the same
+path, so dismissing the popup with a second click on the bar icon also stops
+the radio scanning. Verified both ways: `Discovering` reads `false` after each.
+
+**The scan stands down while a device is connected**, and while a connect,
+disconnect or pair is in flight. Inquiry and a link share one radio, and the
+case where a speaker is playing is not the case where you are pairing a mouse.
+The row says `Not scanning while a device is connected` rather than sitting
+there empty. Unnamed BLE beacons are filtered out — BlueZ only sets `Name` once
+a device has advertised one, and there are a dozen nameless ones in range at
+any moment.
+
+**Pairing goes through blueman-applet**, which is still the BlueZ agent. A
+passkey or a confirmation appears in *its* dialog, not here; the popup takes no
+keyboard at all, which is why its seat grab is `ALL_POINTING` and never
+`ALL` — the one thing that would have needed keys belongs to a window that can
+take focus. After a successful `Pair` the menu sets `Trusted`, the way blueman
+does, because an untrusted device has to be reconnected by hand every time.
+
+BlueZ's errors are mapped to sentences. `br-connection-page-timeout` is what
+you get when the speaker is switched off, and the row says
+`No answer — is it switched on?`. Anything not in the map still gets through,
+de-hyphenated.
+
+Install with [`bin/bt-panel-install`](../bin/bt-panel-install) — **not**
+[`bin/bt-install`](../bin/bt-install), which is the DSDT override that makes
+the radio exist at all and wants root. `--revert` takes the icon off the bar,
+deletes `~/.local/bin/bt-menu`, and `panel-bt` falls back to `blueman-manager`
+on its own. It writes `~/.config/mintbook/bluetooth.conf`, which is the
+handshake `bin/control-install` reads so that re-running *that* does not
+quietly retire the icon again — the same arrangement `battery.conf` and
+`updates.conf` already use. `bin/doctor` checks for it, and says nothing when
+it is not installed.
+
+**What was and was not exercised, 2026-09-07:** the radio switch (off and back
+on, adapter `Powered` confirmed both ways), a connect against a real paired
+device, its failure and the error text, the scan starting and stopping, the
+second-click dismiss, and both palettes. **Pairing was not** — there was no
+unpaired device to hand, and the only paired one is a speaker that would have
+had to be un-paired first. The `Pair` → `Trusted` → `Connect` path is wired and
+is the same `Device1` call the other two use, but it has not been run.
 
 ### Power profile (`plugin-22`, genmon)
 
@@ -504,7 +601,8 @@ its tray would come back next to mintUpdate.
 
 > Superseded in part on 2026-09-06: Bluetooth, power, night light and
 > appearance came off the bar entirely, which is about 1.7% of a core back
-> on top of what this session bought. The measurements below are still the
+> on top of what this session bought. Bluetooth came back on 2026-09-07 and
+> costs 0.34% of a core, so the figure to carry forward is nearer 1.4%. The measurements below are still the
 > reason those rewrites happened, and `panel-cpu` — still on the bar — is
 > still where most of the remaining cost is. See
 > [control-center.md](control-center.md#what-it-costs).

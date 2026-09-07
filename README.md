@@ -22,7 +22,7 @@ No Apple logo. No blur. A 52px glass bar, a dock, and Cmd+Space.
   <img src="docs/images/spotlight.jpg" alt="Spotlight" width="48%">
 </p>
 
-The bar keeps what you read — CPU, temperature, Wi-Fi, battery, the clock.
+The bar keeps what you read — CPU, temperature, Bluetooth, Wi-Fi, battery, the clock.
 Everything you *set* is one click away, in a Control Center that is seven small
 executables in a directory. Adding a tile is a twelve-line file.
 
@@ -40,7 +40,11 @@ and Flatpak in the same list. When nothing does, the arrow is not there.
   <img src="docs/images/updates.jpg" alt="Software Update" width="440">
 </p>
 
-The wiring: [desktop](docs/desktop.md) · [control center](docs/control-center.md) · [updates](docs/updates.md) · [battery](docs/battery.md) · [display](docs/display.md)
+Wi-Fi and Bluetooth each have a glass menu behind their icon — the networks in
+range, the devices you own and what is left in them — and neither opens a
+window to do it.
+
+The wiring: [desktop](docs/desktop.md) · [control center](docs/control-center.md) · [updates](docs/updates.md) · [battery](docs/battery.md) · [bluetooth](docs/bluetooth.md) · [display](docs/display.md)
 
 ## Hardware
 

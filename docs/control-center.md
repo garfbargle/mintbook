@@ -29,6 +29,7 @@ bin/control-install --revert # put the old indicators back
 | CPU sparkline | a reading — you look at it, you do not set it |
 | temperature | same |
 | Wi-Fi | macOS keeps it out, and a dead network is worth seeing without a click |
+| Bluetooth | *since 2026-09-07* — same: "is the speaker connected" is a reading |
 | battery | same |
 | **Control Center** | everything else |
 | clock | |
@@ -45,6 +46,15 @@ bin/control-install --revert # put the old indicators back
 
 The rule the split follows: **a reading stays, a switch moves.** You do not
 click a temperature.
+
+> **Bluetooth went behind the click on 2026-09-06 and came back on the bar on
+> 2026-09-07** — under the rule, not around it. The tile was a switch and moved;
+> the indicator that replaced it answers *is the speaker connected*, which is a
+> reading, which is the same argument Wi-Fi has always had. Both exist now: the
+> `20-bluetooth` tile is still the backend, and
+> [`bin/bt-menu`](../bin/bt-menu) calls its `set` verb rather than
+> `bluetoothctl` so the popup's switch and the tile can never disagree. See
+> [desktop.md](desktop.md#bluetooth-menu-binbt-menu).
 
 CPU and temperature had tiles for about an hour and then lost them. They were
 the same numbers the bar already shows, one click further away — the panel is
