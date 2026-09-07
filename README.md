@@ -32,7 +32,7 @@ executables in a directory. Adding a tile is a twelve-line file.
 
 Cmd+Shift+3 takes a screenshot. On battery it stays cool. Plug in, and it opens up.
 
-The wiring: [desktop](docs/desktop.md) · [control center](docs/control-center.md) · [display](docs/display.md)
+The wiring: [desktop](docs/desktop.md) · [control center](docs/control-center.md) · [battery](docs/battery.md) · [display](docs/display.md)
 
 ## Hardware
 

@@ -128,7 +128,7 @@ Plugin order (`plugin-ids`), left to right:
 | 19 | genmon | CPU sparkline |
 | 17 | genmon | CPU temperature |
 | 18 | genmon | Wi-Fi — click opens [`bin/wifi-menu`](../bin/wifi-menu) |
-| 11 | power-manager-plugin | battery |
+| 26 | genmon | battery — click opens [`bin/battery-menu`](../bin/battery-menu); see [battery.md](battery.md) |
 | 25 | genmon | **Control Center** — see [control-center.md](control-center.md) |
 | 13 | clock | ` %a %-d %b  %H:%M  `, Inter 11, `digital-layout=3` (time only) |
 
