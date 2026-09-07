@@ -67,10 +67,13 @@ what an update is, and two opinions on one bar is one too many.
 
 ## The icon is not always there
 
-When nothing is waiting, `bin/panel-updates` prints no image and the indicator
-disappears. That is the same rule the Control Center plugins follow — *say
-nothing rather than show a dead switch* — and it is why the bar is quiet
-almost all of the time.
+When nothing is waiting, `bin/panel-updates` prints a **transparent** icon and
+the indicator disappears. That is the same rule the Control Center plugins
+follow — *say nothing rather than show a dead switch* — and it is why the bar
+is quiet almost all of the time.
+
+Transparent, rather than nothing at all, because genmon has no way of being
+told to draw nothing — see the gotcha at the bottom. It cost one shipped bug.
 
 It sits **to the left of the CPU sparkline**, and that position is the whole
 reason it can afford to come and go. The bar is packed against the right edge,
@@ -82,6 +85,7 @@ Two states:
 
 | | when |
 |---|---|
+| `updates-none.svg`, one transparent pixel | nothing is waiting |
 | the plain arrow | ordinary package updates |
 | the arrow with a dot beside it | there is a **security** or **kernel** update in there |
 
@@ -251,6 +255,18 @@ in the first place — `mintupdate` still opens the window it always did.
 
 ## Gotchas
 
+- **genmon cannot be told to draw nothing.** Given output with no `<txt>` and
+  no `<img>` in it, it falls back to putting the whole of stdout on the bar as
+  a label — so the first version of `panel-updates`, which printed only its
+  `<click>` tags when there was nothing to report, put
+  `<click>/home/cobo/.local/bin/updates-menu</click>` across the panel in plain
+  text. It shipped that way and was caught the first time the machine actually
+  had nothing waiting, which is the one state that had never been on the bar
+  during development: every screenshot until then was taken with an update
+  pending. An empty `<txt></txt>` does not help either — tested, same fallback.
+  The fix is `updates-none.svg`, one transparent pixel, 34 high. Not zero-width:
+  a zero-width SVG is not guaranteed to load, and a loader that refuses it puts
+  us straight back to stdout on the bar.
 - **`trans.run(error_handler=…)` alone raises.** aptkit's `MissingReplyHandlerException`
   says *"if you define an error_handler you must also define a reply_handler"* —
   and it comes out of `run()` rather than reaching the handler you did give it,

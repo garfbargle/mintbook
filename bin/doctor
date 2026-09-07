@@ -335,6 +335,11 @@ if [ -e "$HOME/.config/mintbook/updates.conf" ]; then
   check "updates genmon rc" "genmon-${UID_:-20}.rc" have "$HOME/.config/xfce4/panel/genmon-${UID_:-20}.rc"
   check "updates timer" "mintbook-updates-check.timer" \
     systemctl --user is-enabled mintbook-updates-check.timer
+  # updates-none.svg is the "nothing waiting" icon and is load-bearing: with no
+  # <img> at all genmon puts the script's stdout on the bar as text, which is
+  # what it did before that file existed. See docs/updates.md.
+  check "updates icons" "updates.svg, -alert, -none" \
+    have "$HOME/.local/share/mintbook/updates/updates-none.svg"
 
   # The one check that matters. Everything above can be green while the answer
   # on the bar is a week old, and a stale "nothing waiting" is a lie the whole

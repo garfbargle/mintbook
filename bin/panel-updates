@@ -5,10 +5,16 @@
 # bin/updates-check does that, costs 2.5 s of CPU, and is run by a timer.
 # A genmon tick here is bash starting up and a `while read` over seven lines.
 #
-# The icon is not always there. Nothing waiting means no image, and the
-# indicator disappears the way macOS's does — "say nothing rather than show a
-# dead switch", the same rule the Control Center plugins follow. The door that
+# The icon is not always there. Nothing waiting means the transparent icon, and
+# the indicator disappears the way macOS's does — "say nothing rather than show
+# a dead switch", the same rule the Control Center plugins follow. The door that
 # is always there is the Control Center's Updates tile.
+#
+# The transparent one, not *no* output: genmon has no way to be told to draw
+# nothing. Output with neither <txt> nor <img> in it makes it fall back to
+# putting the whole of stdout on the bar as a label, so printing only the
+# <click> tags put "<click>/home/cobo/.local/bin/updates-menu</click>" on the
+# panel in plain text. An empty <txt></txt> does not help either.
 #
 # See docs/updates.md.
 DIR="$HOME/.local/share/mintbook/updates"
@@ -19,11 +25,13 @@ MENU="$HOME/.local/bin/updates-menu"
 # what makes `bin/updates-install --revert` a single `rm`.
 [ -x "$MENU" ] || MENU=mintupdate
 
-# On every path, including the silent ones: a 0-width button is still a button,
-# and it should still open something if it is ever clicked.
+# On every path, including the silent ones: the invisible icon is still a
+# button, and it should still open something if it is ever clicked.
 printf '<click>%s</click>\n<iconclick>%s</iconclick>\n' "$MENU" "$MENU"
 
-[ -r "$STATE" ] || exit 0
+quiet() { printf '<img>%s/updates-none.svg</img>\n' "$DIR"; exit 0; }
+
+[ -r "$STATE" ] || quiet
 
 # `key = value`, the same shape the Control Center plugins speak. Split on the
 # first ' = ' only: the error line is a sentence and keeps its spaces.
@@ -45,7 +53,7 @@ if [ -n "$error" ]; then
   exit 0
 fi
 
-[ "$count" -gt 0 ] 2>/dev/null || exit 0
+[ "$count" -gt 0 ] 2>/dev/null || quiet
 
 # MB with one decimal, in shell. The sizes here are download sizes, tens of
 # megabytes at most, so integer arithmetic is plenty.

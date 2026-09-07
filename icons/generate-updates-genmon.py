@@ -14,15 +14,23 @@ every appearance change, and bin/updates-install reads the same value out of
 system-chrome.env, so neither a switch nor a fresh install leaves white ink on
 a light bar.
 
-Output: ~/.local/share/mintbook/updates/updates.svg and updates-alert.svg.
-The alert one carries a dot to the right of the tray and is wider, the way
-wifi-warn.svg carries its exclamation — beside the glyph rather than inside
-it, where nothing legible fits at this size. The bar reflows when the icon
-appears at all, so it reflows again for the dot, which is the point of both.
+Output: ~/.local/share/mintbook/updates/updates.svg, updates-alert.svg and
+updates-none.svg. The alert one carries a dot to the right of the tray and is
+wider, the way wifi-warn.svg carries its exclamation — beside the glyph rather
+than inside it, where nothing legible fits at this size. The bar reflows when
+the icon appears at all, so it reflows again for the dot, which is the point
+of both.
 
-There is no "up to date" icon on purpose. bin/panel-updates prints no image
-when there is nothing waiting, and the indicator disappears; the Control
-Center's Updates tile is the door that is always there. See docs/updates.md.
+updates-none.svg is one transparent pixel, and it is the "nothing waiting"
+state. It exists because genmon has no way to say *draw nothing*: given output
+with no <txt> and no <img> in it, it falls back to putting the whole of stdout
+on the bar as a label, so the first version of this printed only its <click>
+tags and put `<click>/home/cobo/.local/bin/updates-menu</click>` on the panel
+in plain text. An empty <txt></txt> does not help either — an image nobody can
+see is the way to occupy the plugin without drawing in it.
+
+The Control Center's Updates tile is the door that is always there.
+See docs/updates.md.
 """
 import os
 
@@ -51,6 +59,12 @@ BOX = TARGET_H / (EXTENT_BOT - EXTENT_TOP)
 TARGET_W = (EXTENT_R - EXTENT_L) * BOX
 
 DOT_GAP, DOT_R = 4.6, 2.7        # from the tray's right edge, and the badge
+
+# One transparent pixel, full height. Not zero-width: a zero-width SVG is not
+# guaranteed to load, and a loader that refuses it puts us back to genmon
+# printing stdout on the bar.
+NONE = (f'<svg width="1" height="{GLYPH}" viewBox="0 0 1 {GLYPH}" '
+        f'version="1.1" xmlns="http://www.w3.org/2000/svg"></svg>\n')
 
 
 def svg(alert=False):
@@ -91,9 +105,12 @@ def main():
     for name, alert in (('updates.svg', False), ('updates-alert.svg', True)):
         with open(os.path.join(out, name), 'w') as f:
             f.write(svg(alert))
-    print(f'wrote 2 SVGs, {GLYPH}px canvas, glyph {TARGET_W:.1f}x{TARGET_H:.1f}px '
+    with open(os.path.join(out, 'updates-none.svg'), 'w') as f:
+        f.write(NONE)
+    print(f'wrote 3 SVGs, {GLYPH}px canvas, glyph {TARGET_W:.1f}x{TARGET_H:.1f}px '
           f'in a {BOX:.1f}px box + {PAD_X}px side padding; '
-          f'updates-alert.svg is wider, for the badge')
+          f'updates-alert.svg is wider, for the badge, and updates-none.svg is '
+          f'one transparent pixel')
 
 
 if __name__ == '__main__':
