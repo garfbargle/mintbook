@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# wifi-install — the Wi-Fi indicator and its popup menu. No root.
+# See docs/desktop.md.
+#
+#   bin/wifi-install            # panel-wifi + wifi-menu, and the icons
+#   bin/wifi-install --revert   # the bar icon goes back to opening the editor
+#
+# The bar icon itself is plugin-18 and has been ours since the xapp 20px cap
+# (docs/desktop.md); this only installs what is behind it. --revert removes
+# the menu, and panel-wifi falls back to nm-connection-editor on its own.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+BIN="$HOME/.local/bin"
+PANEL_RC="$HOME/.config/xfce4/panel"
+PLUGIN=18
+
+nudge() {   # genmon only re-reads its .rc when the panel restarts
+  [ -n "${DISPLAY:-}" ] || return 0
+  xfce4-panel -q 2>/dev/null || true
+  sleep 0.4
+  nohup xfce4-panel >/dev/null 2>&1 &
+  sleep 1
+}
+
+if [ "${1:-}" = --revert ]; then
+  echo "==> removing the menu"
+  P=$(cat "$HOME/.cache/mintbook/wifi-menu.pid" 2>/dev/null || true)
+  [ -n "$P" ] && kill "$P" 2>/dev/null || true
+  rm -f "$BIN/wifi-menu" "$HOME/.cache/mintbook/wifi-menu.pid"
+  install -m755 "$ROOT/bin/panel-wifi" "$BIN/panel-wifi"
+  nudge
+  echo "the bar icon opens nm-connection-editor again"
+  exit 0
+fi
+
+echo "==> $BIN"
+install -dm755 "$BIN"
+for f in panel-wifi wifi-menu; do
+  rm -f "$BIN/$f"                       # it may be running; replace, don't write
+  install -m755 "$ROOT/bin/$f" "$BIN/$f"
+done
+
+echo "==> icons"
+# The generator defaults to white, which is right for a dark bar and invisible
+# on a light one. bin/appearance-mode owns this file and re-runs every panel
+# generator when the appearance changes; read it here so a fresh install on a
+# light bar does not paint white-on-white until the next appearance switch.
+FG='#ffffff'
+# shellcheck disable=SC1090
+[ -r "$HOME/.config/mintbook/system-chrome.env" ] \
+  && . "$HOME/.config/mintbook/system-chrome.env" \
+  && FG=$PANEL_FOREGROUND
+MINTBOOK_PANEL_FG="$FG" python3 "$ROOT/icons/generate-wifi-genmon.py"
+
+echo "==> genmon-$PLUGIN.rc"
+install -dm755 "$PANEL_RC"
+sed "s|^Command=.*|Command=$BIN/panel-wifi|" \
+  "$ROOT/config/xfce4-panel/genmon-$PLUGIN.rc" > "$PANEL_RC/genmon-$PLUGIN.rc"
+
+nudge
+
+echo
+echo "click the Wi-Fi icon for the menu · Network Settings… for the editor"
+echo "undo: $(basename "$0") --revert"

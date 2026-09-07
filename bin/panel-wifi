@@ -4,9 +4,17 @@
 # regardless of any panel setting. genmon renders an <img> at the SVG's own
 # size, so this matches the other panel icons.
 DIR="$HOME/.local/share/mintbook/wifi"
+MENU="$HOME/.local/bin/wifi-menu"
+
+# The click used to open nm-connection-editor, which is a window; it opens
+# bin/wifi-menu now, which is the popup, and which still has Network Settings…
+# in its footer for the things a popup should not try to be. Falling back to
+# the editor when the menu is not installed is what makes
+# `wifi-install --revert` a single `rm`.
+[ -x "$MENU" ] || MENU=nm-connection-editor
 
 # emitted on every path, including the early exits below
-printf '<click>nm-connection-editor</click>\n'
+printf '<click>%s</click>\n<iconclick>%s</iconclick>\n' "$MENU" "$MENU"
 
 line=$(grep -E '^[[:space:]]*[a-z0-9]+:' /proc/net/wireless 2>/dev/null | head -1)
 if [ -z "$line" ]; then

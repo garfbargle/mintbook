@@ -259,6 +259,23 @@ if [ -e "$HOME/.config/mintbook/battery.conf" ]; then
     warn "battery samples" "no samples yet — it fills at one a minute while the panel runs"
   fi
 fi
+# The Wi-Fi popup, only once it has been installed — bin/panel-wifi falls back
+# to nm-connection-editor without it, so its absence is not a fault.
+if [ -e "$HOME/.local/bin/wifi-menu" ]; then
+  check "wifi indicator" "bin/panel-wifi" have "$HOME/.local/bin/panel-wifi"
+  check "wifi menu" "bin/wifi-menu" have "$HOME/.local/bin/wifi-menu"
+  if grep -q 'wifi-menu' "$HOME/.local/bin/panel-wifi" 2>/dev/null; then
+    ok "wifi click target" "the bar icon opens the menu"
+  else
+    warn "wifi click target" "panel-wifi is older than the menu — run bin/wifi-install"
+  fi
+  WIF=$(sed -n '3p' /proc/net/wireless 2>/dev/null | cut -d: -f1 | tr -d ' ')
+  if [ -n "$WIF" ]; then
+    ok "wireless interface" "$WIF"
+  else
+    warn "wireless interface" "nothing in /proc/net/wireless — the menu will say so too"
+  fi
+fi
 check "night light autostart" "mintbook-night.desktop" have "$HOME/.config/autostart/mintbook-night.desktop"
 # Hidden=true user overrides of entries in /etc/xdg/autostart. An override is
 # only meaningful while the system entry it shadows still exists, so check both
