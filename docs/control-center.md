@@ -242,10 +242,13 @@ whole argument for a panel over a bar full of indicators.
 - **A crescent is not a disc minus a disc.** Under `EVEN_ODD` cairo also fills
   the part of the bite hanging outside the disc, which draws a moon with a
   second lobe. Clip to the disc first, then fill everything but the bite.
-- **`system-chrome.env` is written with `printf %q`,** so `#ffffff` is stored
-  as `\#ffffff`. It has to be sourced, not read — `sed` gives you a backslash,
-  and an SVG with `stroke="\#ffffff"` renders no stroke at all and silently
-  falls back to a black fill. That is one invisible icon and two black dots.
+- **`system-chrome.env` used to be written with `printf %q`,** so `#ffffff`
+  was stored as `\#ffffff`. Sourcing it gave the value back; reading the line
+  as text did not, and an SVG with `stroke="\#ffffff"` renders no stroke at
+  all and silently falls back to a black fill. That was one invisible icon and
+  two black dots here, and — found later — a CPU sparkline that had been black
+  on the dark bar the whole time. `bin/appearance-mode` single-quotes the value
+  now instead of escaping it, so both ways of reading the file agree.
 - **Removing the pulseaudio plugin removes the volume keys with it.** It was
   what grabbed `XF86Audio*`. `bin/volume-key` takes that over, bound in
   `xfce4-keyboard-shortcuts` by the installer, with an on-screen readout

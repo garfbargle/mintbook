@@ -53,7 +53,12 @@ if [ "$(cat "$applied_file" 2>/dev/null || true)" = "$mode" ] \
    && [ -f "$HOME/.config/rofi/palette.rasi" ]; then
   exit 0
 fi
-printf 'PANEL_FOREGROUND=%q\n' "$foreground" > "$env_file"
+# Single-quoted, not %q. %q escapes the '#' as '\#', which is correct shell and
+# comes back right when this file is sourced — but bin/panel-cpu reads the line
+# as text, and an SVG with fill="\#ffffff" is invalid, so librsvg drops the
+# colour and paints black. The sparkline was black on the dark bar for that
+# reason. Quoted like this, both a `.` and a naive parser get '#ffffff'.
+printf "PANEL_FOREGROUND='%s'\n" "$foreground" > "$env_file"
 install -m644 "$css" "$HOME/.config/gtk-3.0/gtk.css"
 # Spotlight reads its theme at launch, so this needs no reload of anything.
 install -m644 "$rasi" "$HOME/.config/rofi/palette.rasi"

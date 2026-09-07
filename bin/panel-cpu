@@ -107,11 +107,26 @@ def area_path(hist):
         pts.append(f'{x:.1f} {y:.1f}')
     return f'M0 {H} L' + ' L'.join(pts) + f' L{W} {H} Z'
 
+HEX = set('0123456789abcdefABCDEF')
+
+
 def panel_foreground():
+    """The bar's ink, from the file bin/appearance-mode writes.
+
+    That file is shell and used to be written with printf %q, so '#ffffff' was
+    stored as '\\#ffffff'. Sourcing it gives the right value back; reading the
+    line as text does not, and fill="\\#ffffff" is not a colour — librsvg
+    drops it and paints black, which is why this trace stayed black on the dark
+    bar. The writer no longer escapes; the backslash is stripped here too so an
+    env file left by an older appearance-mode still comes out right, and
+    anything that is not a hex colour falls back rather than painting black.
+    """
     try:
         for line in open(os.path.expanduser('~/.config/mintbook/system-chrome.env')):
             if line.startswith('PANEL_FOREGROUND='):
-                return line.split('=', 1)[1].strip().strip("'\"")
+                v = line.split('=', 1)[1].strip().strip("'\"").replace('\\', '')
+                if v[:1] == '#' and len(v) in (4, 7, 9) and set(v[1:]) <= HEX:
+                    return v
     except OSError:
         pass
     return '#ffffff'

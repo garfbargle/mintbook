@@ -82,7 +82,17 @@ together. It writes the
 desired mode to `~/.config/mintbook/appearance.mode`; `auto` remains there even
 when the currently applied surface is Light or Dark. The custom Wi-Fi,
 Bluetooth, power, Night Light, CPU, and temperature indicators therefore switch
-with the bar, and so do the Control Center and Spotlight. Branded or
+with the bar, and so do the Control Center and Spotlight.
+
+> **The CPU sparkline did not, until 2026-09-06,** even though this said it
+> did. It was black in both appearances — right by accident on pearl, wrong on
+> slate. `system-chrome.env` is shell, and it was written with `printf %q`,
+> which stores `#ffffff` as `\#ffffff`. Sourcing it gives the value back
+> intact, so `bin/panel-temp` was always correct; `bin/panel-cpu` reads the
+> line as text, and `fill="\#ffffff"` is not a colour, so librsvg dropped it
+> and fell back to black. The file is single-quoted now instead of escaped, so
+> both ways of reading it agree, and `panel-cpu` strips a stray backslash and
+> range-checks the hex anyway. Branded or
 third-party tray icons retain the appearance supplied by their own app—forcing
 those through one colour would destroy their identity or require per-app
 patches.
@@ -146,7 +156,8 @@ was done here.
 ### CPU sparkline (`plugin-19`, genmon)
 
 Runs [`bin/panel-cpu`](../bin/panel-cpu), which renders an SVG sparkline to
-`~/.cache/mintbook/cpu.svg` every 2s.
+`~/.cache/mintbook/cpu.svg` every 2s, in the panel foreground colour of the
+current appearance — white on slate, `#2d3036` on pearl, at 0.82 opacity.
 
 `xfce4-cpugraph-plugin` was used first and then **removed**. It draws hard vertical
 edges with no way to soften them, and its tooltip is not controllable. The genmon
