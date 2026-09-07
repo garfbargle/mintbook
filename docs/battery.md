@@ -201,6 +201,25 @@ took 7 967 of them.
 The log **survives `battery-install --revert`**; deleting it is a separate
 decision and the script says so.
 
+### The wear log
+
+`~/.cache/mintbook/battery/health`, **one line a day**, written on the same
+hourly pass as the trim:
+
+```
+ts charge_full charge_full_design cycle_count temp
+1788798315 4260000 5297000 154 456
+```
+
+`charge_full` moves by more from the gauge re-estimating it than from a day of
+wear, so one reading is not a wear figure and two of them a week apart are not
+a curve — which is the argument for writing it down every day rather than
+against it. `bin/doctor` reports the ends of it: *"80% of design, 84% 67 days
+ago (3 readings)"*. Nothing plots it yet; the history window's Battery health
+cell still shows only today's number.
+
+Never trimmed. A line is 40 bytes and a decade is 150 KB.
+
 ## What it costs
 
 Measured on this machine, 262 processes, 2026-09-07:
@@ -271,11 +290,13 @@ running, which doctor's other checks will have said more directly.
   `Gtk.Window` overrides `Gtk.Widget.set_opacity` with a deprecated variant and
   PyGObject picks the override, so every popup open wrote a warning to stderr.
   Calling `Gtk.Widget.set_opacity(win, …)` explicitly takes the widget one.
-- **Health is read but never watched.** `charge_full / charge_full_design` is
-  **80.4% at 154 cycles** on 2026-09-07 (32.4 Wh of a design 40.3 Wh).
-  [session-battery-thermals.md](session-battery-thermals.md) recorded **84–85%
-  at ~149 cycles** on 2026-09-01. Five cycles cannot be four points of wear, so
-  most of that gap is `charge_full` being re-estimated by the gauge rather than
-  the pack getting worse — which is exactly why a number sampled twice, six
-  days apart, is not a wear curve. Nothing records it over time, and the menu
-  and the history window both already read it every time they open.
+- **Health is now recorded, but nothing plots it.** `charge_full /
+  charge_full_design` is **80.4% at 154 cycles** on 2026-09-07 (32.4 Wh of a
+  design 40.3 Wh). [session-battery-thermals.md](session-battery-thermals.md)
+  recorded **84–85% at ~149 cycles** on 2026-09-01. Five cycles cannot be four
+  points of wear, so most of that gap is `charge_full` being re-estimated by
+  the gauge rather than the pack getting worse — which is exactly why a number
+  sampled twice, six days apart, is not a wear curve. **The wear log above
+  started 2026-09-07** and fills at one line a day; `bin/doctor` reads its two
+  ends. Neither the menu nor the history window draws it, and the history
+  window is where it belongs.

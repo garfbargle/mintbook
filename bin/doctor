@@ -282,6 +282,22 @@ if [ -e "$HOME/.config/mintbook/battery.conf" ]; then
   BWANT=$(( BSE * 5 ))          # genmon ticks every 5 s; the rc sets that
   BGAP=$(tail -40 "$BLOG" 2>/dev/null | awk '$5+0 > 0 {print $5+0}' | sort -n \
          | awk '{a[NR]=$1} END{if (NR) print a[int((NR+1)/2)]}')
+  # The wear curve, such as there is one. panel-battery writes one line a day.
+  BHL="$HOME/.cache/mintbook/battery/health"
+  if [ -s "$BHL" ]; then
+    BHN=$(wc -l < "$BHL")
+    BHNOW=$(awk 'END{if ($3+0) printf "%d", $2*100/$3}' "$BHL")
+    if [ "$BHN" -ge 2 ]; then
+      BHTHEN=$(awk 'NR==1{if ($3+0) printf "%d", $2*100/$3}' "$BHL")
+      BHDAYS=$(awk 'NR==1{f=$1} END{printf "%d", ($1-f)/86400}' "$BHL")
+      ok "battery wear log" "${BHNOW}% of design, ${BHTHEN}% ${BHDAYS} days ago ($BHN readings)"
+    else
+      ok "battery wear log" "${BHNOW}% of design, 1 reading — a second lands tomorrow"
+    fi
+  else
+    warn "battery wear log" "empty — the first line lands within an hour of the panel starting"
+  fi
+
   if [ -z "$BGAP" ]; then
     warn "battery sample rate" "no spaced samples yet — needs two in a row"
   elif [ "$BGAP" -ge $(( BWANT * 6 / 10 )) ] && [ "$BGAP" -le $(( BWANT * 16 / 10 )) ]; then

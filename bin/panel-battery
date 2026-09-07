@@ -26,6 +26,7 @@ SVG="$CACHE/icon.svg"
 STATE="$CACHE/state"
 PROCS="$CACHE/procs"
 LOG="$CACHE/history"
+HLOG="$CACHE/health"
 MENU="$HOME/.local/bin/battery-menu"
 
 SHOW_PERCENT=0        # macOS's "Show Percentage"; the menu writes this back
@@ -356,6 +357,18 @@ mv -f "$STATE.tmp" "$STATE"
 # The first line's timestamp decides whether to rewrite at all, so the ordinary
 # hour costs one `read` and no forks.
 if [ $(( tick % (SAMPLE_EVERY * 60) )) -eq 0 ]; then
+  # One line a day of what the pack is actually worth. charge_full moves by
+  # more from the gauge re-estimating it than from a day of wear, so a single
+  # reading is not a wear figure and two of them six days apart are not a
+  # curve — which is exactly the argument for writing it down every day
+  # instead. 23 h rather than 24 so it does not drift out of a day.
+  # Never trimmed: a line is 40 bytes and a decade is 150 KB.
+  hlast=$(tail -1 "$HLOG" 2>/dev/null | cut -d' ' -f1)
+  if [ $(( stamp - ${hlast:-0} )) -ge 82800 ] 2>/dev/null; then
+    printf '%s %s %s %s %s\n' \
+      "$stamp" "$full" "$design" "${cycles:-0}" "${temp:-0}" >> "$HLOG"
+  fi
+
   cutoff=$(( stamp - HISTORY_DAYS * 86400 ))
   first=0
   read -r first _ < "$LOG" 2>/dev/null || true
