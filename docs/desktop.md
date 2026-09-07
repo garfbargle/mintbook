@@ -61,8 +61,10 @@ TERM=xterm-256color ./install.sh -o normal -c light -c dark -a normal -t default
 canonical source for the pearl surface colour: `#E5E7EA` at the lit edge to
 `#CACDD2` below it. It also holds the darker, icon-safe system-bar derivative.
 Each renderer has its own format, so the palette is translated rather than
-shared as literal CSS: Firefox uses `rgb()` values, Plank uses `R;;G;;B;;A`, and
-XFCE panel stores normalized RGBA doubles.
+shared as literal CSS: Firefox uses `rgb()` values, Plank uses `R;;G;;B;;A`,
+XFCE panel stores normalized RGBA doubles, rofi wants `rgba(r, g, b, n%)` in
+rasi, and the Control Center wants 0-255 tuples in Python. Five formats, one
+set of numbers, translated by hand at each end.
 
 ### System-chrome appearance mode
 
@@ -75,13 +77,25 @@ indicator inherited it from the retired `genmon-24` sun/moon icon, which is why
 a bar icon that never changes still has an update period at all.
 
 [`bin/appearance-mode`](../bin/appearance-mode) applies the surface, panel-only
-foreground CSS, and regenerated Mintbook status icons together. It writes the
+foreground CSS, the Spotlight palette and regenerated Mintbook status icons
+together. It writes the
 desired mode to `~/.config/mintbook/appearance.mode`; `auto` remains there even
 when the currently applied surface is Light or Dark. The custom Wi-Fi,
 Bluetooth, power, Night Light, CPU, and temperature indicators therefore switch
-with the bar. Branded or third-party tray icons retain the appearance supplied
-by their own app—forcing those through one colour would destroy their identity
-or require per-app patches.
+with the bar, and so do the Control Center and Spotlight. Branded or
+third-party tray icons retain the appearance supplied by their own app—forcing
+those through one colour would destroy their identity or require per-app
+patches.
+
+> **The mode file used to have a race, fixed 2026-09-06.** `auto` worked by
+> writing `auto`, calling itself with `light` or `dark` — which wrote *that* to
+> the same file — and writing `auto` back afterwards. Anything that read the
+> file inside that window latched the transient value, and since
+> `bin/panel-control` runs `--refresh` every 60 s there is a reader on a timer.
+> One evening `auto` quietly became a permanent `light` and stopped following
+> the sun. The child now inherits `MINTBOOK_APPEARANCE_MODE=auto` and records
+> that instead of the surface it is applying, so the file only ever holds what
+> the user chose.
 
 ### Top bar (xfce4-panel, `panel-1`)
 
@@ -494,7 +508,33 @@ show_dock_shadow=false           # see Gotchas
 
 `Cmd+Space` runs [`bin/spotlight`](../bin/spotlight), which toggles
 `rofi -show drun` with [`config/rofi/spotlight.rasi`](../config/rofi/spotlight.rasi):
-centred, 52% wide, 14% from the top, translucent dark, rounded 24px, fuzzy matching.
+centred, 52% wide, 14% from the top, translucent glass, rounded 24px, fuzzy
+matching.
+
+<p align="center">
+  <img src="images/spotlight-light.jpg" alt="Spotlight, pearl" width="46%">
+  &nbsp;
+  <img src="images/spotlight-dark.jpg" alt="Spotlight, slate" width="46%">
+</p>
+
+**It follows the appearance mode.** The theme file holds no colours at all — it
+opens with `@import "palette.rasi"`, and `bin/appearance-mode` installs either
+[`palette-light.rasi`](../config/rofi/palette-light.rasi) or
+[`palette-dark.rasi`](../config/rofi/palette-dark.rasi) there. Six names —
+`glass`, `edge`, `rule`, `fg`, `fg-dim`, `lift` — are the whole interface
+between the two files. rofi reads its theme when it launches, so there is
+nothing to reload: the next `Cmd+Space` is already in the new appearance.
+
+The surface is the bar's own fill at panel density (`[SystemBarLight]` /
+`[SystemBarDark]` in the glass palette), not a second dark grey invented for
+this window — which is what it used to be. The slate is darkened toward the
+Control Center's lower stop, because a full-width panel at the bar's own
+lightness reads as fog rather than glass.
+
+> A missing `palette.rasi` is fatal to rofi, not cosmetic — it fails the
+> `@import` outright. `appearance-mode` therefore treats an absent palette as a
+> reason to reapply even when the mode has not changed, so `--refresh` heals a
+> fresh checkout.
 
 Sizes in the theme are **real device pixels** — rofi 1.7.5 lays `px` out
 literally and does not scale it by `Xft.dpi`, so on this 168dpi panel a

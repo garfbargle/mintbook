@@ -2,15 +2,17 @@
  *
  * rofi lays px out literally (it does not scale them by Xft.dpi), so every
  * size here is a real device pixel on the Retina panel: ~1.7x the values a
- * 96dpi theme would use, which is what puts it at macOS Spotlight's size. */
+ * 96dpi theme would use, which is what puts it at macOS Spotlight's size.
+ *
+ * Colours are not here. palette.rasi is whichever of palette-light.rasi /
+ * palette-dark.rasi bin/appearance-mode installed, so Spotlight turns over at
+ * sunset with the bar and the Control Center. rofi reads its theme at launch,
+ * so the next Cmd+Space is already in the new appearance. */
+
+@import "palette.rasi"
 
 * {
     font:                        "Inter 18";
-    bg:                          rgba(28, 28, 30, 88%);
-    bg-alt:                      rgba(255, 255, 255, 8%);
-    fg:                          #f2f2f7ff;
-    fg-dim:                      rgba(242, 242, 247, 55%);
-    accent:                      rgba(255, 255, 255, 14%);
     background-color:            transparent;
     text-color:                  @fg;
 }
@@ -22,7 +24,9 @@ window {
     y-offset:                    14%;
     width:                       52%;
     border-radius:               24px;
-    background-color:            @bg;
+    background-color:            @glass;
+    border:                      1px;
+    border-color:                @edge;
     children:                    [ mainbox ];
 }
 
@@ -61,7 +65,7 @@ listview {
     padding:                     10px 12px 16px 12px;
     spacing:                     4px;
     border:                      1px 0px 0px 0px;
-    border-color:                @accent;
+    border-color:                @rule;
 }
 
 element {
@@ -75,7 +79,7 @@ element normal.normal   { text-color: @fg; }
 element alternate.normal{ text-color: @fg; }
 
 element selected.normal {
-    background-color:            rgba(255, 255, 255, 14%);
+    background-color:            @lift;
     text-color:                  @fg;
 }
 

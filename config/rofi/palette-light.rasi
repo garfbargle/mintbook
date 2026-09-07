@@ -1,0 +1,13 @@
+/* Mintbook glass — pearl. Installed as ~/.config/rofi/palette.rasi by
+ * bin/appearance-mode; the dark twin is palette-dark.rasi. Values come from
+ * config/theme/mintbook-glass.ini: this is [SystemBarLight] Fill, the same
+ * pearl the top bar carries, at panel density rather than bar density. */
+
+* {
+    glass:      rgba(215, 218, 222, 96%);
+    edge:       rgba(255, 255, 255, 70%);
+    rule:       rgba( 65,  68,  74, 13%);
+    fg:         #2d3036ff;
+    fg-dim:     rgba( 45,  48,  54, 52%);
+    lift:       rgba(255, 255, 255, 82%);
+}

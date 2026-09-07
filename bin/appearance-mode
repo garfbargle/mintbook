@@ -22,30 +22,41 @@ case "$mode" in
     rgba=(0.8431372549 0.8549019608 0.8705882353 0.8588235294)
     foreground='#2d3036'
     css="$root/config/gtk-3.0/panel-light.css"
+    rasi="$root/config/rofi/palette-light.rasi"
     ;;
   dark)
     rgba=(0.3568627451 0.3764705882 0.4117647059 0.7019607843)
     foreground='#ffffff'
     css="$root/config/gtk-3.0/panel-dark.css"
+    rasi="$root/config/rofi/palette-dark.rasi"
     ;;
   auto)
     period=$(redshift -p -c "$HOME/.config/redshift.conf" 2>/dev/null | awk -F: '/^Period:/ {gsub(/^[[:space:]]+/, "", $2); print $2; exit}')
     case "$period" in Night|Transition) target=dark ;; *) target=light ;; esac
-    printf '%s\n' auto > "$mode_file"
-    "$0" "$target"
-    printf '%s\n' auto > "$mode_file"
-    exit 0
+    # The child records "auto", not the surface it applies. It used to write
+    # its own target and let this branch put "auto" back afterwards, which left
+    # a window where the file said light or dark — and anything reading it just
+    # then (panel-control ticks --refresh every 60 s) latched that as the mode
+    # and auto was gone for good. Observed: auto turned into a permanent light
+    # on the evening of 2026-09-06.
+    MINTBOOK_APPEARANCE_MODE=auto exec "$0" "$target"
     ;;
   *) echo "usage: $0 auto|light|dark|toggle|--refresh" >&2; exit 2 ;;
 esac
 
-mkdir -p "$state_dir" "$HOME/.config/gtk-3.0"
-printf '%s\n' "$mode" > "$mode_file"
-if [ "$(cat "$applied_file" 2>/dev/null || true)" = "$mode" ]; then
+mkdir -p "$state_dir" "$HOME/.config/gtk-3.0" "$HOME/.config/rofi"
+printf '%s\n' "${MINTBOOK_APPEARANCE_MODE:-$mode}" > "$mode_file"
+# The palette check is not redundant with the applied check: a fresh checkout
+# has the mode already applied and no ~/.config/rofi/palette.rasi, and rofi
+# fails hard on a missing @import. This makes --refresh able to heal that.
+if [ "$(cat "$applied_file" 2>/dev/null || true)" = "$mode" ] \
+   && [ -f "$HOME/.config/rofi/palette.rasi" ]; then
   exit 0
 fi
 printf 'PANEL_FOREGROUND=%q\n' "$foreground" > "$env_file"
 install -m644 "$css" "$HOME/.config/gtk-3.0/gtk.css"
+# Spotlight reads its theme at launch, so this needs no reload of anything.
+install -m644 "$rasi" "$HOME/.config/rofi/palette.rasi"
 
 xfconf-query -c xfce4-panel -p /panels/panel-1/background-rgba \
   -t double -s "${rgba[0]}" -t double -s "${rgba[1]}" \

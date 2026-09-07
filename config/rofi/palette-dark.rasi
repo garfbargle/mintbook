@@ -1,0 +1,14 @@
+/* Mintbook glass — slate. Installed as ~/.config/rofi/palette.rasi by
+ * bin/appearance-mode; the light twin is palette-light.rasi. Values come from
+ * config/theme/mintbook-glass.ini: [SystemBarDark] Fill, darkened toward the
+ * Control Center's lower stop, because a full-width search panel at the bar's
+ * own lightness reads as fog rather than glass. */
+
+* {
+    glass:      rgba( 80,  84,  92, 96%);
+    edge:       rgba(255, 255, 255, 16%);
+    rule:       rgba(255, 255, 255, 14%);
+    fg:         #ffffffff;
+    fg-dim:     rgba(255, 255, 255, 55%);
+    lift:       rgba(255, 255, 255, 20%);
+}
