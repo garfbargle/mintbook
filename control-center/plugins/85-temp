@@ -16,7 +16,10 @@ done
 [ -n "$t" ] || { echo 'skip = on'; exit 0; }
 
 c=$(( t / 1000 ))
-SF="$HOME/.cache/mintbook/temp.state"
+# Its own EMA state, not bin/panel-temp's: the two tick at different rates
+# (2 s here, 30 s on the bar) and sharing one file would change the smoothing
+# constant of whichever ran last.
+SF="$HOME/.cache/mintbook/cc-temp.state"
 mkdir -p "$(dirname "$SF")"
 prev=$(cat "$SF" 2>/dev/null)
 case "$prev" in ''|*[!0-9]*) prev=$c ;; esac

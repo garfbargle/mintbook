@@ -16,13 +16,17 @@ STATE="$HOME/.config/mintbook"
 SAVED="$STATE/panel-ids.before-control-center"
 PLUGIN=25
 
-#   1 whiskermenu   7 separator     8 systray     10 xapp-status
-#  18 wifi         11 battery      25 control    13 clock
-VISIBLE=(1 7 8 10 18 11 $PLUGIN 13)
-#  19 cpu  17 temperature  21 bluetooth  23 night light  24 appearance
+#   1 whiskermenu  7 separator  8 systray  10 xapp-status  19 cpu sparkline
+#  17 temperature  18 wifi      11 battery 25 control      13 clock
+#
+# CPU and temperature stay on the bar deliberately: they are readings you
+# glance at, not settings you open something to change. Everything that is a
+# switch went behind the click.
+VISIBLE=(1 7 8 10 19 17 18 11 $PLUGIN 13)
+#  21 bluetooth  23 night light  24 appearance
 #  12 volume — its plugin was also the XF86Audio grab, so bin/volume-key
 #  takes that over below.
-RETIRED=(19 17 21 23 24 12)
+RETIRED=(21 23 24 12)
 
 if [ "${1:-}" = --revert ]; then
   echo "==> restoring the bar"
@@ -42,8 +46,12 @@ fi
 [ -n "${DISPLAY:-}" ] || { echo "DISPLAY is unset" >&2; exit 1; }
 
 echo "==> icon"
-FG=$(sed -n 's/^PANEL_FOREGROUND=//p' "$STATE/system-chrome.env" 2>/dev/null | tr -d "'\"")
-MINTBOOK_PANEL_FG="${FG:-#ffffff}" python3 "$ROOT/icons/generate-control-genmon.py"
+# The env file is written with printf %q, so '#' arrives backslash-escaped.
+# Sourcing it is the only way to read it back correctly.
+PANEL_FOREGROUND='#ffffff'
+# shellcheck disable=SC1091
+[ -r "$STATE/system-chrome.env" ] && . "$STATE/system-chrome.env"
+MINTBOOK_PANEL_FG="$PANEL_FOREGROUND" python3 "$ROOT/icons/generate-control-genmon.py"
 
 echo "==> $BIN"
 install -dm755 "$BIN"
@@ -90,7 +98,7 @@ nohup xfce4-panel >/dev/null 2>&1 &
 sleep 1
 
 echo
-echo "bar: whisker · systray · updates · wi-fi · battery · control center · clock"
-echo "behind the click: ${RETIRED[*]} (cpu, temp, bluetooth, night, appearance, volume)"
+echo "bar: whisker · systray · updates · cpu · temp · wi-fi · battery · control · clock"
+echo "behind the click: ${RETIRED[*]} (bluetooth, night light, appearance, volume)"
 echo "plugins: $SHARE/plugins"
 echo "undo: $(basename "$0") --revert"

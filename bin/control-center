@@ -44,7 +44,7 @@ ROWH = {'toggle': 66, 'segment': 58, 'slider': 58, 'meter': 66}
 SPAN = {'toggle': 2, 'segment': 4, 'slider': 4, 'meter': 2}
 
 LIGHT = {
-    'top': (229, 231, 234, .965), 'bottom': (202, 205, 210, .945),
+    'top': (229, 231, 234, .980), 'bottom': (202, 205, 210, .970),
     'edge': (255, 255, 255, .75), 'rim': (65, 68, 74, .18),
     'fg': (45, 48, 54), 'tile': (255, 255, 255, .55),
     'tile_hi': (255, 255, 255, .78), 'tile_edge': (255, 255, 255, .65),
@@ -53,7 +53,7 @@ LIGHT = {
     'seg': (65, 68, 74, .10), 'seg_on': (255, 255, 255, .95),
 }
 DARK = {
-    'top': (104, 109, 119, .955), 'bottom': (74, 78, 86, .945),
+    'top': (104, 109, 119, .975), 'bottom': (74, 78, 86, .968),
     'edge': (255, 255, 255, .18), 'rim': (0, 0, 0, .35),
     'fg': (255, 255, 255), 'tile': (255, 255, 255, .13),
     'tile_hi': (255, 255, 255, .20), 'tile_edge': (255, 255, 255, .10),
@@ -531,10 +531,14 @@ class Tile(Gtk.DrawingArea):
         gs = 15
         glyph(cr, self.spec.get('glyph', 'dot'), 13, 12, gs, self.c['fg'], .55)
         text(cr, self.spec.get('title', ''), 13 + gs + 7, 12, 9.5, self.c['fg'], .6)
-        text(cr, self.spec.get('value', ''), 13, h - 32, 17, self.c['fg'], .95, 'bold')
+        vw, _vh = text(cr, self.spec.get('value', ''), 13, h - 32, 17,
+                       self.c['fg'], .95, 'bold')
         if self.spec.get('subtitle'):
-            text(cr, self.spec['subtitle'], 0, h - 24, 9.5, self.c['fg'], .45,
-                 align='right', width=w - 13)
+            # Right-aligned in whatever the reading left over, and ellipsized
+            # there — a top-process line is as long as the process name.
+            x = 13 + vw + 8
+            text(cr, self.spec['subtitle'], x, h - 25, 9.5, self.c['fg'], .45,
+                 align='right', width=max(24, w - 13 - x))
 
     def spec_accent(self):
         a = self.spec.get('accent')
