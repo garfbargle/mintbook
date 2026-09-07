@@ -22,7 +22,16 @@ PLUGIN=25
 # CPU and temperature stay on the bar deliberately: they are readings you
 # glance at, not settings you open something to change. Everything that is a
 # switch went behind the click.
-VISIBLE=(1 7 8 10 19 17 18 11 $PLUGIN 13)
+#
+# The battery is 11 (xfce4-power-manager-plugin) until bin/battery-install has
+# run, and its own id after. Read it rather than hardcode it, or re-running
+# this would quietly put the XFCE plugin back. See docs/battery.md.
+BATTERY=11
+if [ -r "$STATE/battery.conf" ]; then    # `[ ] && x` would exit under set -e
+  BATTERY=$(sed -n 's/^PANEL_ID=\([0-9]*\).*/\1/p' "$STATE/battery.conf" | head -1)
+  [ -n "$BATTERY" ] || BATTERY=11
+fi
+VISIBLE=(1 7 8 10 19 17 18 "$BATTERY" $PLUGIN 13)
 #  21 bluetooth  22 power profile  23 night light  24 appearance
 #  12 volume — its plugin was also the XF86Audio grab, so bin/volume-key
 #  takes that over below.

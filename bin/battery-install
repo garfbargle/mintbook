@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# battery-install — our battery indicator on the top bar, in place of
+# xfce4-power-manager-plugin. No root. See docs/battery.md.
+#
+#   bin/battery-install            # plugin-11 out, plugin-26 in
+#   bin/battery-install --revert   # the XFCE plugin back
+#
+# The XFCE plugin is plugin-11 and is not removed, only taken off the bar, so
+# --revert is a one-line change to an array.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+BIN="$HOME/.local/bin"
+PANEL_RC="$HOME/.config/xfce4/panel"
+STATE="$HOME/.config/mintbook"
+CONF="$STATE/battery.conf"
+SAVED="$STATE/panel-ids.before-battery"
+OLD=11          # power-manager-plugin
+PLUGIN=26       # ours
+
+[ -n "${DISPLAY:-}" ] || { echo "DISPLAY is unset" >&2; exit 1; }
+
+current_ids() {
+  xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids | grep -oE '^[0-9]+$'
+}
+
+write_ids() {   # write_ids <id...>
+  local args=(); local id
+  for id in "$@"; do args+=(-t int -s "$id"); done
+  xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids --force-array "${args[@]}"
+}
+
+if [ "${1:-}" = --revert ]; then
+  echo "==> putting the XFCE battery plugin back"
+  ids=$(cat "$SAVED" 2>/dev/null || current_ids | tr '\n' ' ')
+  xfce4-panel -q 2>/dev/null || true
+  sleep 0.4
+  out=(); for id in $ids; do
+    [ "$id" = "$PLUGIN" ] && out+=("$OLD") || out+=("$id")
+  done
+  write_ids "${out[@]}"
+  nohup xfce4-panel >/dev/null 2>&1 &
+  echo "plugin-$PLUGIN stays registered but unused; the log in"
+  echo "~/.cache/mintbook/battery is left alone — delete it if you want it gone"
+  exit 0
+fi
+
+echo "==> $BIN"
+install -dm755 "$BIN"
+for f in panel-battery battery-menu battery-history; do
+  rm -f "$BIN/$f"
+  install -m755 "$ROOT/bin/$f" "$BIN/$f"
+done
+
+echo "==> $CONF"
+install -dm755 "$STATE"
+if [ ! -e "$CONF" ]; then
+  cat > "$CONF" <<CONFEOF
+# mintbook battery indicator. Sourced by bin/panel-battery, read by the menu.
+SHOW_PERCENT=0     # the charge as a number, left of the icon
+COLOR=traffic      # traffic | mono — mono is the macOS look, panel ink only
+LOW=15             # below this the fill is red
+MID=40             # below this it is amber
+SAMPLE_EVERY=12    # 5 s ticks between /proc walks — 12 is one a minute
+HISTORY_DAYS=7     # how much of the log to keep
+PANEL_ID=$PLUGIN   # so the menu can tell genmon to repaint after a change
+CONFEOF
+else
+  # PANEL_ID is the one line an existing config must still have.
+  grep -q '^PANEL_ID=' "$CONF" || printf 'PANEL_ID=%s\n' "$PLUGIN" >> "$CONF"
+fi
+
+echo "==> genmon-$PLUGIN.rc"
+install -dm755 "$PANEL_RC"
+sed "s|^Command=.*|Command=$BIN/panel-battery|" \
+  "$ROOT/config/xfce4-panel/genmon-$PLUGIN.rc" > "$PANEL_RC/genmon-$PLUGIN.rc"
+
+echo "==> panel"
+[ -s "$SAVED" ] || current_ids | tr '\n' ' ' > "$SAVED"
+
+# Running plugins write xfconf back on shutdown, so stop the panel first.
+ids=$(current_ids | tr '\n' ' ')
+xfce4-panel -q 2>/dev/null || true
+sleep 0.4
+xfconf-query -c xfce4-panel -p "/plugins/plugin-$PLUGIN" -n -t string -s genmon 2>/dev/null || true
+
+# In place, so the battery keeps its seat between Wi-Fi and the Control Center.
+out=(); seen=0
+for id in $ids; do
+  if [ "$id" = "$OLD" ] || [ "$id" = "$PLUGIN" ]; then
+    [ "$seen" = 1 ] && continue
+    out+=("$PLUGIN"); seen=1
+  else
+    out+=("$id")
+  fi
+done
+[ "$seen" = 1 ] || out+=("$PLUGIN")
+write_ids "${out[@]}"
+
+nohup xfce4-panel >/dev/null 2>&1 &
+sleep 1
+
+echo
+echo "bar: ${out[*]}"
+echo "click the battery for the menu · Battery History… for the graph"
+echo "history: ~/.cache/mintbook/battery/history — one line a minute"
+echo "undo: $(basename "$0") --revert"

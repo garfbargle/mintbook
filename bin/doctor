@@ -237,6 +237,28 @@ for p in 17 18 19 21 22 23; do
   [ -e "$HOME/.config/xfce4/panel/genmon-$p.rc" ] || MISSING="${MISSING-} $p"
 done
 [ -z "${MISSING-}" ] && ok "genmon panel plugins" "17 18 19 21 22 23" || warn "genmon panel plugins" "missing:${MISSING}"
+
+# The battery indicator, only once it has been installed — this machine is
+# fine with the XFCE plugin, so its absence is not a fault. See docs/battery.md.
+if [ -e "$HOME/.config/mintbook/battery.conf" ]; then
+  check "battery indicator" "bin/panel-battery" have "$HOME/.local/bin/panel-battery"
+  check "battery menu" "bin/battery-menu" have "$HOME/.local/bin/battery-menu"
+  check "battery history" "bin/battery-history" have "$HOME/.local/bin/battery-history"
+  BID=$(sed -n 's/^PANEL_ID=\([0-9]*\).*/\1/p' "$HOME/.config/mintbook/battery.conf" | head -1)
+  check "battery genmon rc" "genmon-${BID:-26}.rc" have "$HOME/.config/xfce4/panel/genmon-${BID:-26}.rc"
+  BLOG="$HOME/.cache/mintbook/battery/history"
+  if [ -s "$BLOG" ]; then
+    BN=$(wc -l < "$BLOG")
+    BAGE=$(( ( $(date +%s) - $(stat -c %Y "$BLOG") ) / 60 ))
+    if [ "$BAGE" -le 5 ]; then
+      ok "battery samples" "$BN samples, last one ${BAGE}m ago"
+    else
+      warn "battery samples" "$BN samples, but the last is ${BAGE}m old — is the panel running?"
+    fi
+  else
+    warn "battery samples" "no samples yet — it fills at one a minute while the panel runs"
+  fi
+fi
 check "night light autostart" "mintbook-night.desktop" have "$HOME/.config/autostart/mintbook-night.desktop"
 # Hidden=true user overrides of entries in /etc/xdg/autostart. An override is
 # only meaningful while the system entry it shadows still exists, so check both
