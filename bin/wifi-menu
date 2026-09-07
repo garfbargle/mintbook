@@ -24,6 +24,9 @@ Two things it does that the battery menu does not:
     this display is at 168 dpi and everything else on the panel is scaled by
     hand, so a themed GTK widget would have been the only thing in the popup
     that did not match.
+
+The password reaches NetworkManager on nmcli's stdin, not its argv — see
+connect() for why that works and how it was checked.
 """
 import math
 import os
@@ -900,10 +903,17 @@ class Menu:
         return True
 
     def on_press(self, _w, e):
+        # Left button only. Every row action here either joins a network or
+        # turns the radio off, and a middle-click or a stray button 4/5 from
+        # a synthetic event should not be able to reach one of those.
+        if e.button != 1:
+            return False
         self.press_row = self.locate(e.x, e.y)[0]
         return True
 
     def on_release(self, _w, e):
+        if e.button != 1:
+            return False
         row, x, y = self.locate(e.x, e.y)
         if row is not None and row is self.press_row and row.interactive:
             row.release(x, y)
@@ -986,19 +996,25 @@ class Menu:
         self.tick_spinner()
 
         def work():
-            # The password rides on argv, where `ps` can see it for as long as
-            # the join takes. nmcli has no --password-file and no way to be
-            # handed a secret on a pipe; the alternative is NetworkManager's
-            # AddAndActivateConnection over D-Bus, which is the right fix and
-            # is noted in docs/desktop.md as not done.
-            cmd = ['nmcli', 'device', 'wifi', 'connect', ssid]
+            # The secret goes on stdin, never on argv. `nmcli --ask` prompts
+            # for it through nmc_readline, which is GNU readline, which reads
+            # a pipe as happily as a terminal — verified by driving every
+            # prompt of `nmcli --ask connection add` from a pipe. nmcli has no
+            # /dev/tty anywhere in it, so there is no other stream it could be
+            # reading. What this buys is that `ps` never sees the password;
+            # `nmcli … password <pw>` put it in argv for the length of the
+            # join. `--ask` is passed only when there is something to answer
+            # with, and subprocess closes stdin after writing, so a prompt we
+            # did not expect gets EOF and an error rather than a hang.
+            cmd = ['nmcli']
+            if password:
+                cmd.append('--ask')
+            cmd += ['device', 'wifi', 'connect', ssid]
             if IFACE:
                 cmd += ['ifname', IFACE]
-            if password:
-                cmd += ['password', password]
             try:
-                p = subprocess.run(cmd, capture_output=True, text=True,
-                                   timeout=75)
+                p = subprocess.run(cmd, input=(password or '') + '\n',
+                                   capture_output=True, text=True, timeout=75)
                 ok = p.returncode == 0
                 err = (p.stderr or p.stdout or '').strip().splitlines()
                 err = err[-1] if err else 'Could not join'
@@ -1013,9 +1029,14 @@ class Menu:
             self.saved.add(ssid)
         else:
             # Back to the field with the message on it, so a typo is one
-            # correction rather than a second trip through the list.
+            # correction rather than a second trip through the list. A known
+            # network that failed *without* a password gets the field too when
+            # the failure was about secrets — a stored profile can lose its
+            # psk, and the answer to that is the same field.
             self.error = err.replace('Error: ', '')[:96]
-            if had_password:
+            secrets = 'secret' in err.lower() or 'password' in err.lower()
+            net = self.nets.get(ssid)
+            if had_password or (secrets and net and net['security']):
                 self.joining = ssid
                 self.grab_keyboard(True)
         self.refresh(self.radio)

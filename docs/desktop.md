@@ -318,13 +318,39 @@ Install with [`bin/wifi-install`](../bin/wifi-install); `--revert` deletes
 `~/.local/bin/wifi-menu` and `panel-wifi` falls back to `nm-connection-editor` on its
 own. `bin/doctor` checks for it, and says nothing when it is not installed.
 
+**The password goes on stdin, not on argv.** `nmcli … password <pw>` puts the
+secret in the process's command line, where any local `ps` can read it for as
+long as the join takes, and `nmcli` has no `--password-file`. It does have
+`--ask`, which prompts — and its prompts are GNU readline, which reads a pipe as
+happily as a terminal. So the menu runs `nmcli --ask device wifi connect <ssid>`
+and writes the password to its stdin.
+
+What was actually checked, 2026-09-07:
+
+- `strings $(which nmcli)` has **no `/dev/tty`** anywhere in it, so stdin is the
+  only stream it can be reading a secret from. (This was the real risk: a lot of
+  tools read passwords from the controlling terminal and ignore a pipe.)
+- `nmcli --ask connection add type wifi` was driven through **fifteen
+  consecutive prompts from a pipe** — SSID, interface, four Wi-Fi optional
+  settings, IPv4, IPv6 and proxy groups — taking piped values and bare newlines
+  as defaults. `nmc_readline` reads a pipe.
+
+What was **not** checked directly: the echo-off secret prompt itself. Reaching
+it needs a live association against a secured AP, and the only ones in range
+belong to this household. `nmcli --ask connection add` never prompts for a PSK —
+it is not one of its optional-settings groups — so there is no radio-free path
+to it. The inference is that `nmc_readline_echo_off()` is `tcsetattr` around the
+same `nmc_readline`, and `tcsetattr` failing on a pipe leaves the read
+unchanged. To close it for real, on a network you do not mind dropping for ten
+seconds:
+
+```
+nmcli connection delete "<ssid>" && printf '%s\n' '<password>' \
+  | nmcli --ask device wifi connect "<ssid>"
+```
+
 **Known limits, all cosmetic or noted rather than fixed:**
 
-- **The password rides on `argv`.** `nmcli device wifi connect … password …` is the
-  only CLI path that takes a secret, and `ps` can see it for as long as the join
-  takes. `nmcli` has no `--password-file` and no way to be handed a secret on a pipe.
-  The right fix is NetworkManager's `AddAndActivateConnection` over D-Bus, in-process,
-  where the secret never becomes a command line. **Not done.**
 - **"Known" is matched on the profile name.** NetworkManager names a Wi-Fi profile
   after the SSID it was created from, and reading the real SSID out of a profile is
   one `nmcli` per profile. A profile that has since been renamed loses its bold and
@@ -904,10 +930,9 @@ Takes effect at the next login; the processes already running stay until then.
 - ~~Wifi icon size parity~~ — **solved** by moving wifi out of xapp into genmon.
   The old symbolic icons under `~/.icons/WhiteSur-light/` are now unused by the panel
   but left in place; `icons/generate-wifi-icons.py` still regenerates them.
-- **The Wi-Fi menu's password goes through `argv`.** `nmcli` has no way to be handed
-  a secret privately, so `ps` sees it for the length of the join. The fix is
-  NetworkManager's `AddAndActivateConnection` over D-Bus, in-process. See the Wi-Fi
-  menu above. **Not done.**
+- ~~**The Wi-Fi menu's password goes through `argv`.**~~ **Done 2026-09-07.**
+  It goes on `nmcli --ask`'s stdin. What is proven and what is inferred is
+  written out under the Wi-Fi menu above.
 - ~~**Autostart cruft.**~~ **Done 2026-09-03.** Evolution's four idle processes
   disabled; `casper-md5check` masked; journal capped. See Autostart above and
   [hardware.md](hardware.md) Housekeeping.
