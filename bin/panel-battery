@@ -1,0 +1,321 @@
+#!/usr/bin/env bash
+# Battery indicator for xfce4-genmon-plugin, and the sampler behind
+# bin/battery-history. See docs/battery.md.
+#
+# Replaces xfce4-power-manager-plugin (plugin-11), which draws a filled green
+# capsule at whatever size GTK feels like, has no percentage that matches the
+# rest of this bar, and opens xfce4-power-manager-settings on click.
+#
+# Bash, not Python, and the reason is in docs/desktop.md: python3 costs 30-50 ms
+# to start before it has done anything, and this runs every 5 s forever. The
+# whole tick is six sysfs reads and one 1 KB write. The /proc walk that feeds
+# the history is the expensive part, and it runs every SAMPLE_EVERY-th tick.
+#
+#   panel-battery            # a genmon tick
+#   panel-battery --sample   # force a history sample (for testing)
+#
+# The icon is drawn here rather than picked from a set of pre-rendered files
+# like wifi/bt, because it has 101 states and a fill width is one integer.
+# Coordinates are in half-pixels: viewBox is 2x the width/height attributes, so
+# integer arithmetic — all bash has — still lands on half a pixel.
+set -u
+
+CONF="$HOME/.config/mintbook/battery.conf"
+CACHE="$HOME/.cache/mintbook/battery"
+SVG="$CACHE/icon.svg"
+STATE="$CACHE/state"
+PROCS="$CACHE/procs"
+LOG="$CACHE/history"
+MENU="$HOME/.local/bin/battery-menu"
+
+SHOW_PERCENT=0        # macOS's "Show Percentage"; the menu writes this back
+COLOR=traffic         # traffic | mono — mono is the macOS look, ink only
+LOW=15                # below this the fill goes red
+MID=40                # below this it goes amber
+SAMPLE_EVERY=12       # ticks between /proc walks (5 s tick -> 60 s)
+HISTORY_DAYS=7        # how much of the log to keep
+BAT=BAT0
+AC=ADP1
+# shellcheck disable=SC1090
+[ -r "$CONF" ] && . "$CONF"
+
+B=/sys/class/power_supply/$BAT
+
+# ---------------------------------------------------------------- read state
+
+# No battery at all: say nothing rather than show a dead icon. Same rule the
+# control-center plugins follow with `skip = on`.
+[ -r "$B/status" ] || exit 0
+
+printf '<click>%s</click>\n<iconclick>%s</iconclick>\n' "$MENU" "$MENU"
+
+# rd <var> <file> <default>. Assigns rather than echoing, because $(r ...) is a
+# fork per reading and there are nine of them every five seconds; `read < file`
+# is none. That is the whole difference between a 120 ms tick and a 9 ms one.
+rd() { local v=''; [ -r "$2" ] && read -r v < "$2"; printf -v "$1" '%s' "${v:-$3}"; }
+
+rd status "$B/status" Unknown
+rd pct "$B/capacity" 0
+rd now "$B/charge_now" 0
+rd full "$B/charge_full" 0
+rd design "$B/charge_full_design" 0
+rd cur "$B/current_avg" 0; [ "$cur" = 0 ] && rd cur "$B/current_now" 0
+rd volt "$B/voltage_now" 0
+rd online "/sys/class/power_supply/$AC/online" 1
+[ "$pct" -gt 100 ] 2>/dev/null && pct=100
+[ "$pct" -lt 0 ] 2>/dev/null && pct=0
+
+# Milliwatts. uA x uV is 1.3e13 here — well inside bash's 64-bit ints.
+mw=$(( cur * volt / 1000000000 ))
+
+case "$status" in
+  Charging)    st=C ;;
+  Full)        st=F ;;
+  Discharging) st=D ;;
+  *)           st=$([ "$online" = 1 ] && echo F || echo U) ;;
+esac
+
+# Time to empty, or to full. current_avg reads 0 for a while after a state
+# change and right after resume; an estimate from a zero is not an estimate.
+eta=''
+if [ "$cur" -gt 0 ] 2>/dev/null; then
+  case "$st" in
+    D) mins=$(( now * 60 / cur )) ;;
+    C) mins=$(( (full - now) * 60 / cur )) ;;
+    *) mins=-1 ;;
+  esac
+  if [ "$mins" -ge 0 ] && [ "$mins" -lt 6000 ]; then
+    if [ "$mins" -ge 60 ]; then eta=$(( mins / 60 ))h\ $(( mins % 60 ))m
+    else eta=${mins}m; fi
+  fi
+fi
+
+# ------------------------------------------------------------------ the icon
+
+PANEL_FOREGROUND='#ffffff'
+# Sourced, not grepped: an older bin/appearance-mode wrote this with printf %q,
+# so '#ffffff' is on disk as '\#ffffff' and only the shell gives it back whole.
+# An SVG with stroke="\#ffffff" renders nothing at all — docs/control-center.md.
+# shellcheck disable=SC1090
+[ -r "$HOME/.config/mintbook/system-chrome.env" ] && . "$HOME/.config/mintbook/system-chrome.env"
+fg=$PANEL_FOREGROUND
+rd mode "$HOME/.config/mintbook/appearance.applied" dark
+
+# Apple's system palette, in both appearances. Charging is always green, which
+# is the one place this departs from macOS (it keeps the ink colour and shows
+# only the bolt) and does what a battery indicator has done since 1995.
+if [ "$mode" = dark ]; then
+  GREEN='#30d158' AMBER='#ffd60a' RED='#ff453a'
+else
+  GREEN='#34c759' AMBER='#ff9f0a' RED='#ff3b30'
+fi
+case "$COLOR" in
+  mono) fill=$fg ;;
+  *)
+    if   [ "$st" = C ] || [ "$st" = F ]; then fill=$GREEN
+    elif [ "$pct" -lt "$LOW" ]; then fill=$RED
+    elif [ "$pct" -lt "$MID" ]; then fill=$AMBER
+    else fill=$GREEN; fi ;;
+esac
+
+# Only rewrite the file when what it would draw has changed.
+sig="$pct/$st/$fill/$fg/$SHOW_PERCENT"
+osig='' otick=0 oprev=0
+[ -r "$STATE" ] && read -r osig otick oprev < "$STATE"
+otick=${otick:-0} oprev=${oprev:-0}
+
+if [ "${osig:-}" != "$sig" ] || [ ! -s "$SVG" ]; then
+  # Half-pixel units. Body 60x30 at (14,19), cap at +63, inner well 50x20.
+  bx=14 tw=0 txt=''
+  if [ "$SHOW_PERCENT" = 1 ]; then
+    # 21 px, which is Inter 9 at this display's 168 dpi — the size the clock
+    # and the temperature are drawn at by the panel itself. Right-aligned in a
+    # box sized for the digit count, so 88 -> 89 cannot shove the battery
+    # sideways by a fraction of a pixel.
+    case ${#pct} in 1) tw=28 ;; 2) tw=52 ;; *) tw=76 ;; esac
+    bx=$(( 14 + tw + 12 ))
+    txt=$'\n'"  <text x=\"$(( 14 + tw ))\" y=\"49\" text-anchor=\"end\" fill=\"$fg\" fill-opacity=\".92\""
+    txt="$txt font-family=\"Inter\" font-size=\"42\" font-weight=\"500\""
+    txt="$txt style=\"font-feature-settings:'tnum'\">$pct</text>"
+  fi
+  w=$(( bx + 68 + 14 ))
+  fw=$(( (pct * 50 + 50) / 100 )); [ "$fw" -lt 5 ] && fw=5
+  ix=$(( bx + 5 ))
+
+  # The bolt is negative space over the charge and positive space past it, so
+  # it stays visible at 4% and at 96%. Two masks, no conditionals in the paint.
+  bolt='' maskattr=''
+  if [ "$st" = C ]; then
+    cx=$(( bx + 34 ))
+    d="M$((cx+3)),25 L$((cx-6)),36 L$((cx-1)),36 L$((cx-3)),43 L$((cx+6)),32 L$((cx+1)),32 Z"
+    maskattr=' mask="url(#punch)"'
+    bolt=$(cat <<BOLT
+  <mask id="punch">
+   <rect x="0" y="0" width="$w" height="68" fill="#fff"/>
+   <path d="$d" fill="#000"/>
+  </mask>
+  <mask id="past">
+   <rect x="0" y="0" width="$w" height="68" fill="#fff"/>
+   <rect x="$ix" y="24" width="$fw" height="20" rx="6" fill="#000"/>
+  </mask>
+  <path d="$d" fill="$fill" mask="url(#past)"/>
+BOLT
+)
+  fi
+
+  mkdir -p "$CACHE"
+  cat > "$SVG.tmp" <<SVGDOC
+<svg width="$(( w / 2 ))" height="34" viewBox="0 0 $w 68" xmlns="http://www.w3.org/2000/svg">$txt
+ <g fill="$fg" fill-opacity=".38">
+  <path d="M$((bx+10)),19 h40 a10,10 0 0 1 10,10 v10 a10,10 0 0 1 -10,10 h-40 a10,10 0 0 1 -10,-10 v-10 a10,10 0 0 1 10,-10 z M$((bx+10)),22 a7,7 0 0 0 -7,7 v10 a7,7 0 0 0 7,7 h40 a7,7 0 0 0 7,-7 v-10 a7,7 0 0 0 -7,-7 z" fill-rule="evenodd"/>
+  <path d="M$((bx+63)),28 a3,3 0 0 1 3,3 v6 a3,3 0 0 1 -3,3 z"/>
+ </g>
+ <rect x="$ix" y="24" width="$fw" height="20" rx="6" fill="$fill"$maskattr/>
+$bolt
+</svg>
+SVGDOC
+  mv -f "$SVG.tmp" "$SVG"
+fi
+
+# ---------------------------------------------------------------- the tooltip
+
+health=''
+[ "$design" -gt 0 ] 2>/dev/null && health=$(( full * 100 / design ))
+rd temp "$B/temp" ''
+rd cycles "$B/cycle_count" ''
+
+
+case "$st" in
+  C) line1="Charging${eta:+ · ${eta} to full}" ;;
+  F) line1='Charged' ;;
+  D) line1="${eta:+$eta remaining}" ;;
+  *) line1='On AC power' ;;
+esac
+[ -z "$line1" ] && line1=$([ "$online" = 1 ] && echo 'Plugged in' || echo 'On battery')
+
+line2="$(( mw / 1000 )).$(( (mw % 1000) / 100 )) W"
+[ -n "$health" ] && line2="$line2 · health ${health}%"
+[ -n "$cycles" ] && line2="$line2 · ${cycles} cycles"
+[ -n "$temp" ] && line2="$line2 · $(( temp / 10 )) °C"
+
+printf '<img>%s</img>\n' "$SVG"
+printf '<tool><span font_family="Inter"><b>Battery %s%%</b>\n%s\n<small>%s</small></span></tool>\n' \
+  "$pct" "$line1" "$line2"
+
+# ----------------------------------------------------------------- the sample
+#
+# One line per minute, holding everything bin/battery-history needs: the
+# charge, the measured watts, the machine's CPU deltas, and the CPU each
+# *application* spent since the last line. Applications, not processes: a
+# process is resolved up its parent chain to the thing you would name if asked
+# what was using the battery, so Firefox's dozen content processes arrive as
+# "firefox" rather than as twelve rows of "Isolated Web Co".
+
+tick=$(( otick + 1 ))
+[ "${1:-}" = --sample ] && tick=$SAMPLE_EVERY
+if [ $(( tick % SAMPLE_EVERY )) -ne 0 ]; then
+  printf '%s %s %s\n' "$sig" "$tick" "${oprev:-0}" > "$STATE.tmp"
+  mv -f "$STATE.tmp" "$STATE"
+  exit 0
+fi
+
+# /proc/stat's first line, without awk: cpu user nice system idle iowait ...
+read -ra cstat < /proc/stat
+cpu_t=0; for n in "${cstat[@]:1}"; do cpu_t=$(( cpu_t + n )); done
+cpu_i=$(( cstat[4] + cstat[5] ))
+
+declare -A JIF PAR COMM
+lines=()
+for d in /proc/[0-9]*; do
+  # `read` from the file splits the line in C and costs one open. Splitting it
+  # in bash instead — arr=($rest) over 50 fields and 260 processes — was 13000
+  # word splits and most of a quarter-second. The 9 bare _ are stat fields 5
+  # to 13; utime and stime are 14 and 15.
+  { read -r pid c st_ up _ _ _ _ _ _ _ _ _ ut sy _ < "$d/stat"; } 2>/dev/null || continue
+  if [ "${c: -1}" = ')' ]; then
+    c=${c#\(}; c=${c%\)}
+  else
+    # comm contains a space, so the field count is wrong. Rare enough to pay
+    # for properly: cut on the last ')' instead, which is what it is there for.
+    { s=$(<"$d/stat"); } 2>/dev/null || continue
+    c=${s#*\(}; c=${c%\)*}
+    arr=(${s##*\)})
+    up=${arr[1]:-0} ut=${arr[11]:-0} sy=${arr[12]:-0} c=${c// /_}
+  fi
+  j=$(( ut + sy ))
+  JIF[$pid]=$j PAR[$pid]=$up COMM[$pid]=$c
+  lines+=("$pid $j")
+done
+
+# The previous walk, and the /proc/stat totals it was taken against — the
+# per-application share is measured over the same interval as the watts.
+declare -A OLD
+prev_total=0 prev_idle=0
+if [ -r "$PROCS" ]; then
+  while read -r p j k; do
+    [ "$p" = '#' ] && { prev_total=$j prev_idle=${k:-0}; continue; }
+    OLD[$p]=$j
+  done < "$PROCS"
+fi
+
+printf '# %s %s\n%s\n' "$cpu_t" "$cpu_i" "$(IFS=$'\n'; echo "${lines[*]}")" > "$PROCS.tmp"
+mv -f "$PROCS.tmp" "$PROCS"
+
+apps=''
+if [ "$prev_total" -gt 0 ] && [ "$cpu_t" -gt "$prev_total" ]; then
+  declare -A APP
+  for p in "${!JIF[@]}"; do
+    o=${OLD[$p]:-}
+    [ -z "$o" ] && continue                      # started since the last walk
+    d=$(( ${JIF[$p]} - o ))
+    [ "$d" -le 0 ] && continue
+    # Walk to the application: stop at init, at a session or service manager,
+    # or after eight hops, which is deeper than any real tree here.
+    root=$p n=0
+    while [ "$n" -lt 8 ]; do
+      up=${PAR[$root]:-0}
+      [ "$up" -le 1 ] && break
+      case "${COMM[$up]:-}" in
+        systemd|xfce4-session|lightdm|init|'') break ;;
+      esac
+      root=$up; n=$(( n + 1 ))
+    done
+    k=${COMM[$root]:-?}
+    APP[$k]=$(( ${APP[$k]:-0} + d ))
+  done
+  # 2 jiffies over a minute is 0.03% of a core. Below that a name on the line
+  # is noise, and there are a hundred of them.
+  for k in "${!APP[@]}"; do
+    [ "${APP[$k]}" -ge 2 ] && apps="$apps $k:${APP[$k]}"
+  done
+fi
+
+printf -v stamp '%(%s)T' -1          # date(1) would be two forks a minute
+dt=0
+[ "$oprev" -gt 0 ] && dt=$(( stamp - oprev ))
+[ "$dt" -lt 0 ] && dt=0
+[ "$dt" -gt 3600 ] && dt=0                       # a suspend is a gap, not a sample
+
+# total and busy are jiffy *deltas* over the same interval as dt and the watts,
+# which is what makes the fit in bin/battery-history a fit and not a guess.
+dtotal=0 dbusy=0
+if [ "$prev_total" -gt 0 ] && [ "$cpu_t" -gt "$prev_total" ]; then
+  dtotal=$(( cpu_t - prev_total ))
+  dbusy=$(( dtotal - (cpu_i - prev_idle) ))
+  [ "$dbusy" -lt 0 ] && dbusy=0
+fi
+
+printf '%s %s %s %s %s %s %s%s\n' \
+  "$stamp" "$pct" "$st" "$mw" "$dt" "$dtotal" "$dbusy" "$apps" >> "$LOG"
+
+printf '%s %s %s\n' "$sig" "$tick" "$stamp" > "$STATE.tmp"
+mv -f "$STATE.tmp" "$STATE"
+
+# Trim once an hour. tail is the only fork on this path.
+if [ $(( tick % (SAMPLE_EVERY * 60) )) -eq 0 ]; then
+  keep=$(( HISTORY_DAYS * 24 * 60 ))
+  if [ "$(wc -l < "$LOG" 2>/dev/null || echo 0)" -gt "$keep" ]; then
+    tail -n "$keep" "$LOG" > "$LOG.tmp" && mv -f "$LOG.tmp" "$LOG"
+  fi
+fi
+exit 0
