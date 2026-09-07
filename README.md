@@ -27,7 +27,7 @@ Everything you *set* is one click away, in a Control Center that is seven small
 executables in a directory. Adding a tile is a twelve-line file.
 
 <p align="center">
-  <img src="docs/images/control-center.jpg" alt="Control Center" width="380">
+  <img src="docs/images/control-center.jpg" alt="Control Center" width="340">
 </p>
 
 Cmd+Shift+3 takes a screenshot. On battery it stays cool. Plug in, and it opens up.
@@ -43,6 +43,14 @@ and Flatpak in the same list. When nothing does, the arrow is not there.
 Wi-Fi and Bluetooth each have a glass menu behind their icon — the networks in
 range, the devices you own and what is left in them — and neither opens a
 window to do it.
+
+<p align="center">
+  <img src="docs/images/wifi-menu.jpg" alt="Wi-Fi menu" width="31%">
+  &nbsp;
+  <img src="docs/images/bluetooth-menu.jpg" alt="Bluetooth menu" width="31%">
+  &nbsp;
+  <img src="docs/images/battery-menu.jpg" alt="Battery menu" width="31%">
+</p>
 
 The wiring: [desktop](docs/desktop.md) · [control center](docs/control-center.md) · [updates](docs/updates.md) · [battery](docs/battery.md) · [bluetooth](docs/bluetooth.md) · [display](docs/display.md)
 
