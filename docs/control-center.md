@@ -252,6 +252,70 @@ Nothing installed asks to be `live` any more, so an open panel now costs
 nothing until you touch it. A closed one costs nothing at all — which is the
 whole argument for a panel over a bar full of indicators.
 
+### What the floor is made of
+
+Measured 2026-09-07, machine idle, warm page cache. Every popup behind the bar
+— this one, `bt-menu`, `wifi-menu`, `battery-menu` — is a fresh Python process
+per click, and pays the same startup before it can draw anything:
+
+| phase | ms |
+|---|---|
+| fork/exec + interpreter start, before `T0` | ~55 |
+| `import gi` + `require_version` | ~65 |
+| `from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo` | ~225 |
+| `Gtk.init` — X connect **and parse the GTK theme** | ~200 |
+| realize + first Pango layout (fontconfig) | ~40 |
+| **before any of this file's own code runs** | **~585** |
+
+Then the reads, the layout, the X map and the compositor. That is the ~1 second
+between the click and the popup, and it is why all four feel the same: the part
+they share is most of it.
+
+`import gi` is ~65 ms warm and ~220 cold — the 190 ms in docs/desktop.md is a
+cold read of a smaller import set, not this one.
+
+**~120 ms of that was the theme.** `Gtk.init` parses the GTK stylesheet, and
+WhiteSur's `gtk.css` is 400 KB. Interleaved, five runs each, timing `Gtk.init`
+alone:
+
+```
+WhiteSur 367 ms   Adwaita  77 ms      (first, cold)
+WhiteSur 183 ms   Adwaita  69 ms
+WhiteSur 205 ms   Adwaita 114 ms
+WhiteSur 186 ms   Adwaita  66 ms
+WhiteSur 191 ms   Adwaita  62 ms
+```
+
+None of the four popups reads a rule from it. Everything visible is cairo on a
+`DrawingArea`; the only widgets are a `POPUP` window and a `Box`; there is no
+`get_style_context` and no `CssProvider` anywhere in them; even the Wi-Fi
+password field is drawn rather than being a `Gtk.Entry`; and dark/light comes
+from `appearance.applied`, not from the GTK theme. The 400 KB was parsed and
+thrown away, once per click.
+
+So each of the four now sets `GTK_THEME=Adwaita` before `import gi`, which is
+the last moment it can be set — `Gtk.init` reads it, and a theme cannot be
+unset afterwards. `setdefault`, so `GTK_THEME=WhiteSur-Light control-center`
+still A/Bs it. Interleaved, four runs each, `MINTBOOK_*_TIME=1` to on screen:
+
+| | WhiteSur | Adwaita | |
+|---|---|---|---|
+| `control-center` | 722 806 978 709 | 580 648 571 690 | −150 ms |
+| `wifi-menu` | 673 651 617 668 | 452 603 468 454 | −200 ms |
+| `battery-menu` | 505 493 566 542 | 299 348 405 362 | −170 ms |
+| `bt-menu` | 567 364 569 432 | 444 245 510 369 | −95 ms |
+
+**What was not established.** Byte-comparing an `xwd` of each popup under both
+themes: `control-center` came back identical, and the other three differ — but
+their captures are 3.5 s apart and their contents are live (charge, signal,
+scan results), and the noise floor for that test was never measured, so those
+three differences are unattributed. The argument for no visual change is the
+grep, not the capture. The claim to check, if a difference ever shows up, is
+that one of them touches a themed widget after all.
+
+That leaves ~290 ms of typelib import, which no environment variable can move.
+Getting rid of it means not starting a process per click.
+
 ---
 
 ## Gotchas

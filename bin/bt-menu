@@ -89,6 +89,12 @@ def spawn(args):
 OBJ_P = spawn(['busctl', '--system', '--json=short', 'call', 'org.bluez', '/',
                'org.freedesktop.DBus.ObjectManager', 'GetManagedObjects'])
 
+# Adwaita before the Gtk import: Gtk.init parses the GTK theme, WhiteSur's
+# gtk.css is 400 KB, and that is ~120 ms of every launch spent on a stylesheet
+# this popup never reads a rule from — it is cairo on a DrawingArea, and
+# dark/light comes from appearance.applied. See bin/control-center.
+os.environ.setdefault('GTK_THEME', 'Adwaita')
+
 import gi                                                          # noqa: E402
 gi.require_version('Gtk', '3.0')
 gi.require_version('PangoCairo', '1.0')

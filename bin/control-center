@@ -53,6 +53,16 @@ def launch(paths):
 # processes, so they can spend their time inside the import instead.
 PENDING = launch(plugin_paths())
 
+# GTK_THEME before the Gtk import, because Gtk.init is what reads it and a
+# theme cannot be unset afterwards. WhiteSur's gtk.css is 400 KB, and parsing
+# it is ~190 ms of Gtk.init against Adwaita's ~70 — interleaved, five runs
+# each. Nothing here spends any of it: everything visible is cairo on a
+# DrawingArea, the only widgets are a POPUP window and a Box, and dark/light
+# comes from appearance.applied rather than from the GTK theme. The stylesheet
+# was being parsed and thrown away, once per click. setdefault rather than
+# assignment, so `GTK_THEME=WhiteSur-Light control-center` still A/Bs it.
+os.environ.setdefault('GTK_THEME', 'Adwaita')
+
 import gi                                                          # noqa: E402
 gi.require_version('Gtk', '3.0')
 gi.require_version('PangoCairo', '1.0')
