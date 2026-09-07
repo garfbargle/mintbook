@@ -352,6 +352,21 @@ if [ -e "$HOME/.config/mintbook/bluetooth.conf" ]; then
   else
     warn "pairing agent" "no blueman-applet — pairing from the menu has no dialog"
   fi
+  # blueman-tray is blueman's own Bluetooth icon. With ours on the bar it is a
+  # second widget saying less, and it is what the systray collapse arrow was
+  # there to hide. bin/bt-panel-install switches off the StatusIcon plugin that
+  # spawns it; if it is back, that setting has been undone.
+  if pgrep -x blueman-tray >/dev/null 2>&1; then
+    warn "blueman tray icon" "blueman-tray is running — a second Bluetooth icon"
+  else
+    ok "blueman tray icon" "off; ours is the only one"
+  fi
+  # The arrow on the systray exists only when something is hidden behind it.
+  if xfconf-query -c xfce4-panel -p /plugins/plugin-8/hidden-items >/dev/null 2>&1; then
+    warn "systray collapse arrow" "hidden-items is set — the systray has an arrow again"
+  else
+    ok "systray collapse arrow" "nothing hidden, so no arrow"
+  fi
 fi
 # The software-update indicator, only once it has been installed. The bar icon
 # is *supposed* to be missing when there is nothing waiting, so its absence

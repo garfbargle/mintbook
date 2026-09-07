@@ -24,14 +24,6 @@ PANEL_RC="$HOME/.config/xfce4/panel"
 STATE="$HOME/.config/mintbook"
 PLUGIN=21
 
-nudge() {   # genmon only re-reads its .rc when the panel restarts
-  [ -n "${DISPLAY:-}" ] || return 0
-  xfce4-panel -q 2>/dev/null || true
-  sleep 0.4
-  nohup xfce4-panel >/dev/null 2>&1 &
-  sleep 1
-}
-
 # The bar's plugin order, with $PLUGIN inserted before the Wi-Fi icon and any
 # stale copy of it removed first. Read from the panel rather than written from
 # a list here: bin/control-install owns that list, the software-update icon
@@ -63,26 +55,85 @@ reorder() {
   printf '%s' "$out"
 }
 
-apply_ids() {
-  local args=() id
-  for id in $1; do args+=(-t int -s "$id"); done
+# blueman draws its own Bluetooth tray icon, which is a StatusNotifier item and
+# therefore lands inside the systray plugin with Claude and 1Password. With our
+# icon on the bar that is a second Bluetooth widget saying less, and the way it
+# used to be kept out of the way — `hidden-items = blueman` — is what put the
+# collapse arrow on the systray in the first place. So the icon is not hidden
+# any more, it is not created: blueman's own StatusIcon plugin is switched off,
+# which is what spawns `blueman-tray`.
+#
+# ShowConnected has to go with it. Nothing else depends on StatusIcon, but that
+# one does, and blueman's PluginManager loads a dependency whether or not it is
+# in the disable list — so disabling StatusIcon alone leaves the tray running.
+#
+# blueman-applet itself stays. It is the BlueZ pairing agent, which is where
+# bin/bt-menu sends a passkey dialog, and AuthAgent does not depend on
+# StatusIcon: `Register Agent` appears once in `blueman-applet --loglevel
+# debug` both with the plugins disabled and without them.
+blueman_tray() {
+  command -v gsettings >/dev/null 2>&1 || return 0
+  case "$1" in
+    off) gsettings set org.blueman.general plugin-list "['!StatusIcon', '!ShowConnected']" ;;
+    on)  gsettings set org.blueman.general plugin-list "@as []" ;;
+  esac
+  # The applet reads its plugin list when it loads, so it has to come back.
+  local pid
+  for pid in $(pgrep -x blueman-applet 2>/dev/null || true) \
+             $(pgrep -x blueman-tray 2>/dev/null || true); do
+    kill "$pid" 2>/dev/null || true
+  done
+  sleep 1
+  if command -v blueman-applet >/dev/null 2>&1; then
+    nohup blueman-applet >/dev/null 2>&1 &
+  fi
+}
+
+# The systray's collapse arrow exists only because something is hidden behind
+# it. With blueman's item gone there is nothing left to hide, so the list goes
+# and the arrow goes with it. Removing the property rather than writing an
+# empty array is what lets the plugin fall back to its own default.
+systray_hidden() {
+  case "$1" in
+    none)    xfconf-query -c xfce4-panel -p /plugins/plugin-8/hidden-items -r \
+               2>/dev/null || true ;;
+    # -n creates it. Without that, xfconf-query refuses to write a property
+    # that does not exist yet — which is exactly the state `none` leaves it in,
+    # so the revert silently did nothing until this was here.
+    blueman) xfconf-query -c xfce4-panel -p /plugins/plugin-8/hidden-items -n \
+               --force-array -t string -s blueman 2>/dev/null \
+             || xfconf-query -c xfce4-panel -p /plugins/plugin-8/hidden-items \
+               --force-array -t string -s blueman 2>/dev/null || true ;;
+  esac
+}
+
+# One panel stop for both edits. Running plugins write xfconf back on shutdown,
+# so the systray's hidden-items has to be written while the panel is down or it
+# is simply overwritten again a second later.
+apply_panel() {
+  local ids=$1 hidden=$2 args=() id
+  for id in $ids; do args+=(-t int -s "$id"); done
   # Never write an empty array over the bar: that is a panel with nothing on
   # it, and it is not what a failed xfconf read should turn into.
   if [ ${#args[@]} -eq 0 ]; then
     echo "refusing to write an empty plugin list to the bar" >&2
     return 1
   fi
-  # Running plugins write xfconf back on shutdown, so stop the panel first.
   xfce4-panel -q 2>/dev/null || true
   sleep 0.4
   xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids --force-array "${args[@]}"
+  systray_hidden "$hidden"
   nohup xfce4-panel >/dev/null 2>&1 &
   sleep 1
 }
 
 if [ "${1:-}" = --revert ]; then
+  echo "==> giving blueman its tray icon back"
+  blueman_tray on
   echo "==> taking plugin-$PLUGIN off the bar"
-  if [ -n "${DISPLAY:-}" ]; then apply_ids "$(reorder remove)"; fi
+  # blueman's item goes back behind the collapse arrow, which is where it was
+  # before any of this: hidden, but present.
+  if [ -n "${DISPLAY:-}" ]; then apply_panel "$(reorder remove)" blueman; fi
   P=$(cat "$HOME/.cache/mintbook/bt-menu.pid" 2>/dev/null || true)
   [ -n "$P" ] && kill "$P" 2>/dev/null || true
   rm -f "$BIN/bt-menu" "$HOME/.cache/mintbook/bt-menu.pid" "$STATE/bluetooth.conf"
@@ -125,8 +176,13 @@ install -dm755 "$STATE"
 printf 'PANEL_ID=%s\n' "$PLUGIN" > "$STATE/bluetooth.conf"
 xfconf-query -c xfce4-panel -p "/plugins/plugin-$PLUGIN" -n -t string -s genmon \
   2>/dev/null || true
-apply_ids "$(reorder add)"
+
+echo "==> blueman tray icon"
+blueman_tray off
+
+apply_panel "$(reorder add)" none
 
 echo
 echo "click the Bluetooth icon for the menu · Bluetooth Settings… for blueman"
+echo "blueman's own tray icon is off, so the systray has nothing to collapse"
 echo "undo: $(basename "$0") --revert"

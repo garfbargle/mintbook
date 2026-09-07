@@ -123,7 +123,7 @@ Plugin order (`plugin-ids`), left to right:
 |---|---|---|
 | 1 | launcher | 3×3 applications button → fullscreen app grid |
 | 7 | separator | `expand=true` — pushes everything right |
-| 8 | systray | "the rest" — Claude; blueman is hidden here (see Bluetooth below) |
+| 8 | systray | "the rest" — Claude, 1Password, Chrome. No collapse arrow: nothing is hidden (see Bluetooth below) |
 | 10 | xapp-status-plugin | mintUpdate, only when updates are available |
 | 19 | genmon | CPU sparkline |
 | 17 | genmon | CPU temperature |
@@ -436,8 +436,41 @@ in order to make a single call. "No adapter" is answered from
 `/sys/class/bluetooth/hci*` before D-Bus is touched at all, which is also the
 state this machine lands in when the SSDC regression eats hci0.
 
-blueman-applet stays running (pairing / secret agent). Only its tray icon is hidden,
-via `/plugins/plugin-8/hidden-items = blueman`.
+**blueman's own tray icon is switched off, not hidden** — *changed 2026-09-07*.
+It used to be hidden via `/plugins/plugin-8/hidden-items = blueman`, and that
+one entry was the entire reason the systray had a **collapse arrow** on it: the
+arrow appears only when there is something behind it. With our icon on the bar,
+blueman's was a second Bluetooth widget saying less, so it is no longer created:
+
+```bash
+gsettings set org.blueman.general plugin-list "['!StatusIcon', '!ShowConnected']"
+```
+
+`StatusIcon` is the blueman applet plugin that spawns the separate
+`blueman-tray` process. **`ShowConnected` has to go with it** — it is the only
+other plugin that declares `__depends__ = ["StatusIcon"]`, and blueman's
+`PluginManager.__load_plugin()` loads a dependency whether or not it is in the
+disable list, so disabling `StatusIcon` on its own leaves the tray running.
+That was tried first and did nothing visible.
+
+With nothing left to hide, `hidden-items` is removed and the arrow goes with
+it. Both edits happen inside one panel stop in
+[`bin/bt-panel-install`](../bin/bt-panel-install), because running plugins
+write xfconf back on shutdown and a `hidden-items` written while the panel is
+up is overwritten a second later.
+
+**blueman-applet itself stays running** — it is the BlueZ pairing agent, which
+is where [`bin/bt-menu`](../bin/bt-menu) sends any passkey dialog. `AuthAgent`
+does not depend on `StatusIcon`, and this was checked rather than assumed:
+`Register Agent` appears exactly once in `blueman-applet --loglevel debug`
+both with the two plugins disabled and with `plugin-list` empty. The agent
+object is on the *system* bus at `/org/bluez/agent/blueman` and the bus policy
+denies introspection, so the log line is the check, not `busctl tree`.
+
+`bin/bt-panel-install --revert` puts `plugin-list` back to empty, restarts the
+applet so the tray returns, and writes `hidden-items = blueman` again — the
+arrow comes back with it, which is where this started. `bin/doctor` warns if
+either creeps back.
 
 ### Bluetooth menu ([`bin/bt-menu`](../bin/bt-menu))
 
@@ -959,7 +992,9 @@ out of XApp entirely (genmon) for that reason; nm-applet is disabled.
 
 **The systray plugin is the same kind of trap for StatusNotifier items.** Blueman and
 Claude both land in plugin-8 and cannot be split. Bluetooth is therefore a genmon
-indicator too, with blueman hidden via `hidden-items`.
+indicator too. Blueman's own item was hidden via `hidden-items` until
+2026-09-07 — which put a collapse arrow on the systray — and is now switched
+off at the source instead; see the Bluetooth indicator section.
 
 **`xfce4-cpugraph-plugin` defaults to `in-terminal=1`.** Its click command therefore
 opens inside a terminal window — this was the stray terminal appearing alongside

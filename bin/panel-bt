@@ -4,7 +4,8 @@
 # Blueman's tray icon lives in the systray plugin with everything else (Claude),
 # so it cannot be placed next to wifi on its own. This renders a matching-size
 # icon via genmon <img> and opens bin/bt-menu on click. The blueman applet
-# stays running as the BlueZ agent; only its tray icon is hidden.
+# stays running as the BlueZ agent; its tray icon is switched off at the source
+# by bin/bt-panel-install, so this is the only Bluetooth icon on the bar.
 #
 # This was Python importing gi.repository. That import alone costs 190 ms on
 # this chip — the whole script ran in 197 ms, so essentially all of it was
