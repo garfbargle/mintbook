@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# bt-panel-install — the Bluetooth indicator and its popup menu. No root.
+# See docs/desktop.md and docs/bluetooth.md.
+#
+#   bin/bt-panel-install            # panel-bt + bt-menu, and the bar icon
+#   bin/bt-panel-install --revert   # take the icon back off the bar
+#
+# Not to be confused with bin/bt-install, which is the DSDT override that
+# makes the radio exist at all and wants root. This one is the desktop half:
+# an icon on the bar and a popup behind it. The radio has to be working
+# already, and if it is not the icon says so rather than hiding.
+#
+# Bluetooth was on the bar as plugin-21 until bin/control-install moved it
+# behind the Control Center's click. It comes back for the reason Wi-Fi never
+# left: "is the speaker connected" is a reading, and the rule in
+# docs/control-center.md is that a reading stays on the bar. The tile in the
+# Control Center stays too — it is the same backend, and bin/bt-menu drives
+# its `set` verb rather than bluetoothctl so the two can never disagree.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+BIN="$HOME/.local/bin"
+PANEL_RC="$HOME/.config/xfce4/panel"
+STATE="$HOME/.config/mintbook"
+PLUGIN=21
+
+nudge() {   # genmon only re-reads its .rc when the panel restarts
+  [ -n "${DISPLAY:-}" ] || return 0
+  xfce4-panel -q 2>/dev/null || true
+  sleep 0.4
+  nohup xfce4-panel >/dev/null 2>&1 &
+  sleep 1
+}
+
+# The bar's plugin order, with $PLUGIN inserted before the Wi-Fi icon and any
+# stale copy of it removed first. Read from the panel rather than written from
+# a list here: bin/control-install owns that list, the software-update icon
+# comes and goes, and hardcoding an order would quietly undo either one.
+# Every `[ cond ] && cmd` below is written as an if. As a bare statement that
+# construct returns 1 when the test fails, and under `set -e` inside a command
+# substitution that ends the subshell early and hands back a truncated plugin
+# list — which would rewrite the bar with icons missing. bin/control-install
+# has the same note next to battery.conf.
+reorder() {
+  local want=$1 ids out='' id
+  ids=$(xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids 2>/dev/null \
+        | grep -oE '^[0-9]+$' | tr '\n' ' ') || ids=''
+  for id in $ids; do
+    if [ "$id" = "$PLUGIN" ]; then continue; fi
+    # 18 is panel-wifi. Bluetooth goes to its left, which is where macOS puts
+    # it. If Wi-Fi is not on the bar, the tail below places it instead.
+    if [ "$want" = add ] && [ "$id" = 18 ]; then out="$out $PLUGIN"; fi
+    out="$out $id"
+  done
+  if [ "$want" = add ]; then
+    case " $out " in
+      *" $PLUGIN "*) ;;
+      # No Wi-Fi icon to sit beside: go in front of the clock, or last.
+      *" 13 "*) out=" ${out# } "; out=${out/ 13 / $PLUGIN 13 } ;;
+      *) out="$out $PLUGIN" ;;
+    esac
+  fi
+  printf '%s' "$out"
+}
+
+apply_ids() {
+  local args=() id
+  for id in $1; do args+=(-t int -s "$id"); done
+  # Never write an empty array over the bar: that is a panel with nothing on
+  # it, and it is not what a failed xfconf read should turn into.
+  if [ ${#args[@]} -eq 0 ]; then
+    echo "refusing to write an empty plugin list to the bar" >&2
+    return 1
+  fi
+  # Running plugins write xfconf back on shutdown, so stop the panel first.
+  xfce4-panel -q 2>/dev/null || true
+  sleep 0.4
+  xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids --force-array "${args[@]}"
+  nohup xfce4-panel >/dev/null 2>&1 &
+  sleep 1
+}
+
+if [ "${1:-}" = --revert ]; then
+  echo "==> taking plugin-$PLUGIN off the bar"
+  if [ -n "${DISPLAY:-}" ]; then apply_ids "$(reorder remove)"; fi
+  P=$(cat "$HOME/.cache/mintbook/bt-menu.pid" 2>/dev/null || true)
+  [ -n "$P" ] && kill "$P" 2>/dev/null || true
+  rm -f "$BIN/bt-menu" "$HOME/.cache/mintbook/bt-menu.pid" "$STATE/bluetooth.conf"
+  echo "Bluetooth is back to being only a Control Center tile"
+  echo "panel-bt and its icons are left in place; the bar no longer shows them"
+  exit 0
+fi
+
+[ -n "${DISPLAY:-}" ] || { echo "DISPLAY is unset" >&2; exit 1; }
+
+echo "==> $BIN"
+install -dm755 "$BIN"
+for f in panel-bt bt-menu; do
+  rm -f "$BIN/$f"                       # it may be running; replace, don't write
+  install -m755 "$ROOT/bin/$f" "$BIN/$f"
+done
+
+echo "==> icons"
+# The generator defaults to white, which is right for a dark bar and invisible
+# on a light one. bin/appearance-mode owns this file and re-runs every panel
+# generator when the appearance changes; read it here so a fresh install on a
+# light bar does not paint white-on-white until the next appearance switch.
+FG='#ffffff'
+# shellcheck disable=SC1090
+[ -r "$STATE/system-chrome.env" ] \
+  && . "$STATE/system-chrome.env" \
+  && FG=$PANEL_FOREGROUND
+MINTBOOK_PANEL_FG="$FG" python3 "$ROOT/icons/generate-bt-genmon.py"
+
+echo "==> genmon-$PLUGIN.rc"
+install -dm755 "$PANEL_RC"
+sed "s|^Command=.*|Command=$BIN/panel-bt|" \
+  "$ROOT/config/xfce4-panel/genmon-$PLUGIN.rc" > "$PANEL_RC/genmon-$PLUGIN.rc"
+
+echo "==> panel"
+# The id bin/control-install reads back, so a later re-run of it keeps
+# Bluetooth on the bar instead of quietly retiring it again — the same
+# handshake battery.conf and updates.conf already use.
+install -dm755 "$STATE"
+printf 'PANEL_ID=%s\n' "$PLUGIN" > "$STATE/bluetooth.conf"
+xfconf-query -c xfce4-panel -p "/plugins/plugin-$PLUGIN" -n -t string -s genmon \
+  2>/dev/null || true
+apply_ids "$(reorder add)"
+
+echo
+echo "click the Bluetooth icon for the menu · Bluetooth Settings… for blueman"
+echo "undo: $(basename "$0") --revert"

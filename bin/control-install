@@ -17,7 +17,8 @@ SAVED="$STATE/panel-ids.before-control-center"
 PLUGIN=25
 
 #   1 app grid     7 separator  8 systray  10 xapp-status  19 cpu sparkline
-#  17 temperature  18 wifi      11 battery 25 control      13 clock
+#  17 temperature  21 bluetooth 18 wifi    11 battery      25 control
+#  13 clock
 #
 # CPU and temperature stay on the bar deliberately: they are readings you
 # glance at, not settings you open something to change. Everything that is a
@@ -38,13 +39,26 @@ fi
 UPDATES=()
 if [ -r "$STATE/updates.conf" ]; then
   uid=$(sed -n 's/^PANEL_ID=\([0-9]*\).*/\1/p' "$STATE/updates.conf" | head -1)
-  [ -n "$uid" ] && UPDATES=("$uid")
+  # An `if`, not `[ -n "$uid" ] && UPDATES=(…)`: a conf file with no PANEL_ID
+  # line makes that whole list return 1, and under `set -e` the install ends
+  # right here with the bar untouched and nothing said.
+  if [ -n "$uid" ]; then UPDATES=("$uid"); fi
 fi
-VISIBLE=(1 7 8 10 "${UPDATES[@]}" 19 17 18 "$BATTERY" $PLUGIN 13)
-#  21 bluetooth  22 power profile  23 night light  24 appearance
+# Bluetooth is behind the click until bin/bt-panel-install puts it back on the
+# bar, and read rather than hardcoded for the same reason the battery and the
+# update arrow are: re-running this must not quietly undo that installer.
+BLUETOOTH=()
+if [ -r "$STATE/bluetooth.conf" ]; then
+  bid=$(sed -n 's/^PANEL_ID=\([0-9]*\).*/\1/p' "$STATE/bluetooth.conf" | head -1)
+  if [ -n "$bid" ]; then BLUETOOTH=("$bid"); fi
+fi
+VISIBLE=(1 7 8 10 "${UPDATES[@]}" 19 17 "${BLUETOOTH[@]}" 18 "$BATTERY" $PLUGIN 13)
+#  21 bluetooth (unless bt-panel-install has claimed it above)
+#  22 power profile  23 night light  24 appearance
 #  12 volume — its plugin was also the XF86Audio grab, so bin/volume-key
 #  takes that over below.
-RETIRED=(21 22 23 24 12)
+RETIRED=(22 23 24 12)
+if [ ${#BLUETOOTH[@]} -eq 0 ]; then RETIRED=(21 "${RETIRED[@]}"); fi
 
 if [ "${1:-}" = --revert ]; then
   echo "==> restoring the bar"
@@ -119,7 +133,7 @@ for pair in "XF86AudioRaiseVolume:up" "XF86AudioLowerVolume:down" \
 done
 
 echo
-echo "bar: app grid · systray${UPDATES:+ · updates} · cpu · temp · wi-fi · battery · control · clock"
-echo "behind the click: ${RETIRED[*]} (bluetooth, power, night light, appearance, volume)"
+echo "bar: app grid · systray${UPDATES:+ · updates} · cpu · temp${BLUETOOTH:+ · bluetooth} · wi-fi · battery · control · clock"
+echo "behind the click: ${RETIRED[*]}"
 echo "plugins: $SHARE/plugins"
 echo "undo: $(basename "$0") --revert"

@@ -323,6 +323,36 @@ if [ -e "$HOME/.local/bin/wifi-menu" ]; then
     warn "wireless interface" "nothing in /proc/net/wireless — the menu will say so too"
   fi
 fi
+# The Bluetooth popup, only once bin/bt-panel-install has run — Bluetooth is a
+# Control Center tile without it, and bin/panel-bt falls back to opening
+# blueman-manager, so its absence is not a fault. This is the desktop half;
+# whether the radio exists at all is the DSDT check in the Bluetooth section.
+if [ -e "$HOME/.config/mintbook/bluetooth.conf" ]; then
+  check "bluetooth indicator" "bin/panel-bt" have "$HOME/.local/bin/panel-bt"
+  check "bluetooth menu" "bin/bt-menu" have "$HOME/.local/bin/bt-menu"
+  BTID=$(sed -n 's/^PANEL_ID=\([0-9]*\).*/\1/p' "$HOME/.config/mintbook/bluetooth.conf" | head -1)
+  check "bluetooth genmon rc" "genmon-${BTID:-21}.rc" \
+    have "$HOME/.config/xfce4/panel/genmon-${BTID:-21}.rc"
+  if grep -q 'bt-menu' "$HOME/.local/bin/panel-bt" 2>/dev/null; then
+    ok "bluetooth click target" "the bar icon opens the menu"
+  else
+    warn "bluetooth click target" "panel-bt is older than the menu — run bin/bt-panel-install"
+  fi
+  # Without an <img> genmon puts the script's stdout on the bar as plain text —
+  # the failure the update arrow hit before updates-none.svg existed. Both
+  # icons or neither.
+  for f in bt-on bt-off; do
+    check "bluetooth icon" "$f.svg" have "$HOME/.local/share/mintbook/bt/$f.svg"
+  done
+  # blueman-applet is the BlueZ agent. bin/bt-menu asks a device to pair and
+  # then has nothing to show a passkey with — that dialog is blueman's, and
+  # without the applet running a pairing that needs one silently never finishes.
+  if pgrep -x blueman-applet >/dev/null 2>&1; then
+    ok "pairing agent" "blueman-applet is running"
+  else
+    warn "pairing agent" "no blueman-applet — pairing from the menu has no dialog"
+  fi
+fi
 # The software-update indicator, only once it has been installed. The bar icon
 # is *supposed* to be missing when there is nothing waiting, so its absence
 # proves nothing — which is exactly why the machinery behind it gets checked
