@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Output volume, through PipeWire's default sink. Dragging to 0 does not mute
-# the sink — mute is its own state, and unmuting is what the icon click is for.
+# Output volume, through PipeWire's selected default sink.  34-audio-output
+# switches that sink (and moves existing playback), so this slider and the
+# hardware volume keys always follow the destination chosen in the panel.
+# Dragging to 0 does not mute the sink — mute is its own state, and unmuting is
+# what the icon click is for.
 case "${1:-read}" in
   set) wpctl set-mute @DEFAULT_AUDIO_SINK@ 0 >/dev/null 2>&1
        wpctl set-volume @DEFAULT_AUDIO_SINK@ "${2:-0}%" >/dev/null 2>&1
@@ -18,4 +21,5 @@ glyph = speaker
 title = Sound
 value = $pct
 subtitle = $sub
+live = 2
 EOF

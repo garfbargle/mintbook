@@ -38,7 +38,7 @@ bin/control-install --revert # put the old indicators back
 |---|---|
 | Wi-Fi, Bluetooth | `plugin-21` genmon |
 | Display brightness | nothing — there was no control for it |
-| Sound | `plugin-12`, the XFCE pulseaudio plugin |
+| Sound, output destination | `plugin-12`, the XFCE pulseaudio plugin |
 | Appearance | `plugin-24` genmon |
 | Night Light | `plugin-23` genmon |
 | Power profile | `plugin-22` genmon, and `bin/power-menu`'s popup |
@@ -161,6 +161,16 @@ function of about six lines in `bin/control-center` and a line in `GLYPHS`.
   Power tile appears to change on its own: [`bin/turbo-budget`](../bin/turbo-budget)
   moves the profile between `power-saver` and `balanced` as it grants and
   revokes bursts, and the tile shows whichever is live at that moment.
+
+### Audio outputs
+
+The **Output** segment lists available playback devices, including connected
+Bluetooth speakers. Selecting one makes it the default PipeWire/PulseAudio sink
+and moves already-playing apps to it, so it takes effect immediately rather
+than only for the next app you start. The **Sound** slider and the hardware
+volume keys then control that selected destination. The panel refreshes those
+two tiles while open, so a speaker that connects or disconnects appears or
+vanishes without reopening it.
 
 ---
 

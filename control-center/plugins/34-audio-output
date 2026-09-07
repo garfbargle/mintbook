@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# Playback destination.  The volume slider is deliberately a separate tile:
+# this chooser makes its selection the PipeWire/PulseAudio default, so both the
+# slider and the media keys then adjust the output the user just chose.
+#
+# pactl's default sink alone only affects *new* playback streams.  Move the
+# real streams as well, otherwise a browser that was already playing stays on
+# the old speakers until it is restarted.  The 4-channel EQ loopback has no
+# Pulse client (field three is "-") and must remain where it is.
+set -u
+
+list_sinks() {
+  # `pactl list short sinks` does not include a human-readable description.
+  # Keep the names as opaque IDs for `set`, but display descriptions in the
+  # panel.  C locale makes these headings stable across desktop languages.
+  LC_ALL=C pactl list sinks 2>/dev/null | awk '
+    /^[[:space:]]*Name: / { name=$2; next }
+    /^[[:space:]]*Description: / {
+      sub(/^[[:space:]]*Description: /, "")
+      if (name != "") print name "\t" $0
+    }
+  ' | while IFS=$'\t' read -r name description; do
+    # Raw is the input to the MacBook speaker EQ filter, not an output users
+    # should select.  Sending an app there bypasses the tuned speaker path.
+    [ "$name" = MacBook_Speaker_Raw ] && continue
+    printf '%s\t%s\n' "$name" "$description"
+  done
+}
+
+move_clients() {
+  local sink="$1" input
+  while read -r input; do
+    [ -n "${input:-}" ] || continue
+    pactl move-sink-input "$input" "$sink" >/dev/null 2>&1 || true
+  done < <(pactl list short sink-inputs 2>/dev/null | awk '$3 != "-" { print $1 }')
+}
+
+case "${1:-read}" in
+  set)
+    sink="${2:-}"
+    # Do not let a stale button (for a disconnected Bluetooth device) replace
+    # a valid default with an arbitrary string.
+    if list_sinks | awk -F '\t' -v wanted="$sink" '$1 == wanted { found=1 } END { exit !found }'; then
+      pactl set-default-sink "$sink" >/dev/null 2>&1 && move_clients "$sink"
+    fi
+    exit 0
+    ;;
+esac
+
+default=$(pactl get-default-sink 2>/dev/null || true)
+count=0
+options=''
+selected=''
+selected_name=''
+while IFS=$'\t' read -r name description; do
+  # A segment has room for four choices.  Keep the default in the list first
+  # so a fifth, less relevant device cannot make the active destination vanish.
+  [ "$name" = "$default" ] && continue
+  options+="$name"$'\t'"$description"$'\n'
+done < <(list_sinks)
+if [ -n "$default" ]; then
+  while IFS=$'\t' read -r name description; do
+    if [ "$name" = "$default" ]; then
+      selected="$name"
+      selected_name="$description"
+      break
+    fi
+  done < <(list_sinks)
+fi
+
+# Print the selected sink first, then the other destinations.  PipeWire has no
+# fixed cap on sinks, but this compact panel does; four is the segment widget's
+# documented maximum.
+if [ -n "$selected" ]; then
+  printf 'kind = segment\nglyph = speaker\ntitle = Output\nvalue = %s\nsubtitle = %s\nlive = 2\n' \
+    "$selected" "${selected_name:-$selected}"
+  printf 'option = %s|%s\n' "$selected" "${selected_name:-$selected}"
+else
+  printf 'kind = segment\nglyph = speaker\ntitle = Output\nvalue = \nsubtitle = No playback device\nlive = 2\n'
+fi
+
+max_other=4
+[ -n "$selected" ] && max_other=3
+while IFS=$'\t' read -r name description; do
+  [ -n "$name" ] || continue
+  count=$((count + 1))
+  [ "$count" -le "$max_other" ] || break
+  printf 'option = %s|%s\n' "$name" "$description"
+done <<< "$options"

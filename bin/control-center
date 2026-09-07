@@ -433,7 +433,7 @@ class Tile(Gtk.DrawingArea):
         self.connect('motion-notify-event', self.on_motion)
         self.connect('scroll-event', self.on_scroll)
         self.connect('leave-notify-event', self.on_leave)
-        if spec.get('subtitle') and spec['kind'] in ('slider', 'meter'):
+        if spec.get('subtitle') and spec['kind'] in ('segment', 'slider', 'meter'):
             self.set_tooltip_text(spec['subtitle'])
 
     # ---- state helpers
