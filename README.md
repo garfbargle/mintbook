@@ -22,13 +22,17 @@ No Apple logo. No blur. A 52px glass bar, a dock, and Cmd+Space.
   <img src="docs/images/spotlight.jpg" alt="Spotlight" width="48%">
 </p>
 
+The bar keeps what you read — CPU, temperature, Wi-Fi, battery, the clock.
+Everything you *set* is one click away, in a Control Center that is nine small
+executables in a directory. Adding a tile is a twelve-line file.
+
 <p align="center">
-  <img src="docs/images/power-menu.jpg" alt="Power Saver, Balanced, Sustained" width="420">
+  <img src="docs/images/control-center.jpg" alt="Control Center" width="380">
 </p>
 
 Cmd+Shift+3 takes a screenshot. On battery it stays cool. Plug in, and it opens up.
 
-The wiring: [desktop](docs/desktop.md) · [display](docs/display.md)
+The wiring: [desktop](docs/desktop.md) · [control center](docs/control-center.md) · [display](docs/display.md)
 
 ## Hardware
 

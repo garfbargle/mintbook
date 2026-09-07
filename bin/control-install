@@ -23,10 +23,10 @@ PLUGIN=25
 # glance at, not settings you open something to change. Everything that is a
 # switch went behind the click.
 VISIBLE=(1 7 8 10 19 17 18 11 $PLUGIN 13)
-#  21 bluetooth  23 night light  24 appearance
+#  21 bluetooth  22 power profile  23 night light  24 appearance
 #  12 volume — its plugin was also the XF86Audio grab, so bin/volume-key
 #  takes that over below.
-RETIRED=(21 23 24 12)
+RETIRED=(21 22 23 24 12)
 
 if [ "${1:-}" = --revert ]; then
   echo "==> restoring the bar"
@@ -70,17 +70,6 @@ echo "==> genmon-$PLUGIN.rc"
 install -dm755 "$PANEL_RC"
 install -m644 "$ROOT/config/xfce4-panel/genmon-$PLUGIN.rc" "$PANEL_RC/genmon-$PLUGIN.rc"
 
-echo "==> volume keys"
-# The pulseaudio plugin held these; it is not on the bar any more.
-for pair in "XF86AudioRaiseVolume:up" "XF86AudioLowerVolume:down" \
-            "XF86AudioMute:mute" "XF86AudioMicMute:mic"; do
-  key=${pair%%:*}; arg=${pair##*:}
-  xfconf-query -c xfce4-keyboard-shortcuts -p "/commands/custom/$key" \
-    -n -t string -s "$BIN/volume-key $arg" 2>/dev/null \
-    || xfconf-query -c xfce4-keyboard-shortcuts -p "/commands/custom/$key" \
-         -t string -s "$BIN/volume-key $arg"
-done
-
 echo "==> panel"
 install -dm755 "$STATE"
 [ -s "$SAVED" ] || xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids \
@@ -97,8 +86,22 @@ xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids --force-array "${args[
 nohup xfce4-panel >/dev/null 2>&1 &
 sleep 1
 
+echo "==> volume keys"
+# After the panel restart, not before: the XFCE pulseaudio plugin held the
+# XF86Audio grabs, and xfsettingsd only tries to take a key when the property
+# changes. Bind these while the plugin is still up and the grab quietly fails —
+# the shortcut is in xfconf, it just never fires. Remove first, so the value is
+# always a change even on a re-run.
+for pair in "XF86AudioRaiseVolume:up" "XF86AudioLowerVolume:down" \
+            "XF86AudioMute:mute" "XF86AudioMicMute:mic"; do
+  key=${pair%%:*}; arg=${pair##*:}
+  xfconf-query -c xfce4-keyboard-shortcuts -p "/commands/custom/$key" -r 2>/dev/null || true
+  xfconf-query -c xfce4-keyboard-shortcuts -p "/commands/custom/$key" \
+    -n -t string -s "$BIN/volume-key $arg"
+done
+
 echo
 echo "bar: whisker · systray · updates · cpu · temp · wi-fi · battery · control · clock"
-echo "behind the click: ${RETIRED[*]} (bluetooth, night light, appearance, volume)"
+echo "behind the click: ${RETIRED[*]} (bluetooth, power, night light, appearance, volume)"
 echo "plugins: $SHARE/plugins"
 echo "undo: $(basename "$0") --revert"

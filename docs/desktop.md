@@ -66,11 +66,13 @@ XFCE panel stores normalized RGBA doubles.
 
 ### System-chrome appearance mode
 
-The sun/moon indicator beside Night Light is a separate `genmon-24` plugin.
-Click it for **Auto**, **Light**, or **Dark**. Auto is the default and checks
-Redshift's period once a minute, so the panel changes at the same sunset/sunrise
-boundary as Night Light without starting another daemon or altering Night Light's
-own mode.
+Appearance is the `40-appearance` tile in the Control Center: **Auto**,
+**Light**, or **Dark**. Auto is the default and checks Redshift's period once a
+minute, so the panel changes at the same sunset/sunrise boundary as Night Light
+without starting another daemon or altering Night Light's own mode. That
+once-a-minute check is now `bin/panel-control`'s only job — the Control Center
+indicator inherited it from the retired `genmon-24` sun/moon icon, which is why
+a bar icon that never changes still has an update period at all.
 
 [`bin/appearance-mode`](../bin/appearance-mode) applies the surface, panel-only
 foreground CSS, and regenerated Mintbook status icons together. It writes the
@@ -102,21 +104,24 @@ Plugin order (`plugin-ids`), left to right:
 | 19 | genmon | CPU sparkline |
 | 17 | genmon | CPU temperature |
 | 18 | genmon | Wi-Fi |
-| 21 | genmon | Bluetooth |
-| 23 | genmon | night light |
-| 12 | pulseaudio | volume |
-| 22 | genmon | power profile (Power Saver / Balanced / Sustained) |
 | 11 | power-manager-plugin | battery |
+| 25 | genmon | **Control Center** — see [control-center.md](control-center.md) |
 | 13 | clock | ` %a %-d %b  %H:%M  `, Inter 11, `digital-layout=3` (time only) |
 
-Right-to-left: **date/time, battery, power profile, volume, night light,
-bluetooth, wifi, temperature, CPU, then the rest.** This follows the macOS
-convention — the clock is furthest right with the battery beside it, then the
-power mode, then volume, then night light with Wi-Fi / Bluetooth. Informational
-items (temp, CPU) sit inboard of the system status group, and anything
-unrecognised accumulates right-to-left from the far left of the group.
-mintUpdate's own icon appears in the xapp group (plugin-10) only when there
-are updates.
+Right-to-left: **date/time, Control Center, battery, wifi, temperature, CPU,
+then the rest.** This follows the macOS convention — the clock is furthest
+right, then Control Center, then battery and Wi-Fi. Informational items (temp,
+CPU) sit inboard of the system status group, and anything unrecognised
+accumulates right-to-left from the far left of the group. mintUpdate's own icon
+appears in the xapp group (plugin-10) only when there are updates.
+
+**Bluetooth (21), power profile (22), night light (23), appearance (24) and
+volume (12) are no longer on the bar.** They are tiles in the Control Center,
+which is one icon and one click instead of five indicators polling all day.
+The rule the split follows is that a reading stays on the bar and a switch
+moves behind the click; the sections below describe what those indicators did
+and still apply to the tiles, which use the same backends. `bin/control-install
+--revert` puts every one of them back.
 
 **Reordering panel items:** XFCE has no macOS-style hold-a-key-and-drag. The
 equivalents are right-click any item → **Move** (then drag it along the bar), or
@@ -233,6 +238,9 @@ work normally — verified `connected:full` with working DNS after the change.
 
 ### Bluetooth indicator (`plugin-21`, genmon)
 
+> **Off the bar since 2026-09-06** — this is the `20-bluetooth` Control
+> Center tile now. Everything below still describes how it reads BlueZ.
+
 Runs [`bin/panel-bt`](../bin/panel-bt), icons from
 [`icons/generate-bt-genmon.py`](../icons/generate-bt-genmon.py).
 
@@ -254,6 +262,9 @@ blueman-applet stays running (pairing / secret agent). Only its tray icon is hid
 via `/plugins/plugin-8/hidden-items = blueman`.
 
 ### Power profile (`plugin-22`, genmon)
+
+> **Off the bar since 2026-09-06** — this is the `60-power` tile now, which
+> writes the same request file. `bin/power-menu` still works; nothing calls it.
 
 xfce4-power-manager **4.18 has no power-profiles-daemon UI** — the settings dialog
 is lid / sleep / brightness, and the battery plugin is charge only. The switcher
@@ -288,6 +299,9 @@ period only governs how fast the icon notices a charger, and stretching it
 would buy a few seconds of CPU an hour in exchange for a laggy icon.
 
 ### Night light (`plugin-23`, genmon)
+
+> **Off the bar since 2026-09-06** — this is the `50-night` tile now, which
+> calls the same `night-apply`. `bin/night-menu` still works; nothing calls it.
 
 Sunset-to-sunrise colour temperature. **redshift** writes the RandR LUT;
 **redshift-gtk** was tried first and rejected (XApp lightbulb at ~20px in
@@ -327,6 +341,13 @@ Do **not** launch the Redshift app from the menu — that is redshift-gtk, and
 its tray would come back next to mintUpdate.
 
 ### What the bar costs (2026-09-04)
+
+> Superseded in part on 2026-09-06: Bluetooth, power, night light and
+> appearance came off the bar entirely, which is about 1.7% of a core back
+> on top of what this session bought. The measurements below are still the
+> reason those rewrites happened, and `panel-cpu` — still on the bar — is
+> still where most of the remaining cost is. See
+> [control-center.md](control-center.md#what-it-costs).
 
 The status bar was the single most expensive piece of software running on this
 machine. Summed from `cutime` on the six genmon wrappers, it had spent **800
