@@ -85,8 +85,8 @@ a naive split does not.
 | `COLOR` | `traffic` | `traffic` or `mono` — `mono` is the macOS look, panel ink only |
 | `LOW` | `15` | below this the fill is red |
 | `MID` | `40` | below this it is amber |
-| `SAMPLE_EVERY` | `12` | ticks between `/proc` walks — 12 is one a minute |
-| `HISTORY_DAYS` | `7` | how much of the log to keep |
+| `SAMPLE_EVERY` | `12` | ticks between `/proc` walks — 12 is one a minute. Anything under 1 falls back to 12, and `bin/doctor` warns when the log's real spacing disagrees with it |
+| `HISTORY_DAYS` | `7` | how much of the log to keep, **by date** — not by line count, so it means the same thing at any `SAMPLE_EVERY` |
 | `PANEL_ID` | `26` | so the menu can tell genmon to repaint |
 
 ## The menu (`bin/battery-menu`)
@@ -184,7 +184,9 @@ battery. Firefox's dozen content processes arrive as one `firefox-bin` row
 rather than twelve rows of `Isolated Web Co`. Anything under 2 jiffies in the
 interval (0.03% of a core) is dropped; there are a hundred of those.
 
-Trimmed to `HISTORY_DAYS` once an hour. A real line, from this machine:
+Trimmed once an hour to everything newer than `now - HISTORY_DAYS`. The first
+line's timestamp decides whether to rewrite at all, so an ordinary hour costs
+one `read` and no forks. A real line, from this machine:
 
 ```
 1788750799 66 D 12619 60 23127 13168 xfwm4:403 xfce4-panel:120 pipewire:181
@@ -245,11 +247,16 @@ running, which doctor's other checks will have said more directly.
   continuously instead of ~0.25%. 1 752 of the log's 1 774 lines are at that
   rate. **Put back to `12` 2026-09-07.**
 
-  Two things did not catch it and should. `bin/doctor` checks that samples are
-  *recent* but never that they are *spaced right*. And `HISTORY_DAYS` trims by
-  line count on the assumption of one line a minute, so at `SAMPLE_EVERY=2`
-  "7 days" silently means 28 hours — the trim had not fired yet here, so
-  nothing was actually lost, but it would have been.
+  Two things did not catch it, and **both are fixed as of 2026-09-07**.
+  `bin/doctor` now checks the median gap of the last 40 samples against
+  `SAMPLE_EVERY x 5 s` and warns when they disagree — every check it had before
+  only ever asked how *old* the last line was, and stayed green throughout.
+  And the trim is by **date** now, not by line count: it used to keep
+  `HISTORY_DAYS x 24 x 60` lines, which is `HISTORY_DAYS` days only at exactly
+  one line a minute, so at `SAMPLE_EVERY=2` "7 days" silently meant 28 hours.
+  The trim had not fired here, so nothing was actually lost — but it would have
+  been. `SAMPLE_EVERY` also has a floor now; a hand-edited `0` was a division by
+  zero on every tick.
 - **The `LIGHT`/`DARK` glass palettes are copied into four files** —
   `bin/control-center`, `bin/battery-menu`, `bin/battery-history` and
   `bin/wifi-menu` — with small drifts between them that are accidents rather

@@ -38,6 +38,9 @@ BAT=BAT0
 AC=ADP1
 # shellcheck disable=SC1090
 [ -r "$CONF" ] && . "$CONF"
+# A 0 here is a division by zero on the tick below, and a negative one never
+# samples. The config is hand-edited; this is the one value that can break it.
+[ "$SAMPLE_EVERY" -ge 1 ] 2>/dev/null || SAMPLE_EVERY=12
 
 B=/sys/class/power_supply/$BAT
 
@@ -345,11 +348,19 @@ printf '%s %s %s %s %s %s %s%s\n' \
 printf '%s %s %s\n' "$sig" "$tick" "$stamp" > "$STATE.tmp"
 mv -f "$STATE.tmp" "$STATE"
 
-# Trim once an hour. tail is the only fork on this path.
+# Trim once an hour, by date. It used to keep HISTORY_DAYS x 24 x 60 *lines*,
+# which is HISTORY_DAYS days only while there is exactly one line a minute. At
+# SAMPLE_EVERY=2 the same count is 28 hours, and nothing anywhere said so — see
+# docs/battery.md. A cutoff makes the setting mean what it says at any rate.
+#
+# The first line's timestamp decides whether to rewrite at all, so the ordinary
+# hour costs one `read` and no forks.
 if [ $(( tick % (SAMPLE_EVERY * 60) )) -eq 0 ]; then
-  keep=$(( HISTORY_DAYS * 24 * 60 ))
-  if [ "$(wc -l < "$LOG" 2>/dev/null || echo 0)" -gt "$keep" ]; then
-    tail -n "$keep" "$LOG" > "$LOG.tmp" && mv -f "$LOG.tmp" "$LOG"
+  cutoff=$(( stamp - HISTORY_DAYS * 86400 ))
+  first=0
+  read -r first _ < "$LOG" 2>/dev/null || true
+  if [ "${first:-0}" -lt "$cutoff" ] 2>/dev/null; then
+    awk -v c="$cutoff" '$1+0 >= c' "$LOG" > "$LOG.tmp" && mv -f "$LOG.tmp" "$LOG"
   fi
 fi
 exit 0

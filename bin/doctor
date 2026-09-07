@@ -233,10 +233,24 @@ if [ "$WA" = "0,$PSZ,2304,$((1440 - PSZ))" ]; then
 else
   bad "_NET_WORKAREA" "$WA — expected 0,$PSZ,2304,$((1440 - PSZ)); windows will open under the bar"
 fi
-for p in 17 18 19 21 22 23; do
+# The genmon plugins actually on the bar, asked of the bar. This used to be the
+# literal list "17 18 19 21 22 23", written down once and left there: 21, 22 and
+# 23 have not been on the bar since the Control Center took Bluetooth, power and
+# night light, so it was checking for .rc files belonging to nothing and going
+# green while describing a bar that no longer existed.
+GENMON=''
+for p in $(xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids 2>/dev/null | grep -oE '^[0-9]+$'); do
+  [ "$(xfconf-query -c xfce4-panel -p "/plugins/plugin-$p" 2>/dev/null)" = genmon ] || continue
+  GENMON="${GENMON} $p"
   [ -e "$HOME/.config/xfce4/panel/genmon-$p.rc" ] || MISSING="${MISSING-} $p"
 done
-[ -z "${MISSING-}" ] && ok "genmon panel plugins" "17 18 19 21 22 23" || warn "genmon panel plugins" "missing:${MISSING}"
+if [ -z "${GENMON}" ]; then
+  warn "genmon panel plugins" "none on the bar — is xfce4-panel running?"
+elif [ -z "${MISSING-}" ]; then
+  ok "genmon panel plugins" "on the bar:${GENMON}"
+else
+  bad "genmon panel plugins" "on the bar:${GENMON} — no .rc for:${MISSING}"
+fi
 
 # The battery indicator, only once it has been installed — this machine is
 # fine with the XFCE plugin, so its absence is not a fault. See docs/battery.md.
@@ -257,6 +271,23 @@ if [ -e "$HOME/.config/mintbook/battery.conf" ]; then
     fi
   else
     warn "battery samples" "no samples yet — it fills at one a minute while the panel runs"
+  fi
+
+  # Recent is not the same as correctly spaced. A SAMPLE_EVERY left at 2 ran
+  # the /proc walk six times too often for eleven hours and every check above
+  # stayed green throughout, because they all only ever asked how old the last
+  # line was. See docs/battery.md.
+  BSE=$(sed -n 's/^SAMPLE_EVERY=\([0-9]*\).*/\1/p' "$HOME/.config/mintbook/battery.conf" | head -1)
+  BSE=${BSE:-12}
+  BWANT=$(( BSE * 5 ))          # genmon ticks every 5 s; the rc sets that
+  BGAP=$(tail -40 "$BLOG" 2>/dev/null | awk '$5+0 > 0 {print $5+0}' | sort -n \
+         | awk '{a[NR]=$1} END{if (NR) print a[int((NR+1)/2)]}')
+  if [ -z "$BGAP" ]; then
+    warn "battery sample rate" "no spaced samples yet — needs two in a row"
+  elif [ "$BGAP" -ge $(( BWANT * 6 / 10 )) ] && [ "$BGAP" -le $(( BWANT * 16 / 10 )) ]; then
+    ok "battery sample rate" "${BGAP}s apart — SAMPLE_EVERY=$BSE wants ${BWANT}s"
+  else
+    warn "battery sample rate" "${BGAP}s apart, but SAMPLE_EVERY=$BSE wants ${BWANT}s"
   fi
 fi
 # The Wi-Fi popup, only once it has been installed — bin/panel-wifi falls back
