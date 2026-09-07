@@ -144,9 +144,9 @@ rr() {
 
 if [ "${osig:-}" != "$sig" ] || [ ! -s "$SVG" ]; then
   # Half-pixel units, canvas 68 tall (34 px, the same box wifi and Bluetooth
-  # use). The body is 20 px tall — the proportion a battery has — and the
-  # outline is the panel's own ink at .9, not a grey, so it sits with the rest
-  # of the bar rather than behind it.
+  # use). The body is 42x22 px — a little under 2:1, which is the proportion
+  # macOS's is — and the outline is the panel's own ink at .9, not a grey, so
+  # it sits with the rest of the bar rather than behind it.
   #
   # With the percentage on, the body grows to hold the number *inside* it
   # rather than standing next to it, the number is drawn in the panel's ink,
@@ -155,29 +155,29 @@ if [ "${osig:-}" != "$sig" ] || [ ! -s "$SVG" ]; then
   # in docs/battery.md: it is prettier at 100% and unreadable at 30, where half
   # a number sits on the fill and half on the glass.
   bx=14 bolt='' marks='' maskattr='' opacity=1
-  if [ "$SHOW_PERCENT" = 1 ]; then bw=106 opacity=.66; else bw=74; fi
+  if [ "$SHOW_PERCENT" = 1 ]; then bw=92 opacity=.66; else bw=84; fi
   [ "$st" = C ] && [ "$SHOW_PERCENT" = 1 ] && bx=30   # room for a bolt outside
   iw=$(( bw - 14 ))                     # the well inside the outline
   w=$(( bx + bw + 9 + 14 ))             # + cap + right padding
-  fw=$(( (pct * iw + 50) / 100 )); [ "$fw" -lt 7 ] && fw=7
+  fw=$(( (pct * iw + 50) / 100 )); [ "$fw" -lt 8 ] && fw=8
   ix=$(( bx + 7 ))
-  body="$(rr "$bx" 14 "$bw" 40 13) $(rr "$(( bx + 4 ))" 18 "$(( bw - 8 ))" 32 9)"
-  cap=$(rr "$(( bx + bw + 3 ))" 25 6 18 3)
+  body="$(rr "$bx" 12 "$bw" 44 14) $(rr "$(( bx + 4 ))" 16 "$(( bw - 8 ))" 36 10)"
+  cap=$(rr "$(( bx + bw + 3 ))" 24 6 20 3)
 
   if [ "$SHOW_PERCENT" = 1 ]; then
-    marks=$(printf '  <text x="%s" y="43" text-anchor="middle" fill="%s" fill-opacity=".95" font-family="Inter" font-size="27" font-weight="600" style="font-feature-settings:%s">%s</text>' \
+    marks=$(printf '  <text x="%s" y="44" text-anchor="middle" fill="%s" fill-opacity=".95" font-family="Inter" font-size="29" font-weight="600" style="font-feature-settings:%s">%s</text>' \
       "$(( bx + bw / 2 ))" "$fg" "'tnum'" "$pct")
   fi
 
   if [ "$st" = C ]; then
     if [ "$SHOW_PERCENT" = 1 ]; then
       # Outside and to the left, because the inside is the number's now.
-      bolt=$(printf '  <path d="M11,20 L-1,36 L5,36 L1,48 L13,32 L7,32 Z" fill="%s"/>' "$fill")
+      bolt=$(printf '  <path d="M11,17 L-1,35 L5,35 L1,51 L13,33 L7,33 Z" fill="%s"/>' "$fill")
     else
       # Negative space over the charge and the charge's own colour past it, so
       # it is visible at 4% and at 96%. Two masks, no conditionals in the paint.
       cx=$(( bx + bw / 2 ))
-      d="M$((cx+4)),21 L$((cx-8)),36 L$((cx-1)),36 L$((cx-4)),47 L$((cx+8)),32 L$((cx+1)),32 Z"
+      d="M$((cx+5)),18 L$((cx-9)),36 L$((cx-1)),36 L$((cx-5)),50 L$((cx+9)),32 L$((cx+1)),32 Z"
       maskattr=' mask="url(#punch)"'
       bolt=$(cat <<BOLT
  <defs>
@@ -187,7 +187,7 @@ if [ "${osig:-}" != "$sig" ] || [ ! -s "$SVG" ]; then
   </mask>
   <mask id="past">
    <rect x="0" y="0" width="$w" height="68" fill="#fff"/>
-   <rect x="$ix" y="21" width="$fw" height="26" rx="8" fill="#000"/>
+   <rect x="$ix" y="19" width="$fw" height="30" rx="10" fill="#000"/>
   </mask>
  </defs>
 BOLT
@@ -204,7 +204,7 @@ $bolt
   <path d="$body" fill-rule="evenodd"/>
   <path d="$cap"/>
  </g>
- <rect x="$ix" y="21" width="$fw" height="26" rx="8" fill="$fill" fill-opacity="$opacity"$maskattr/>
+ <rect x="$ix" y="19" width="$fw" height="30" rx="10" fill="$fill" fill-opacity="$opacity"$maskattr/>
 $marks
 </svg>
 SVGDOC

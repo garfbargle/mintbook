@@ -1,0 +1,436 @@
+#!/usr/bin/env python3
+"""Fullscreen glass application grid with a first-keystroke Spotlight handoff."""
+
+import fcntl
+import math
+import os
+import signal
+import subprocess
+import sys
+
+import cairo
+import gi
+
+gi.require_version('Gtk', '3.0')
+gi.require_version('Gdk', '3.0')
+gi.require_version('Gio', '2.0')
+from gi.repository import Gdk, Gio, GLib, Gtk, Pango
+
+
+HOME = os.path.expanduser('~')
+PIDFILE = os.path.join(HOME, '.cache', 'mintbook', 'app-grid.pid')
+APPLIED = os.path.join(HOME, '.config', 'mintbook', 'appearance.applied')
+SPOTLIGHT = os.path.join(HOME, '.local', 'bin', 'spotlight')
+
+LIGHT = {
+    'top': (229, 231, 234, .91), 'bottom': (202, 205, 210, .89),
+    'edge': 'rgba(255,255,255,.68)', 'fg': '#2d3036',
+    'dim': 'rgba(45,48,54,.58)', 'tile': 'transparent',
+    'tile_hover': 'rgba(255,255,255,.24)', 'control': 'rgba(255,255,255,.48)',
+    'control_hover': 'rgba(255,255,255,.72)', 'danger': 'rgba(184,45,42,.12)',
+}
+DARK = {
+    'top': (91, 96, 105, .92), 'bottom': (54, 58, 66, .94),
+    'edge': 'rgba(255,255,255,.16)', 'fg': '#ffffff',
+    'dim': 'rgba(255,255,255,.58)', 'tile': 'transparent',
+    'tile_hover': 'rgba(255,255,255,.08)', 'control': 'rgba(255,255,255,.10)',
+    'control_hover': 'rgba(255,255,255,.19)', 'danger': 'rgba(255,105,97,.14)',
+}
+
+
+def read_mode():
+    try:
+        with open(APPLIED, encoding='utf-8') as f:
+            return f.read().strip()
+    except OSError:
+        return 'light'
+
+
+class ActionIcon(Gtk.DrawingArea):
+    """Monochrome controls that do not inherit WhiteSur's black SVG fill."""
+
+    def __init__(self, kind, color):
+        super().__init__()
+        self.kind = kind
+        self.color = Gdk.RGBA()
+        self.color.parse(color)
+        self.set_size_request(24, 24)
+        self.connect('draw', self.on_draw)
+
+    def on_draw(self, _widget, cr):
+        Gdk.cairo_set_source_rgba(cr, self.color)
+        cr.set_line_width(2)
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        cr.set_line_join(cairo.LINE_JOIN_ROUND)
+
+        if self.kind == 'close':
+            cr.move_to(7, 7)
+            cr.line_to(17, 17)
+            cr.move_to(17, 7)
+            cr.line_to(7, 17)
+        elif self.kind == 'lock':
+            cr.arc(12, 10, 5, math.pi, 2 * math.pi)
+            cr.rectangle(6, 10, 12, 10)
+        elif self.kind == 'logout':
+            cr.move_to(9, 5)
+            cr.line_to(5, 5)
+            cr.line_to(5, 19)
+            cr.line_to(9, 19)
+            cr.move_to(10, 12)
+            cr.line_to(19, 12)
+            cr.move_to(15, 8)
+            cr.line_to(19, 12)
+            cr.line_to(15, 16)
+        elif self.kind == 'restart':
+            cr.arc(12, 12, 7, .55, 5.55)
+            cr.move_to(17.2, 6.9)
+            cr.line_to(17.4, 11.5)
+            cr.line_to(13.2, 8.9)
+        elif self.kind == 'power':
+            cr.arc(12, 13, 7, -.75, 3.89)
+            cr.move_to(12, 3)
+            cr.line_to(12, 12)
+        cr.stroke()
+        return False
+
+
+class AppGrid:
+    def __init__(self):
+        self.colors = DARK if read_mode() == 'dark' else LIGHT
+        self.handing_off = False
+        self.win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
+        self.win.set_name('mintbook-app-grid')
+        self.win.set_title('Applications')
+        self.win.set_decorated(False)
+        self.win.set_skip_taskbar_hint(True)
+        self.win.set_skip_pager_hint(True)
+        self.win.set_keep_above(True)
+        self.win.set_app_paintable(True)
+        self.win.set_type_hint(Gdk.WindowTypeHint.DIALOG)
+
+        screen = Gdk.Screen.get_default()
+        visual = screen.get_rgba_visual()
+        if visual:
+            self.win.set_visual(visual)
+
+        display = Gdk.Display.get_default()
+        monitor = display.get_primary_monitor() or display.get_monitor(0)
+        self.geometry = monitor.get_workarea()
+        self.win.set_default_size(self.geometry.width, self.geometry.height)
+        self.win.move(self.geometry.x, self.geometry.y)
+        self.win.set_resizable(False)
+
+        self.win.connect('draw', self.draw_background)
+        self.win.connect('key-press-event', self.on_key)
+        self.win.connect('destroy', self.on_destroy)
+        self.install_css()
+        self.build()
+
+    def install_css(self):
+        c = self.colors
+        css = f'''
+        window#mintbook-app-grid,
+        window#mintbook-app-grid box,
+        window#mintbook-app-grid scrolledwindow,
+        window#mintbook-app-grid viewport,
+        window#mintbook-app-grid flowbox,
+        window#mintbook-app-grid flowboxchild {{
+          color: {c['fg']};
+          background-color: transparent;
+          background-image: none;
+          border: 0;
+        }}
+        window#mintbook-app-grid .topbar {{
+          padding: 22px 28px 14px;
+          border-bottom: 1px solid {c['edge']};
+        }}
+        window#mintbook-app-grid .app-title {{
+          font: 600 22px Inter;
+        }}
+        window#mintbook-app-grid .search-hint {{
+          color: {c['dim']};
+          font: 500 16px Inter;
+        }}
+        window#mintbook-app-grid button {{
+          color: {c['fg']};
+          text-shadow: none;
+          outline: none;
+        }}
+        window#mintbook-app-grid button.session-button,
+        window#mintbook-app-grid button.close-button {{
+          min-height: 42px;
+          padding: 6px 14px;
+          margin: 0 4px;
+          background-color: {c['control']};
+          background-image: none;
+          border: 1px solid {c['edge']};
+          border-radius: 12px;
+          box-shadow: inset 0 1px rgba(255,255,255,.14), 0 2px 5px rgba(0,0,0,.10);
+          font: 600 14px Inter;
+        }}
+        window#mintbook-app-grid button.close-button {{
+          min-width: 42px;
+          padding: 6px;
+          margin-right: 12px;
+        }}
+        window#mintbook-app-grid button.session-button:hover,
+        window#mintbook-app-grid button.close-button:hover {{
+          background-color: {c['control_hover']};
+        }}
+        window#mintbook-app-grid button.session-button:active,
+        window#mintbook-app-grid button.close-button:active {{
+          background-color: {c['danger']};
+          box-shadow: inset 0 2px 4px rgba(0,0,0,.16);
+        }}
+        window#mintbook-app-grid button.app-tile {{
+          min-width: 132px;
+          min-height: 122px;
+          padding: 9px 4px;
+          margin: 0;
+          background-color: {c['tile']};
+          background-image: none;
+          border: 0;
+          border-radius: 16px;
+          box-shadow: none;
+          font: 500 15px Inter;
+        }}
+        window#mintbook-app-grid button.app-tile:hover,
+        window#mintbook-app-grid button.app-tile:focus {{
+          background-color: {c['tile_hover']};
+          box-shadow: none;
+        }}
+        window#mintbook-app-grid button.app-tile:active {{
+          background-color: {c['control_hover']};
+        }}
+        window#mintbook-app-grid scrollbar slider {{
+          min-width: 7px;
+          min-height: 36px;
+          background-color: {c['dim']};
+          border: 0;
+          border-radius: 999px;
+        }}
+        '''
+        provider = Gtk.CssProvider()
+        provider.load_from_data(css.encode())
+        Gtk.StyleContext.add_provider_for_screen(
+            Gdk.Screen.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+    def build(self):
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.win.add(root)
+
+        topbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        topbar.get_style_context().add_class('topbar')
+        root.pack_start(topbar, False, False, 0)
+
+        close = self.icon_button('close', '', 'Close applications')
+        close.get_style_context().add_class('close-button')
+        close.connect('clicked', lambda *_: self.win.destroy())
+        topbar.pack_start(close, False, False, 0)
+
+        actions = (
+            ('lock', 'Lock', ['xflock4'], False),
+            ('logout', 'Log Out', ['xfce4-session-logout', '--logout'], True),
+            ('restart', 'Restart', ['xfce4-session-logout', '--reboot'], True),
+            ('power', 'Shut Down', ['xfce4-session-logout', '--halt'], True),
+        )
+        for icon, label, command, confirm in actions:
+            button = self.icon_button(icon, label, label)
+            button.get_style_context().add_class('session-button')
+            button.connect('clicked', self.session_action, label, command, confirm)
+            topbar.pack_start(button, False, False, 0)
+
+        title = Gtk.Label(label='Applications')
+        title.get_style_context().add_class('app-title')
+        title.set_margin_start(22)
+        topbar.pack_start(title, False, False, 0)
+
+        hint = Gtk.Label(label='Just start typing  ·  Spotlight search')
+        hint.get_style_context().add_class('search-hint')
+        topbar.pack_end(hint, False, False, 8)
+
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_overlay_scrolling(True)
+        scroll.set_margin_start(24)
+        scroll.set_margin_end(24)
+        scroll.set_margin_top(12)
+        scroll.set_margin_bottom(14)
+        root.pack_start(scroll, True, True, 0)
+
+        flow = Gtk.FlowBox()
+        flow.set_homogeneous(True)
+        flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        flow.set_row_spacing(0)
+        flow.set_column_spacing(0)
+        flow.set_min_children_per_line(8)
+        flow.set_max_children_per_line(max(8, min(12, self.geometry.width // 175)))
+        scroll.add(flow)
+
+        for app in self.applications():
+            flow.add(self.app_button(app))
+
+        self.win.show_all()
+        self.win.present()
+        self.win.grab_focus()
+
+    @staticmethod
+    def applications():
+        apps = [app for app in Gio.AppInfo.get_all()
+                if app.should_show() and app.get_id() != 'mintbook-app-grid.desktop']
+        unique = {}
+        for app in apps:
+            key = app.get_id() or app.get_executable() or app.get_display_name()
+            unique.setdefault(key, app)
+        return sorted(unique.values(), key=lambda app: app.get_display_name().casefold())
+
+    def app_button(self, app):
+        button = Gtk.Button()
+        button.get_style_context().add_class('app-tile')
+        button.set_relief(Gtk.ReliefStyle.NONE)
+        button.set_tooltip_text(app.get_description() or app.get_display_name())
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.set_valign(Gtk.Align.CENTER)
+        icon = app.get_icon()
+        image = Gtk.Image.new_from_gicon(icon, Gtk.IconSize.DIALOG) if icon else Gtk.Image()
+        image.set_pixel_size(96)
+        box.pack_start(image, False, False, 0)
+
+        label = Gtk.Label(label=app.get_display_name())
+        label.set_ellipsize(Pango.EllipsizeMode.END)
+        label.set_max_width_chars(20)
+        label.set_justify(Gtk.Justification.CENTER)
+        box.pack_start(label, False, False, 0)
+        button.add(box)
+        button.connect('clicked', self.launch_app, app)
+        return button
+
+    def icon_button(self, icon_name, label, tooltip):
+        button = Gtk.Button()
+        button.set_relief(Gtk.ReliefStyle.NONE)
+        button.set_tooltip_text(tooltip)
+        image = ActionIcon(icon_name, self.colors['fg'])
+        if label:
+            box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            box.pack_start(image, False, False, 0)
+            box.pack_start(Gtk.Label(label=label), False, False, 0)
+            button.add(box)
+        else:
+            button.add(image)
+        return button
+
+    def draw_background(self, widget, cr):
+        width = widget.get_allocated_width()
+        height = widget.get_allocated_height()
+        top, bottom = self.colors['top'], self.colors['bottom']
+        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.set_source_rgba(0, 0, 0, 0)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_OVER)
+        gradient = cairo.LinearGradient(0, 0, 0, height)
+        gradient.add_color_stop_rgba(0, top[0] / 255, top[1] / 255, top[2] / 255, top[3])
+        gradient.add_color_stop_rgba(1, bottom[0] / 255, bottom[1] / 255,
+                                     bottom[2] / 255, bottom[3])
+        cr.set_source(gradient)
+        cr.rectangle(0, 0, width, height)
+        cr.fill()
+        cr.set_source_rgba(1, 1, 1, .12)
+        cr.rectangle(0, 0, width, 1)
+        cr.fill()
+        return False
+
+    def on_key(self, _widget, event):
+        if event.keyval == Gdk.KEY_Escape or event.keyval in (Gdk.KEY_Super_L, Gdk.KEY_Super_R):
+            self.win.destroy()
+            return True
+
+        blocked = (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.MOD1_MASK |
+                   Gdk.ModifierType.SUPER_MASK)
+        codepoint = Gdk.keyval_to_unicode(event.keyval)
+        if codepoint and not (event.state & blocked):
+            char = chr(codepoint)
+            if char.isprintable() and not char.isspace():
+                self.handoff_to_spotlight(char)
+                return True
+        return False
+
+    def handoff_to_spotlight(self, text):
+        if self.handing_off:
+            return
+        self.handing_off = True
+        self.win.hide()
+        subprocess.Popen([SPOTLIGHT, '--filter', text], start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        GLib.timeout_add(80, self.win.destroy)
+
+    def launch_app(self, _button, app):
+        context = Gdk.Display.get_default().get_app_launch_context()
+        try:
+            app.launch([], context)
+        except GLib.Error as error:
+            print(f'app-grid: {error.message}', file=sys.stderr)
+            return
+        self.win.destroy()
+
+    def session_action(self, _button, label, command, confirm):
+        if confirm:
+            dialog = Gtk.MessageDialog(
+                transient_for=self.win,
+                modal=True,
+                destroy_with_parent=True,
+                message_type=Gtk.MessageType.QUESTION,
+                buttons=Gtk.ButtonsType.NONE,
+                text=f'{label}?')
+            dialog.format_secondary_text('Open applications will be closed.')
+            dialog.add_button('Cancel', Gtk.ResponseType.CANCEL)
+            action = dialog.add_button(label, Gtk.ResponseType.OK)
+            action.get_style_context().add_class('destructive-action')
+            response = dialog.run()
+            dialog.destroy()
+            if response != Gtk.ResponseType.OK:
+                return
+        self.win.hide()
+        subprocess.Popen(command, start_new_session=True, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
+        self.win.destroy()
+
+    @staticmethod
+    def on_destroy(*_args):
+        Gtk.main_quit()
+
+
+def single_instance():
+    os.makedirs(os.path.dirname(PIDFILE), exist_ok=True)
+    lock = open(PIDFILE, 'a+', encoding='utf-8')
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock.seek(0)
+        try:
+            os.kill(int(lock.read().strip()), signal.SIGTERM)
+        except (OSError, ValueError):
+            pass
+        raise SystemExit(0)
+    lock.seek(0)
+    lock.truncate()
+    lock.write(str(os.getpid()))
+    lock.flush()
+    return lock
+
+
+def main():
+    lock = single_instance()
+    Gdk.set_program_class('mintbook-app-grid')
+    grid = AppGrid()
+    signal.signal(signal.SIGTERM, lambda *_: GLib.idle_add(grid.win.destroy))
+    Gtk.main()
+    lock.close()
+    try:
+        os.unlink(PIDFILE)
+    except OSError:
+        pass
+
+
+if __name__ == '__main__':
+    main()

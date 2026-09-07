@@ -12,7 +12,7 @@
 /panels/panel-1/position                      p=6;x=0;y=0
 /panels/panel-1/position-locked               true
 /panels/panel-1/size                          52
-/plugins/plugin-1                             whiskermenu
+/plugins/plugin-1                             launcher
 /plugins/plugin-10                            xapp-status-plugin
 /plugins/plugin-10/color-icon-size            32
 /plugins/plugin-10/symbolic-icon-size         32
@@ -32,17 +32,7 @@
 /plugins/plugin-17                            genmon
 /plugins/plugin-18                            genmon
 /plugins/plugin-19                            genmon
-/plugins/plugin-1/button-icon                 view-app-grid-symbolic
-/plugins/plugin-1/button-single-row           true
-/plugins/plugin-1/button-title                
-/plugins/plugin-1/favorites                   <<UNSUPPORTED>>
-/plugins/plugin-1/launcher-show-description   false
-/plugins/plugin-1/menu-height                 600
-/plugins/plugin-1/menu-width                  500
-/plugins/plugin-1/position-search-alternate   true
-/plugins/plugin-1/recent                      <<UNSUPPORTED>>
-/plugins/plugin-1/show-button-icon            true
-/plugins/plugin-1/show-button-title           false
+/plugins/plugin-1/items                       <<UNSUPPORTED>>
 /plugins/plugin-2                             showdesktop
 /plugins/plugin-21                            genmon
 /plugins/plugin-3                             launcher

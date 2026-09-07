@@ -1,7 +1,18 @@
 #!/usr/bin/env bash
-# Toggle a Spotlight-style rofi launcher
-if pgrep -x rofi > /dev/null; then
+# Toggle a Spotlight-style rofi launcher. --filter seeds the query when the
+# fullscreen app grid hands over its first printable keystroke.
+set -euo pipefail
+
+theme="$HOME/.config/rofi/spotlight.rasi"
+if [ "${1:-}" = --filter ]; then
+    filter=${2:-}
+    pkill -x rofi 2>/dev/null || true
+    exec rofi -show drun -theme "$theme" -filter "$filter"
+elif [ "$#" -ne 0 ]; then
+    echo "usage: $(basename "$0") [--filter text]" >&2
+    exit 2
+elif pgrep -x rofi > /dev/null; then
     pkill -x rofi
 else
-    exec rofi -show drun -theme "$HOME/.config/rofi/spotlight.rasi"
+    exec rofi -show drun -theme "$theme"
 fi

@@ -16,7 +16,7 @@ STATE="$HOME/.config/mintbook"
 SAVED="$STATE/panel-ids.before-control-center"
 PLUGIN=25
 
-#   1 whiskermenu  7 separator  8 systray  10 xapp-status  19 cpu sparkline
+#   1 app grid     7 separator  8 systray  10 xapp-status  19 cpu sparkline
 #  17 temperature  18 wifi      11 battery 25 control      13 clock
 #
 # CPU and temperature stay on the bar deliberately: they are readings you
@@ -110,7 +110,7 @@ for pair in "XF86AudioRaiseVolume:up" "XF86AudioLowerVolume:down" \
 done
 
 echo
-echo "bar: whisker · systray · updates · cpu · temp · wi-fi · battery · control · clock"
+echo "bar: app grid · systray · updates · cpu · temp · wi-fi · battery · control · clock"
 echo "behind the click: ${RETIRED[*]} (bluetooth, power, night light, appearance, volume)"
 echo "plugins: $SHARE/plugins"
 echo "undo: $(basename "$0") --revert"

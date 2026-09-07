@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Install the fullscreen app grid and replace panel plugin 1 (Whisker) with a
+# single-entry launcher. No root. Super_L stays inert so it cannot collide with
+# Super+Space. --revert puts Whisker back.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+BIN="$HOME/.local/bin"
+APPS="$HOME/.local/share/applications"
+DESKTOP=mintbook-app-grid.desktop
+
+[ -n "${DISPLAY:-}" ] || { echo "DISPLAY is unset" >&2; exit 1; }
+
+xfce4-panel -q 2>/dev/null || true
+sleep 0.4
+
+if [ "${1:-}" = --revert ]; then
+  xfconf-query -c xfce4-panel -p /plugins/plugin-1 -r -R 2>/dev/null || true
+  xfconf-query -c xfce4-panel -p /plugins/plugin-1 -n -t string -s whiskermenu
+  xfconf-query -c xfce4-panel -p /plugins/plugin-1/button-icon -n -t string -s view-app-grid-symbolic
+  xfconf-query -c xfce4-panel -p /plugins/plugin-1/button-single-row -n -t bool -s true
+  xfconf-query -c xfce4-panel -p /plugins/plugin-1/button-title -n -t string -s ''
+  xfconf-query -c xfce4-panel -p /plugins/plugin-1/show-button-icon -n -t bool -s true
+  xfconf-query -c xfce4-panel -p /plugins/plugin-1/show-button-title -n -t bool -s false
+  xfconf-query -c xfce4-keyboard-shortcuts -p /commands/custom/Super_L -s /bin/true
+  nohup xfce4-panel >/dev/null 2>&1 &
+  echo "restored Whisker menu"
+  exit 0
+fi
+
+install -dm755 "$BIN" "$APPS"
+install -m755 "$ROOT/bin/app-grid" "$BIN/app-grid"
+install -m755 "$ROOT/bin/spotlight" "$BIN/spotlight"
+install -m644 "$ROOT/config/applications/$DESKTOP" "$APPS/$DESKTOP"
+desktop-file-validate "$APPS/$DESKTOP"
+
+xfconf-query -c xfce4-panel -p /plugins/plugin-1 -r -R 2>/dev/null || true
+xfconf-query -c xfce4-panel -p /plugins/plugin-1 -n -t string -s launcher
+xfconf-query -c xfce4-panel -p /plugins/plugin-1/items -n --force-array \
+  -t string -s "$DESKTOP"
+xfconf-query -c xfce4-keyboard-shortcuts -p /commands/custom/Super_L -s /bin/true
+
+nohup xfce4-panel >/dev/null 2>&1 &
+sleep 1
+echo "app grid installed: panel button"
+echo "Spotlight remains: Super+Space"
+echo "undo: $(basename "$0") --revert"

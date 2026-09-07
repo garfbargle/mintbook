@@ -121,7 +121,7 @@ Plugin order (`plugin-ids`), left to right:
 
 | id | plugin | notes |
 |---|---|---|
-| 1 | whiskermenu | `button-icon=view-app-grid-symbolic`, no title |
+| 1 | launcher | 3×3 applications button → fullscreen app grid |
 | 7 | separator | `expand=true` — pushes everything right |
 | 8 | systray | "the rest" — Claude; blueman is hidden here (see Bluetooth below) |
 | 10 | xapp-status-plugin | mintUpdate, only when updates are available |
@@ -152,6 +152,27 @@ equivalents are right-click any item → **Move** (then drag it along the bar), 
 right-click → Panel → Panel Preferences → **Items** tab, which is a drag-to-reorder
 list. Anything in `plugin-ids` can also just be reordered in xfconf, which is what
 was done here.
+
+### Applications grid (`plugin-1`, launcher)
+
+The 3×3 button launches [`bin/app-grid`](../bin/app-grid), an undecorated GTK
+cover sized to the monitor work area: `y=52`, so the system bar remains visible
+and usable. It reads the desktop application index through Gio and shows every
+visible app in a dense, borderless 12-column grid with 96px icons. The
+background is the same cheap glass recipe as the Control Center: an ARGB window
+with a static translucent gradient and no backdrop blur pass.
+
+The top-left controls stay close to the panel button: **Lock**, **Log Out**,
+**Restart**, and **Shut Down**. Their line icons are drawn in the active
+light/dark foreground instead of using WhiteSur's fixed black symbolic SVGs.
+Session-ending actions use a confirmation dialog; Escape, Super, or the close
+button dismisses the grid.
+
+Any printable key hides the grid and starts the existing centered Spotlight
+launcher with that first character already in its query. The panel button opens
+the grid; Super stays inert so it cannot also fire during Super+Space, which
+continues to open Spotlight directly. [`bin/app-grid-install`](../bin/app-grid-install)
+installs the launcher; `app-grid-install --revert` restores Whisker.
 
 ### CPU sparkline (`plugin-19`, genmon)
 
