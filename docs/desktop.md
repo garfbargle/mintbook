@@ -492,6 +492,11 @@ Mode is `~/.config/mintbook/night.mode`. Autostart is
 is on, 35% when it is not (off, or auto during the day). Tooltip is the mode
 and the current period/temperature from `redshift -p`.
 
+`night-apply` takes an exclusive per-session lock around its complete
+stop/reset/start sequence. The Control Center, the retired moon menu and
+autostart can all invoke it; serializing them ensures that one selection leaves
+one Redshift daemon rather than concurrent daemons competing for the RandR LUT.
+
 Do **not** launch the Redshift app from the menu — that is redshift-gtk, and
 its tray would come back next to mintUpdate.
 

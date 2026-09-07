@@ -8,6 +8,7 @@ Auto follows sunset/sunrise from ~/.config/redshift.conf. On locks the night
 temperature. Off resets the LUT. redshift-gtk is not used — this is the
 session copy, started from autostart.
 """
+import fcntl
 import os
 import signal
 import subprocess
@@ -17,6 +18,7 @@ import time
 MODES = ('auto', 'on', 'off')
 MODE_FILE = os.path.expanduser('~/.config/mintbook/night.mode')
 CONF = os.path.expanduser('~/.config/redshift.conf')
+LOCK_FILE = os.path.expanduser('~/.cache/mintbook/night-apply.lock')
 PLUGIN = 'genmon-23'
 
 
@@ -131,8 +133,16 @@ def main():
     if len(sys.argv) > 2 or (len(sys.argv) == 2 and sys.argv[1] not in MODES):
         sys.stderr.write('usage: night-apply [auto|on|off]\n')
         return 2
-    mode = sys.argv[1] if len(sys.argv) == 2 else read_mode()
-    rc = apply(mode)
+    # The control-center tile, its old genmon menu, and autostart can all
+    # launch this command.  Without a lock, two invocations can both finish
+    # stop_redshift() before either starts its replacement, leaving multiple
+    # Redshift daemons fighting over the RandR LUT.  Keep the whole
+    # stop/reset/start sequence atomic, not just the state-file write.
+    os.makedirs(os.path.dirname(LOCK_FILE), exist_ok=True)
+    with open(LOCK_FILE, 'w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        mode = sys.argv[1] if len(sys.argv) == 2 else read_mode()
+        rc = apply(mode)
     refresh_panel()
     return rc
 
