@@ -1,0 +1,934 @@
+#!/usr/bin/env python3
+"""Battery menu — the glass popup behind the bar's battery icon.
+
+macOS's battery menu, which is: how much charge, how long it lasts, what is
+eating it, and one switch. The switch is the same power profile the Control
+Center tile sets, through the same plugin, so the two can never disagree.
+
+Drawn in cairo on one override-redirect window, for the reasons in
+docs/control-center.md — genmon spawns a click command with no Gdk event
+behind it, and xfwm4 discards a Gtk.Menu grab at time 0.
+
+Unlike the Control Center this is a single DrawingArea rather than a widget
+per tile: it is a fixed layout, and one draw handler with a list of rows is
+both less code and one allocation instead of nine.
+"""
+import math
+import os
+import signal
+import subprocess
+import sys
+import threading
+import time
+
+T0 = time.monotonic()
+
+# Before importing Gtk, as in bin/control-center: busctl costs 15 ms and the
+# GTK import costs ~220, so the read happens inside the import for free.
+try:
+    PROFILE_PROC = subprocess.Popen(
+        ['busctl', '--system', 'get-property', 'net.hadess.PowerProfiles',
+         '/net/hadess/PowerProfiles', 'net.hadess.PowerProfiles', 'ActiveProfile'],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+except OSError:
+    PROFILE_PROC = None
+
+import gi                                                          # noqa: E402
+gi.require_version('Gtk', '3.0')
+gi.require_version('PangoCairo', '1.0')
+import cairo                                                       # noqa: E402
+from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo        # noqa: E402
+
+HOME = os.path.expanduser('~')
+CONF = f'{HOME}/.config/mintbook/battery.conf'
+APPLIED = f'{HOME}/.config/mintbook/appearance.applied'
+LOG = os.environ.get('MINTBOOK_BAT_LOG',
+                     f'{HOME}/.cache/mintbook/battery/history')
+PIDFILE = f'{HOME}/.cache/mintbook/battery-menu.pid'
+PLUGIN = f'{HOME}/.local/share/mintbook/control-center/plugins/60-power'
+WANT = '/run/mintbook-power/want'
+HISTORY = f'{HOME}/.local/bin/battery-history'
+
+SC = round((Gdk.Screen.get_default().get_resolution() or 96) / 96.0, 3) or 1.0
+WIDTH, PAD, GAP, SHADOW, RADIUS, CARD = 320, 14, 10, 16, 18, 12
+CLK = os.sysconf('SC_CLK_TCK')
+
+LIGHT = {
+    'top': (229, 231, 234, .980), 'bottom': (202, 205, 210, .970),
+    'edge': (255, 255, 255, .75), 'rim': (65, 68, 74, .18),
+    'fg': (45, 48, 54), 'tile': (255, 255, 255, .55),
+    'tile_hi': (255, 255, 255, .78), 'tile_edge': (255, 255, 255, .65),
+    'track': (65, 68, 74, .13), 'hair': (65, 68, 74, .12),
+    'seg': (65, 68, 74, .10), 'seg_on': (255, 255, 255, .95),
+    'green': (52, 199, 89), 'amber': (255, 159, 10), 'red': (255, 59, 48),
+}
+DARK = {
+    'top': (104, 109, 119, .975), 'bottom': (74, 78, 86, .968),
+    'edge': (255, 255, 255, .18), 'rim': (0, 0, 0, .35),
+    'fg': (255, 255, 255), 'tile': (255, 255, 255, .13),
+    'tile_hi': (255, 255, 255, .20), 'tile_edge': (255, 255, 255, .10),
+    'track': (255, 255, 255, .16), 'hair': (255, 255, 255, .12),
+    'seg': (0, 0, 0, .20), 'seg_on': (255, 255, 255, .28),
+    'green': (48, 209, 88), 'amber': (255, 214, 10), 'red': (255, 69, 58),
+}
+
+
+# ------------------------------------------------------------------- reading
+
+def read_file(path, default=''):
+    try:
+        with open(path) as f:
+            return f.read().strip() or default
+    except OSError:
+        return default
+
+
+def conf():
+    """battery.conf is shell, and this is the subset of shell it ever is —
+    including the trailing `# comment` on a value line, which bash strips and
+    a naive split does not."""
+    out = {}
+    for line in read_file(CONF).splitlines():
+        line = line.strip()
+        if line.startswith('#') or '=' not in line:
+            continue
+        k, _, v = line.partition('=')
+        v = v.split('#')[0].strip().strip('\'"')
+        out[k.strip()] = v
+    return out
+
+
+def cint(value, default):
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def set_conf(key, value):
+    lines, done = [], False
+    for line in read_file(CONF).splitlines():
+        if line.split('=')[0].strip() == key:
+            lines.append(f'{key}={value}')
+            done = True
+        else:
+            lines.append(line)
+    if not done:
+        lines.append(f'{key}={value}')
+    os.makedirs(os.path.dirname(CONF), exist_ok=True)
+    with open(CONF + '.tmp', 'w') as f:
+        f.write('\n'.join(lines).strip() + '\n')
+    os.replace(CONF + '.tmp', CONF)
+
+
+def battery():
+    cfg = conf()
+    b = '/sys/class/power_supply/' + cfg.get('BAT', 'BAT0')
+
+    def n(name, default=0):
+        try:
+            return int(read_file(f'{b}/{name}', str(default)))
+        except ValueError:
+            return default
+    status = read_file(f'{b}/status', 'Unknown')
+    online = read_file('/sys/class/power_supply/'
+                       + cfg.get('AC', 'ADP1') + '/online', '1')
+    cur = n('current_avg') or n('current_now')
+    st = {'Charging': 'C', 'Full': 'F', 'Discharging': 'D'}.get(
+        status, 'F' if online == '1' else 'U')
+    now, full = n('charge_now'), n('charge_full')
+    mins = -1
+    if cur > 0:
+        if st == 'D':
+            mins = now * 60 // cur
+        elif st == 'C':
+            mins = (full - now) * 60 // cur
+    return {
+        'pct': max(0, min(100, n('capacity'))), 'st': st, 'cfg': cfg,
+        'watts': cur * n('voltage_now') / 1e12, 'mins': mins if mins < 6000 else -1,
+        'health': (full * 100 // n('charge_full_design', 1)) if n('charge_full_design') else 0,
+        'cycles': n('cycle_count'), 'temp': n('temp') / 10.0,
+    }
+
+
+def tail_log(seconds):
+    """The last `seconds` of samples. Seeks rather than reads the whole file —
+    a week of history is 10000 lines and the menu wants the last ten."""
+    try:
+        size = os.path.getsize(LOG)
+        with open(LOG) as f:
+            f.seek(max(0, size - 200 * (seconds // 60 + 8)))
+            rows = f.read().splitlines()[1:]
+    except OSError:
+        return []
+    cutoff = time.time() - seconds
+    out = []
+    for line in rows:
+        parts = line.split()
+        if len(parts) < 7:
+            continue
+        try:
+            ts = int(parts[0])
+        except ValueError:
+            continue
+        if ts < cutoff:
+            continue
+        out.append(parts)
+    return out
+
+
+# comm is 15 characters of kernel truncation and a build system's opinion.
+# The same table is in bin/battery-history; both are standalone executables by
+# design, and this is a data table, not a second implementation of anything.
+PRETTY = {
+    'firefox-bin': 'Firefox', 'firefox': 'Firefox', 'thunderbird': 'Thunderbird',
+    'claude-desktop': 'Claude', 'ChatGPT': 'ChatGPT', 'code': 'VS Code',
+    'Xorg': 'X server', 'kthreadd': 'Kernel', 'xfwm4': 'Window manager',
+    'xfce4-panel': 'Panel', 'xfdesktop': 'Desktop', 'pipewire': 'PipeWire',
+    'pipewire-pulse': 'PipeWire', 'wireplumber': 'PipeWire',
+    'NetworkManager': 'NetworkManager', 'gnome-terminal-': 'Terminal',
+    'xfce4-terminal': 'Terminal', 'nemo': 'Files', 'thermald': 'thermald',
+    'systemd-journal': 'Journal',
+}
+
+
+def top_apps(rows, limit=3):
+    """Share of the machine's CPU per application, over whatever the rows
+    cover. Of the machine, not of one core: a percentage that can read 119%
+    is a true number and a bad answer to "what is using the battery"."""
+    total, apps = 0, {}
+    for parts in rows:
+        total += int(parts[5] or 0)          # all-core jiffies in the interval
+        for field in parts[7:]:
+            name, _, j = field.rpartition(':')
+            if name:
+                apps[name] = apps.get(name, 0) + int(j)
+    if not total:
+        return []
+    ranked = sorted(apps.items(), key=lambda kv: -kv[1])[:limit]
+    return [(PRETTY.get(name, name.replace('_', ' ')), 100.0 * j / total)
+            for name, j in ranked if 100.0 * j / total >= 0.5]
+
+
+def profile():
+    if PROFILE_PROC is None:
+        return 'balanced'
+    try:
+        out = PROFILE_PROC.communicate(timeout=3)[0].strip()
+    except Exception:
+        return 'balanced'
+    p = out[3:-1] if out.startswith('s "') else ''
+    return p if p in ('power-saver', 'balanced', 'performance') else 'balanced'
+
+
+def set_profile(value):
+    if os.access(PLUGIN, os.X_OK):
+        subprocess.run([PLUGIN, 'set', value], timeout=8, capture_output=True)
+        return
+    try:                       # the same request file a root path unit watches
+        tmp = WANT + f'.{os.getpid()}'
+        with open(tmp, 'w') as f:
+            f.write(value + '\n')
+        os.replace(tmp, WANT)
+    except OSError:
+        pass
+
+
+# ------------------------------------------------------------------- drawing
+
+def rgba(cr, c, alpha=None):
+    a = c[3] if len(c) > 3 else 1.0
+    cr.set_source_rgba(c[0] / 255, c[1] / 255, c[2] / 255,
+                       a if alpha is None else a * alpha)
+
+
+def rrect(cr, x, y, w, h, r):
+    r = max(0, min(r, w / 2, h / 2))
+    cr.new_sub_path()
+    cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
+    cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
+    cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
+    cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
+    cr.close_path()
+
+
+def text(cr, s, x, y, size, color, alpha=1.0, weight='normal',
+         align=None, width=0, tnum=False):
+    layout = PangoCairo.create_layout(cr)
+    font = Pango.FontDescription('Inter Semi-Bold' if weight == 'bold' else 'Inter')
+    font.set_absolute_size(size * Pango.SCALE)   # SC already carries the DPI
+    layout.set_font_description(font)
+    if tnum:
+        attrs = Pango.AttrList()
+        attrs.insert(Pango.attr_font_features_new('tnum=1'))
+        layout.set_attributes(attrs)
+    layout.set_text(str(s), -1)
+    layout.set_ellipsize(Pango.EllipsizeMode.END)
+    if width:
+        layout.set_width(int(width * Pango.SCALE))
+        layout.set_alignment({'center': Pango.Alignment.CENTER,
+                              'right': Pango.Alignment.RIGHT}.get(
+                                  align, Pango.Alignment.LEFT))
+    rgba(cr, color, alpha)
+    cr.move_to(x, y)
+    PangoCairo.show_layout(cr, layout)
+    return layout.get_pixel_size()
+
+
+def battery_glyph(cr, x, y, w, pct, fill, ink, charging):
+    """The bar icon, in cairo, at whatever size the layout wants."""
+    h = w * 0.47
+    cr.save()
+    cr.translate(x, y)
+    lw = max(1.0, w * 0.045)
+    rrect(cr, lw / 2, lw / 2, w - lw, h - lw, (h - lw) / 3)
+    rgba(cr, ink, .38)
+    cr.set_line_width(lw)
+    cr.stroke()
+    rrect(cr, w + lw * .4, h * .32, w * .05, h * .36, w * .025)
+    rgba(cr, ink, .38)
+    cr.fill()
+    iw, ih = w - 4 * lw, h - 4 * lw
+    fw = max(ih, iw * pct / 100.0)
+    # Bolt as negative space over the charge and positive space past it — the
+    # same two-mask idea bin/panel-battery draws in SVG, here as one group.
+    cr.push_group()
+    rrect(cr, 2 * lw, 2 * lw, fw, ih, ih / 3)
+    rgba(cr, fill)
+    cr.fill()
+    if charging:
+        cr.set_operator(cairo.OPERATOR_CLEAR)
+        bolt(cr, w / 2, h / 2, h * .66)
+        cr.fill()
+        cr.set_operator(cairo.OPERATOR_OVER)
+    cr.set_source(cr.pop_group())
+    cr.paint()
+    if charging:
+        cr.save()
+        cr.rectangle(2 * lw + fw, 0, w, h)
+        cr.clip()
+        rgba(cr, fill)
+        bolt(cr, w / 2, h / 2, h * .66)
+        cr.fill()
+        cr.restore()
+    cr.restore()
+
+
+def bolt(cr, cx, cy, h):
+    w = h * 0.52
+    cr.move_to(cx + w * .28, cy - h / 2)
+    cr.line_to(cx - w * .52, cy + h * .08)
+    cr.line_to(cx - w * .06, cy + h * .08)
+    cr.line_to(cx - w * .28, cy + h / 2)
+    cr.line_to(cx + w * .52, cy - h * .08)
+    cr.line_to(cx + w * .06, cy - h * .08)
+    cr.close_path()
+
+
+def sparkline(cr, values, x, y, w, h, color, alpha=.30, floor=0.0, ceil=100.0,
+              stroke=0.0):
+    """Filled area, both edges faded — the panel-cpu look, in cairo. `stroke`
+    draws the top edge on top of it, which is what stops a wide fill reading as
+    a blob rather than as a graph."""
+    if len(values) < 2:
+        return
+    cr.save()
+    cr.push_group()
+    step = w / (len(values) - 1)
+    span = max(1e-6, ceil - floor)
+    pts = [(x + i * step,
+            y + h - max(0.0, min(1.0, (v - floor) / span)) * h)
+           for i, v in enumerate(values)]
+    cr.move_to(x, y + h)
+    for px, py in pts:
+        cr.line_to(px, py)
+    cr.line_to(x + w, y + h)
+    cr.close_path()
+    rgba(cr, color, alpha)
+    cr.fill()
+    if stroke:
+        cr.move_to(*pts[0])
+        for px, py in pts[1:]:
+            cr.line_to(px, py)
+        rgba(cr, color, min(1.0, alpha * 3.2))
+        cr.set_line_width(stroke)
+        cr.set_line_join(cairo.LINE_JOIN_ROUND)
+        cr.stroke()
+    pattern = cr.pop_group()
+    mask = cairo.LinearGradient(x, 0, x + w, 0)
+    mask.add_color_stop_rgba(0, 0, 0, 0, 0)
+    mask.add_color_stop_rgba(.10, 0, 0, 0, 1)
+    mask.add_color_stop_rgba(1, 0, 0, 0, 1)
+    cr.set_source(pattern)
+    cr.mask(mask)
+    cr.restore()
+
+
+# ---------------------------------------------------------------------- rows
+#
+# A row owns a height, a draw, and — if it can be used — a hit test and a
+# release. The panel stacks them, so adding one is a class and a line.
+
+class Row:
+    h = 0
+    interactive = False
+
+    def __init__(self, panel):
+        self.panel = panel
+        self.hit = None
+
+    @property
+    def c(self):
+        return self.panel.colors
+
+    def card(self, cr, w, h, lit=False):
+        rrect(cr, 0, 0, w, h, CARD)
+        rgba(cr, self.c['tile_hi'] if lit else self.c['tile'])
+        cr.fill_preserve()
+        rgba(cr, self.c['tile_edge'])
+        cr.set_line_width(1)
+        cr.stroke()
+
+    def draw(self, cr, w):
+        pass
+
+    def test(self, x, y):
+        return None
+
+    def release(self, x, y):
+        pass
+
+
+class ChargeRow(Row):
+    """Charge, estimate, and the last twelve hours of it — the graph is here
+    rather than one click away, because that is the question you opened this
+    to answer."""
+    h = 118
+    GY, GH = 48, 44
+
+    def draw(self, cr, w):
+        b, p = self.panel.bat, self.panel
+        self.card(cr, w, self.h)
+        battery_glyph(cr, 15, 19, 44, b['pct'], p.fill_color, self.c['fg'],
+                      b['st'] == 'C')
+        text(cr, 'Battery', 74, 16, 11, self.c['fg'], .95, 'bold')
+        text(cr, f"{b['pct']}%", 0, 11, 21, self.c['fg'], .95, 'bold',
+             align='right', width=w - 15, tnum=True)
+        text(cr, p.estimate, 74, 35, 9.5, self.c['fg'], .55, width=w - 160)
+        text(cr, f"{b['watts']:.1f} W", 0, 35, 9.5, self.c['fg'], .45,
+             align='right', width=w - 15, tnum=True)
+
+        sp = p.charge_series
+        cr.move_to(15, self.GY + self.GH + .5)
+        cr.line_to(w - 15, self.GY + self.GH + .5)
+        rgba(cr, self.c['hair'])
+        cr.set_line_width(1)
+        cr.stroke()
+        if len(sp) > 1:
+            # A window of at least 20 points, so a quiet hour is a gentle
+            # slope rather than a cliff, and a charge cycle still fills it.
+            lo, hi = min(sp), max(sp)
+            if hi - lo < 20:
+                mid = (lo + hi) / 2
+                lo, hi = mid - 10, mid + 10
+            lo, hi = max(0, lo - 3), min(100, hi + 3)
+            sparkline(cr, sp, 15, self.GY, w - 30, self.GH, p.fill_color, .17,
+                      lo, max(lo + 8, hi), stroke=1.3)
+            text(cr, p.span_label, 15, self.GY + self.GH + 5, 8.5,
+                 self.c['fg'], .35)
+        else:
+            text(cr, 'Collecting history…', 15, self.GY + self.GH / 2 - 8, 9.5,
+                 self.c['fg'], .35)
+
+
+class PowerRow(Row):
+    """The Control Center's Power tile, in one row."""
+    h = 58
+    interactive = True
+    OPTIONS = [('power-saver', 'Saver'), ('balanced', 'Balanced'),
+               ('performance', 'Sustained')]
+
+    def draw(self, cr, w):
+        self.card(cr, w, self.h)
+        cr.save()
+        cr.translate(15, (self.h - 21) / 2)
+        rgba(cr, self.c['fg'], .85)
+        bolt(cr, 10.5, 10.5, 19)
+        cr.fill()
+        cr.restore()
+        text(cr, 'Power', 42, self.h / 2 - 16, 10.5, self.c['fg'], .95, 'bold')
+        text(cr, self.panel.source, 42, self.h / 2 + 2, 9.5, self.c['fg'], .5)
+        x0, tw, th = 118, w - 118 - 13, 30
+        ty = (self.h - th) / 2
+        rrect(cr, x0, ty, tw, th, 9)
+        rgba(cr, self.c['seg'])
+        cr.fill()
+        sw = tw / len(self.OPTIONS)
+        self.rects = []
+        for i, (key, label) in enumerate(self.OPTIONS):
+            sx = x0 + i * sw
+            self.rects.append((sx, sw, key))
+            if key == self.panel.profile:
+                rrect(cr, sx + 2, ty + 2, sw - 4, th - 4, 7.5)
+                rgba(cr, self.c['seg_on'])
+                cr.fill()
+            elif self.hit == i:
+                rrect(cr, sx + 2, ty + 2, sw - 4, th - 4, 7.5)
+                rgba(cr, self.c['fg'], .07)
+                cr.fill()
+            on = key == self.panel.profile
+            text(cr, label, sx, ty + th / 2 - 9, 9.5, self.c['fg'],
+                 .95 if on else .6, 'bold' if on else 'normal',
+                 align='center', width=sw)
+
+    def test(self, x, y):
+        for i, (sx, sw, _k) in enumerate(getattr(self, 'rects', [])):
+            if sx <= x <= sx + sw:
+                return i
+        return None
+
+    def release(self, x, y):
+        i = self.test(x, y)
+        if isinstance(i, int) and self.rects[i][2] != self.panel.profile:
+            self.panel.apply_profile(self.rects[i][2])
+
+
+class EnergyRow(Row):
+    """What has been using the machine, over the last twenty minutes."""
+    LEAD = 26
+    LINE = 23
+
+    def __init__(self, panel):
+        super().__init__(panel)
+        self.apps = panel.apps
+        self.h = self.LEAD + self.LINE * max(1, len(self.apps)) + 12
+
+    def draw(self, cr, w):
+        self.card(cr, w, self.h)
+        text(cr, 'Using Significant Energy', 15, 9, 9.5, self.c['fg'], .5)
+        if not self.apps:
+            text(cr, 'Nothing much', 15, self.LEAD + 3, 10.5, self.c['fg'], .4)
+            return
+        peak = max(v for _n, v in self.apps) or 1.0
+        for i, (name, share) in enumerate(self.apps):
+            y = self.LEAD + i * self.LINE
+            rrect(cr, 15, y + 6, (w - 120) * min(1.0, share / peak), 8, 4)
+            rgba(cr, self.panel.fill_color, .22)
+            cr.fill()
+            text(cr, name, 15, y, 10, self.c['fg'], .9, width=w - 130)
+            text(cr, f'{share:.0f}%', 0, y, 10, self.c['fg'], .5,
+                 align='right', width=w - 15, tnum=True)
+
+
+class SettingsRow(Row):
+    """Show Percentage, and the way into bin/battery-history."""
+    h = 92
+    interactive = True
+    SPLIT = 46
+
+    def draw(self, cr, w):
+        self.card(cr, w, self.h)
+        if self.hit is not None:
+            cr.save()
+            rrect(cr, 0, 0, w, self.h, CARD)
+            cr.clip()
+            y = 0 if self.hit == 'percent' else self.SPLIT
+            cr.rectangle(0, y, w, self.SPLIT)
+            rgba(cr, self.c['fg'], .05)
+            cr.fill()
+            cr.restore()
+        text(cr, 'Show Percentage', 15, self.SPLIT / 2 - 8, 10.5,
+             self.c['fg'], .92)
+        self.switch(cr, w - 15 - 38, self.SPLIT / 2 - 11, self.panel.show_percent)
+        cr.move_to(15, self.SPLIT + .5)
+        cr.line_to(w - 15, self.SPLIT + .5)
+        rgba(cr, self.c['hair'])
+        cr.set_line_width(1)
+        cr.stroke()
+        text(cr, 'Battery History…', 15, self.SPLIT + self.SPLIT / 2 - 8, 10.5,
+             self.c['fg'], .92)
+        cx, cy = w - 19, self.SPLIT + self.SPLIT / 2
+        rgba(cr, self.c['fg'], .55 if self.hit == 'history' else .3)
+        cr.set_line_width(1.6)
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        cr.move_to(cx - 2, cy - 4)
+        cr.line_to(cx + 2.5, cy)
+        cr.line_to(cx - 2, cy + 4)
+        cr.stroke()
+
+    def switch(self, cr, x, y, on):
+        w, h = 38, 22
+        rrect(cr, x, y, w, h, h / 2)
+        if on:
+            rgba(cr, self.c['green'])
+        else:
+            rgba(cr, self.c['track'])
+        cr.fill()
+        cr.arc(x + (w - h / 2 - 2 if on else h / 2 + 2), y + h / 2, h / 2 - 2,
+               0, 2 * math.pi)
+        cr.set_source_rgba(1, 1, 1, .98)
+        cr.fill()
+
+    def test(self, x, y):
+        return 'percent' if y < self.SPLIT else 'history'
+
+    def release(self, x, y):
+        if self.test(x, y) == 'percent':
+            self.panel.toggle_percent()
+        else:
+            self.panel.open_history()
+
+
+# --------------------------------------------------------------------- panel
+
+class Menu:
+    def __init__(self):
+        self.bat = battery()
+        self.cfg = self.bat['cfg']
+        self.show_percent = self.cfg.get('SHOW_PERCENT', '0') == '1'
+        self.mode = 'dark' if read_file(APPLIED, 'light') == 'dark' else 'light'
+        self.colors = DARK if self.mode == 'dark' else LIGHT
+        self.profile = profile()
+        self.closing = False
+        self.press_row = None
+
+        rows = tail_log(12 * 3600)
+        self.charge_series = [int(r[1]) for r in rows][-240:]
+        self.span_label = 'last 12 hours'
+        if rows:
+            hours = (int(rows[-1][0]) - int(rows[0][0])) / 3600.0
+            self.span_label = ('last %d min' % round(hours * 60) if hours < 1.5
+                               else 'last %d hours' % round(hours))
+        self.apps = top_apps([r for r in rows if int(r[0]) > time.time() - 1200])
+
+        self.rows = [ChargeRow(self), PowerRow(self), EnergyRow(self),
+                     SettingsRow(self)]
+        self.height = (sum(r.h for r in self.rows) + GAP * (len(self.rows) - 1)
+                       + 2 * PAD)
+
+        self.win = win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
+        win.set_decorated(False)
+        win.set_skip_taskbar_hint(True)
+        win.set_skip_pager_hint(True)
+        win.set_keep_above(True)
+        win.set_resizable(False)
+        win.set_app_paintable(True)
+        win.set_type_hint(Gdk.WindowTypeHint.POPUP_MENU)
+        visual = Gdk.Screen.get_default().get_rgba_visual()
+        if visual:
+            win.set_visual(visual)
+        win.connect('draw', self.draw_background)
+        win.connect('key-press-event', self.on_key)
+        win.connect('destroy', lambda *_a: self.close())
+
+        self.area = Gtk.DrawingArea()
+        self.area.set_size_request(round(WIDTH * SC),
+                                   round((self.height - 2 * PAD) * SC))
+        self.area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK
+                             | Gdk.EventMask.BUTTON_RELEASE_MASK
+                             | Gdk.EventMask.POINTER_MOTION_MASK
+                             | Gdk.EventMask.LEAVE_NOTIFY_MASK)
+        self.area.connect('draw', self.on_draw)
+        self.area.connect('button-press-event', self.on_press)
+        self.area.connect('button-release-event', self.on_release)
+        self.area.connect('motion-notify-event', self.on_motion)
+        self.area.connect('leave-notify-event', self.on_leave)
+
+        box = Gtk.Box()
+        for setter in (box.set_margin_top, box.set_margin_bottom,
+                       box.set_margin_start, box.set_margin_end):
+            setter(round((SHADOW + PAD) * SC))
+        box.pack_start(self.area, False, False, 0)
+        win.add(box)
+        win.show_all()
+
+    # ---- derived readings
+
+    @property
+    def fill_color(self):
+        b = self.bat
+        if self.cfg.get('COLOR', 'traffic') == 'mono':
+            return self.colors['fg']
+        if b['st'] in ('C', 'F'):
+            return self.colors['green']
+        if b['pct'] < cint(self.cfg.get('LOW'), 15):
+            return self.colors['red']
+        if b['pct'] < cint(self.cfg.get('MID'), 40):
+            return self.colors['amber']
+        return self.colors['green']
+
+    @property
+    def source(self):
+        return {'C': 'Charging', 'F': 'Plugged in'}.get(self.bat['st'], 'On battery')
+
+    @property
+    def estimate(self):
+        b = self.bat
+        if b['st'] == 'F':
+            return 'Charged · plugged in'
+        if b['mins'] < 0:
+            return self.source + ' · estimating…'
+        h, m = divmod(b['mins'], 60)
+        span = f'{h}h {m}m' if h else f'{m}m'
+        return f'{span} to full' if b['st'] == 'C' else f'{span} remaining'
+
+    @property
+    def detail(self):
+        b = self.bat
+        bits = [f"{b['watts']:.1f} W"]
+        if b['health']:
+            bits.append(f"health {b['health']}%")
+        if b['cycles']:
+            bits.append(f"{b['cycles']} cycles")
+        if b['temp']:
+            bits.append(f"{b['temp']:.0f} °C")
+        return ' · '.join(bits)
+
+    # ---- drawing
+
+    def on_draw(self, _w, cr):
+        cr.set_antialias(cairo.ANTIALIAS_BEST)
+        cr.scale(SC, SC)
+        y = 0
+        for row in self.rows:
+            cr.save()
+            cr.translate(0, y)
+            cr.rectangle(0, 0, WIDTH, row.h)
+            cr.clip()
+            row.draw(cr, WIDTH)
+            cr.restore()
+            y += row.h + GAP
+        return False
+
+    def draw_background(self, _w, cr):
+        a = self.win.get_allocation()
+        cr.save()
+        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.set_source_rgba(0, 0, 0, 0)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_OVER)
+        cr.scale(SC, SC)
+        x = y = SHADOW
+        w, h = a.width / SC - 2 * SHADOW, a.height / SC - 2 * SHADOW
+        for i in range(SHADOW, 0, -1):     # a soft edge, without a blur pass
+            rrect(cr, x - i, y - i + 2, w + 2 * i, h + 2 * i, RADIUS + i)
+            cr.set_line_width(1.4)
+            cr.set_source_rgba(0, 0, 0, .055 * (1 - i / SHADOW) ** 2)
+            cr.stroke()
+        grad = cairo.LinearGradient(0, y, 0, y + h)
+        top, bot = self.colors['top'], self.colors['bottom']
+        grad.add_color_stop_rgba(0, top[0] / 255, top[1] / 255, top[2] / 255, top[3])
+        grad.add_color_stop_rgba(1, bot[0] / 255, bot[1] / 255, bot[2] / 255, bot[3])
+        rrect(cr, x, y, w, h, RADIUS)
+        cr.set_source(grad)
+        cr.fill_preserve()
+        rgba(cr, self.colors['rim'])
+        cr.set_line_width(1)
+        cr.stroke()
+        rrect(cr, x + .75, y + .75, w - 1.5, h - 1.5, RADIUS - .75)
+        rgba(cr, self.colors['edge'])
+        cr.set_line_width(1)
+        cr.stroke()
+        cr.restore()
+        return False
+
+    # ---- input
+
+    def locate(self, ex, ey):
+        x, y = ex / SC, ey / SC
+        for row in self.rows:
+            if y < row.h:
+                return row, x, y
+            y -= row.h + GAP
+        return None, x, y
+
+    def on_motion(self, _w, e):
+        for row in self.rows:
+            row.hit = None
+        row, x, y = self.locate(e.x, e.y)
+        if row is not None and row.interactive:
+            row.hit = row.test(x, y)
+        self.area.queue_draw()
+        return True
+
+    def on_leave(self, *_a):
+        for row in self.rows:
+            row.hit = None
+        self.area.queue_draw()
+        return True
+
+    def on_press(self, _w, e):
+        self.press_row = self.locate(e.x, e.y)[0]
+        return True
+
+    def on_release(self, _w, e):
+        row, x, y = self.locate(e.x, e.y)
+        if row is not None and row is self.press_row and row.interactive:
+            row.release(x, y)
+        self.press_row = None
+        return True
+
+    def on_key(self, _w, e):
+        if e.keyval in (Gdk.KEY_Escape, Gdk.KEY_q):
+            self.close()
+            return True
+        return False
+
+    # ---- actions
+
+    def apply_profile(self, value):
+        self.profile = value                 # optimistic; re-read on the reply
+        self.area.queue_draw()
+
+        def work():
+            set_profile(value)
+            GLib.idle_add(self.reread_profile)
+        threading.Thread(target=work, daemon=True).start()
+
+    def reread_profile(self):
+        global PROFILE_PROC
+        try:
+            out = subprocess.run(
+                ['busctl', '--system', 'get-property', 'net.hadess.PowerProfiles',
+                 '/net/hadess/PowerProfiles', 'net.hadess.PowerProfiles',
+                 'ActiveProfile'], capture_output=True, text=True,
+                timeout=4).stdout.strip()
+            if out.startswith('s "'):
+                self.profile = out[3:-1]
+        except Exception:
+            pass
+        self.area.queue_draw()
+        return False
+
+    def toggle_percent(self):
+        self.show_percent = not self.show_percent
+        set_conf('SHOW_PERCENT', '1' if self.show_percent else '0')
+        self.area.queue_draw()
+        # genmon repaints on its own five-second tick; nudge it so the bar
+        # changes under the click that asked for it.
+        plugin = self.cfg.get('PANEL_ID', '')
+        if plugin:
+            subprocess.Popen(
+                ['xfce4-panel', f'--plugin-event=plugin-{plugin}:refresh:bool:true'],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def open_history(self):
+        if os.access(HISTORY, os.X_OK):
+            subprocess.Popen([HISTORY], start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.close()
+
+    # ---- window
+
+    def place(self, px, py):
+        win = self.win
+        win.realize()
+        gdk_win = win.get_window()
+        if gdk_win is not None:
+            gdk_win.set_override_redirect(True)
+        alloc = win.get_allocation()
+        w, h = alloc.width, alloc.height
+        display = Gdk.Display.get_default()
+        monitor = (display.get_monitor_at_point(px, py)
+                   or display.get_primary_monitor())
+        geo = monitor.get_geometry()
+        edge = round(SHADOW * SC)
+        x = int(px - w + edge + round(24 * SC))
+        x = max(geo.x + 2, min(x, geo.x + geo.width - w + edge - 4))
+        y = 52 - edge + 4 if py < 64 else int(py) - edge + 8
+        if y + h > geo.y + geo.height:
+            y = geo.y + geo.height - h
+        win.move(x, y)
+        win.set_opacity(0.0)
+        win.present()
+        self.grab(gdk_win, w, h)
+        self.t0 = time.monotonic()
+
+        def step():
+            if self.closing:
+                return False
+            f = min(1.0, (time.monotonic() - self.t0) / 0.11)
+            win.set_opacity(f * f * (3 - 2 * f))
+            return f < 1.0
+        GLib.timeout_add(16, step)
+
+    def grab(self, gdk_win, w, h):
+        if gdk_win is None:
+            return
+        seat = Gdk.Display.get_default().get_default_seat()
+        seat.grab(gdk_win, Gdk.SeatCapabilities.ALL_POINTING, True, None, None, None)
+
+        def on_press(_w, e):
+            if e.window != gdk_win:
+                return False
+            edge = round(SHADOW * SC)
+            if not (edge < e.x < w - edge and edge < e.y < h - edge):
+                self.close()
+                return True
+            return False
+        self.win.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.win.connect('button-press-event', on_press)
+
+    def close(self):
+        if self.closing:
+            return
+        self.closing = True
+        try:
+            Gdk.Display.get_default().get_default_seat().ungrab()
+        except Exception:
+            pass
+        Gtk.main_quit()
+
+
+def single_instance():
+    """A second click on the bar icon closes the open menu, like macOS."""
+    os.makedirs(os.path.dirname(PIDFILE), exist_ok=True)
+    try:
+        pid = int(read_file(PIDFILE, '0'))
+    except ValueError:
+        pid = 0
+    # A stale pidfile must not make the bar icon unclickable, and the pid in it
+    # may since have been recycled by something else entirely — so check what
+    # is actually running under it before signalling anything.
+    if pid and pid != os.getpid():
+        try:
+            with open(f'/proc/{pid}/cmdline', 'rb') as f:
+                ours = b'battery-menu' in f.read()
+        except OSError:
+            ours = False
+        if ours:
+            try:
+                os.kill(pid, signal.SIGTERM)
+                return False        # it was up; this click was the dismiss
+            except OSError:
+                pass
+    with open(PIDFILE, 'w') as f:
+        f.write(str(os.getpid()))
+    return True
+
+
+def main():
+    if not single_instance():
+        return
+    seat = Gdk.Display.get_default().get_default_seat()
+    _s, px, py = seat.get_pointer().get_position()
+    menu = Menu()
+    signal.signal(signal.SIGTERM, lambda *_a: menu.close())
+    menu.place(int(px), int(py))
+    if os.environ.get('MINTBOOK_BAT_TIME'):
+        print(f'{(time.monotonic() - T0) * 1000:.0f} ms to on screen',
+              file=sys.stderr)
+    Gtk.main()
+
+
+if __name__ == '__main__':
+    Gdk.set_program_class('mintbook-battery-menu')
+    try:
+        main()
+    finally:
+        try:
+            if read_file(PIDFILE) == str(os.getpid()):
+                os.remove(PIDFILE)
+        except OSError:
+            pass
+    sys.exit(0)
