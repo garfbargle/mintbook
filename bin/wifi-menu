@@ -96,6 +96,10 @@ RADIO_P = spawn(['nmcli', '-t', 'radio', 'wifi'])
 LINK_P = spawn(['nmcli', '-t', '-f',
                 'GENERAL.CONNECTION,GENERAL.STATE,IP4.ADDRESS,IP4.GATEWAY',
                 'device', 'show', IFACE]) if IFACE else None
+CONN_P = spawn(['busctl', '--system', 'get-property',
+                'org.freedesktop.NetworkManager',
+                '/org/freedesktop/NetworkManager',
+                'org.freedesktop.NetworkManager', 'Connectivity'])
 
 import gi                                                          # noqa: E402
 gi.require_version('Gtk', '3.0')
@@ -227,6 +231,17 @@ def parse_link(text):
             'state': d.get('GENERAL.STATE', ''),
             'ip': d.get('IP4.ADDRESS[1]', '').split('/')[0],
             'gw': d.get('IP4.GATEWAY', '')}
+
+
+# NetworkManager's cached Connectivity, the same reading bin/panel-wifi puts
+# the exclamation on the bar for. Associated is not online.
+CONNECTIVITY = {'1': 'No internet', '2': 'Sign-in required',
+                '3': 'Limited connection'}
+
+
+def parse_conn(text):
+    """`u 4` -> '' (online). Anything NM is unsure about gets a name."""
+    return CONNECTIVITY.get(text.strip().split()[-1] if text.strip() else '', '')
 
 
 def bitrate():
@@ -512,7 +527,8 @@ class NetworkRow(Row):
                  0, 8, 9.5, self.c['fg'], .35, align='right', width=w - 15)
 
         if not p.others:
-            text(cr, 'No other networks' if not p.scanning else 'Scanning…',
+            text(cr, 'Looking…' if (p.scanning or not p.retried)
+                 else 'No other networks',
                  15, self.LEAD + 6, 10.5, self.c['fg'], .4)
             return
 
@@ -677,6 +693,7 @@ class Menu:
         self.press_row = None
         self.scanning = False
         self.again = False
+        self.retried = False
         self.connecting = None
         self.joining = None
         self.password = ''
@@ -684,6 +701,7 @@ class Menu:
         self.caret = True
         self.phase = 0
         self.rate = 0
+        self.trouble = ''
         self.keyboard = None      # None, not False: place() grabs the
         self.gdk_win = None       # pointer through grab_keyboard(False)
         self.geo = None
@@ -694,6 +712,7 @@ class Menu:
         self.nets = parse_scan(reap(SCAN_P))
         self.link = parse_link(reap(LINK_P)) if LINK_P else {
             'conn': '', 'state': '', 'ip': '', 'gw': ''}
+        self.trouble = parse_conn(reap(CONN_P))
 
         self.win = win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
         win.set_decorated(False)
@@ -756,13 +775,13 @@ class Menu:
         if self.connecting:
             return f'Joining {self.connecting}…'
         if self.link['conn']:
-            return 'Connected'
+            return self.trouble or 'Connected'
         return 'Not connected'
 
     @property
     def link_where(self):
         net = self.current
-        bits = [self.link['ip'] or 'no address']
+        bits = [self.trouble or self.link['ip'] or 'no address']
         if net:
             bits.append(band(net['mhz']))
             bits.append(net['security'] or 'Open')
@@ -1090,6 +1109,15 @@ class Menu:
                     out[key] = ''
             out['rate'] = bitrate()
             out['dbm'] = wireless()[1]
+            try:
+                out['conn'] = subprocess.run(
+                    ['busctl', '--system', 'get-property',
+                     'org.freedesktop.NetworkManager',
+                     '/org/freedesktop/NetworkManager',
+                     'org.freedesktop.NetworkManager', 'Connectivity'],
+                    capture_output=True, text=True, timeout=6).stdout
+            except Exception:
+                out['conn'] = ''
             GLib.idle_add(self.landed, out)
         threading.Thread(target=work, daemon=True).start()
         return False
@@ -1099,12 +1127,20 @@ class Menu:
         self.scanning = False
         self.radio = out.get('radio', self.radio)
         if 'scan' in out:
-            self.nets = parse_scan(out['scan']) or self.nets
+            fresh = parse_scan(out['scan'])
+            self.nets = fresh or self.nets
+            # `nmcli device wifi rescan` is rate limited, and a rescan refused
+            # right after another one leaves the list read hitting an empty
+            # cache. Once — an empty list can also just be the truth.
+            if not fresh and self.radio and not self.retried:
+                self.retried = True
+                self.again = True
         if out.get('saved'):
             self.saved = parse_saved(out['saved'])
         if out.get('link'):
             self.link = parse_link(out['link'])
         self.rate = out.get('rate', 0)
+        self.trouble = parse_conn(out.get('conn', ''))
         if out.get('dbm') is not None:
             DBM = out['dbm']
         self.rebuild()

@@ -41,5 +41,29 @@ fi
 ssid=$(/usr/sbin/iwgetid -r 2>/dev/null)
 [ -z "$ssid" ] && ssid="Wi-Fi"
 
-printf '<img>%s/wifi-%s.svg</img>\n' "$DIR" "$lvl"
-printf '<tool>%s\nSignal %s%% (%s)</tool>\n' "$ssid" "$pct" "$iface"
+# Associated is not the same as online. Three full bars while the uplink is
+# dead, or while a hotel portal is holding the connection, is the icon telling
+# a confident lie — so ask NetworkManager what it last decided:
+# 1 none, 2 behind a portal, 3 limited, 4 full.
+#
+# The *property*, not CheckConnectivity(): the property is NM's cached answer
+# and costs 15 ms, the method goes and asks the network. That 15 ms is on
+# every tick where the card is associated and takes panel-wifi from ~30 ms to
+# ~45 ms — 0.9% of a core rather than 0.56%. See docs/desktop.md.
+conn=$(busctl --system get-property org.freedesktop.NetworkManager \
+  /org/freedesktop/NetworkManager org.freedesktop.NetworkManager \
+  Connectivity 2>/dev/null)
+case "${conn##* }" in
+  1) state='No internet' ;;
+  2) state='Sign-in required' ;;
+  3) state='Limited connection' ;;
+  *) state='' ;;                # 4 full, 0 unknown, or no NetworkManager
+esac
+
+if [ -n "$state" ]; then
+  printf '<img>%s/wifi-warn.svg</img>\n' "$DIR"
+  printf '<tool>%s\n%s · signal %s%% (%s)</tool>\n' "$ssid" "$state" "$pct" "$iface"
+else
+  printf '<img>%s/wifi-%s.svg</img>\n' "$DIR" "$lvl"
+  printf '<tool>%s\nSignal %s%% (%s)</tool>\n' "$ssid" "$pct" "$iface"
+fi
