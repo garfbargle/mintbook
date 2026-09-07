@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# Software update indicator for xfce4-genmon-plugin.
+#
+# It reads one small file and draws a conclusion. It never looks at APT:
+# bin/updates-check does that, costs 2.5 s of CPU, and is run by a timer.
+# A genmon tick here is bash starting up and a `while read` over seven lines.
+#
+# The icon is not always there. Nothing waiting means no image, and the
+# indicator disappears the way macOS's does — "say nothing rather than show a
+# dead switch", the same rule the Control Center plugins follow. The door that
+# is always there is the Control Center's Updates tile.
+#
+# See docs/updates.md.
+DIR="$HOME/.local/share/mintbook/updates"
+STATE="$HOME/.cache/mintbook/updates.state"
+MENU="$HOME/.local/bin/updates-menu"
+
+# Falling back to Mint's own Update Manager when the popup is not installed is
+# what makes `bin/updates-install --revert` a single `rm`.
+[ -x "$MENU" ] || MENU=mintupdate
+
+# On every path, including the silent ones: a 0-width button is still a button,
+# and it should still open something if it is ever clicked.
+printf '<click>%s</click>\n<iconclick>%s</iconclick>\n' "$MENU" "$MENU"
+
+[ -r "$STATE" ] || exit 0
+
+# `key = value`, the same shape the Control Center plugins speak. Split on the
+# first ' = ' only: the error line is a sentence and keeps its spaces.
+count=0 security=0 kernel=0 size=0 checked=0 error=''
+while read -r line; do
+  case "$line" in
+    'count = '*)    count=${line#count = } ;;
+    'security = '*) security=${line#security = } ;;
+    'kernel = '*)   kernel=${line#kernel = } ;;
+    'size = '*)     size=${line#size = } ;;
+    'checked = '*)  checked=${line#checked = } ;;
+    'error = '*)    error=${line#error = } ;;
+  esac
+done < "$STATE"
+
+if [ -n "$error" ]; then
+  printf '<img>%s/updates.svg</img>\n' "$DIR"
+  printf '<tool>Could not read the APT cache\n%s</tool>\n' "${error:0:120}"
+  exit 0
+fi
+
+[ "$count" -gt 0 ] 2>/dev/null || exit 0
+
+# MB with one decimal, in shell. The sizes here are download sizes, tens of
+# megabytes at most, so integer arithmetic is plenty.
+mb=$(( size * 10 / 1048576 ))
+human="$(( mb / 10 )).$(( mb % 10 )) MB"
+[ "$size" -lt 1048576 ] && human="$(( size / 1024 )) kB"
+
+if [ "$count" = 1 ]; then head="1 update · $human"; else head="$count updates · $human"; fi
+
+parts=''
+[ "$security" -gt 0 ] && parts="$security security"
+[ "$kernel" -gt 0 ] && parts="${parts:+$parts, }$kernel kernel"
+
+# The badge is for the updates you would not put off. Everything else gets the
+# plain arrow — a bar that shouts at you about a translation package is a bar
+# you stop reading.
+if [ "$security" -gt 0 ] || [ "$kernel" -gt 0 ]; then
+  printf '<img>%s/updates-alert.svg</img>\n' "$DIR"
+else
+  printf '<img>%s/updates.svg</img>\n' "$DIR"
+fi
+
+printf -v now '%(%s)T' -1
+age=$(( (now - checked) / 3600 ))
+if   [ "$age" -lt 1 ];  then when='checked just now'
+elif [ "$age" -lt 2 ];  then when='checked an hour ago'
+elif [ "$age" -lt 48 ]; then when="checked ${age}h ago"
+else                         when="checked $(( age / 24 )) days ago"
+fi
+
+printf '<tool>%s%s\n%s</tool>\n' "$head" "${parts:+ ($parts)}" "$when"

@@ -323,6 +323,39 @@ if [ -e "$HOME/.local/bin/wifi-menu" ]; then
     warn "wireless interface" "nothing in /proc/net/wireless — the menu will say so too"
   fi
 fi
+# The software-update indicator, only once it has been installed. The bar icon
+# is *supposed* to be missing when there is nothing waiting, so its absence
+# proves nothing — which is exactly why the machinery behind it gets checked
+# here instead. See docs/updates.md.
+if [ -e "$HOME/.config/mintbook/updates.conf" ]; then
+  check "updates indicator" "bin/panel-updates" have "$HOME/.local/bin/panel-updates"
+  check "updates menu" "bin/updates-menu" have "$HOME/.local/bin/updates-menu"
+  check "updates check" "bin/updates-check" have "$HOME/.local/bin/updates-check"
+  UID_=$(sed -n 's/^PANEL_ID=\([0-9]*\).*/\1/p' "$HOME/.config/mintbook/updates.conf" | head -1)
+  check "updates genmon rc" "genmon-${UID_:-20}.rc" have "$HOME/.config/xfce4/panel/genmon-${UID_:-20}.rc"
+  check "updates timer" "mintbook-updates-check.timer" \
+    systemctl --user is-enabled mintbook-updates-check.timer
+
+  # The one check that matters. Everything above can be green while the answer
+  # on the bar is a week old, and a stale "nothing waiting" is a lie the whole
+  # indicator is built to avoid. The timer runs every 6 h; 18 h is three misses.
+  USTATE="$HOME/.cache/mintbook/updates.state"
+  if [ -s "$USTATE" ]; then
+    UERR=$(sed -n 's/^error = //p' "$USTATE")
+    UAGE=$(( ( $(date +%s) - $(sed -n 's/^checked = //p' "$USTATE") ) / 3600 ))
+    UN=$(sed -n 's/^count = //p' "$USTATE")
+    USEC=$(sed -n 's/^security = //p' "$USTATE")
+    if [ -n "$UERR" ]; then
+      warn "updates state" "the last check failed: ${UERR:0:60}"
+    elif [ "$UAGE" -gt 18 ]; then
+      warn "updates state" "${UN} waiting, but last checked ${UAGE}h ago — is the timer running?"
+    else
+      ok "updates state" "${UN} waiting (${USEC} security), checked ${UAGE}h ago"
+    fi
+  else
+    warn "updates state" "no state file yet — the timer writes one 5 min after login"
+  fi
+fi
 check "night light autostart" "mintbook-night.desktop" have "$HOME/.config/autostart/mintbook-night.desktop"
 # Hidden=true user overrides of entries in /etc/xdg/autostart. An override is
 # only meaningful while the system entry it shadows still exists, so check both

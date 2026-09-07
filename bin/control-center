@@ -344,6 +344,18 @@ def _gear(cr, s):
     cr.stroke()
 
 
+def _box(cr, s):
+    """A parcel. bin/updates-menu draws the same one beside an ordinary
+    package update — keep the two in step."""
+    cr.set_line_width(.085 * s)
+    cr.set_line_join(cairo_round_join())
+    rrect(cr, .17 * s, .17 * s, .66 * s, .70 * s, .09 * s)
+    cr.stroke()
+    cr.move_to(.17 * s, .42 * s); cr.line_to(.83 * s, .42 * s)
+    cr.move_to(.50 * s, .17 * s); cr.line_to(.50 * s, .42 * s)
+    cr.stroke()
+
+
 def _dot(cr, s):
     cr.arc(.5 * s, .5 * s, .30 * s, 0, 2 * math.pi)
     cr.fill()
@@ -358,7 +370,8 @@ cairo_winding = lambda: _cairo.FILL_RULE_WINDING
 
 GLYPHS = {'wifi': _wifi, 'bluetooth': _bluetooth, 'moon': _moon, 'sun': _sun,
           'speaker': _speaker, 'display': _display, 'cpu': _cpu,
-          'thermometer': _thermometer, 'bolt': _bolt, 'gear': _gear, 'dot': _dot}
+          'thermometer': _thermometer, 'bolt': _bolt, 'gear': _gear,
+          'box': _box, 'dot': _dot}
 
 
 def glyph(cr, name, x, y, size, color, alpha=1.0):

@@ -1,0 +1,15 @@
+# 5 minutes after login, then four times a day. The check is 2.5 s of CPU, so
+# it is not something a panel tick can do; this is what keeps the bar's answer
+# from going stale. Persistent=false on purpose — a laptop that was asleep
+# does not need to catch up on missed checks the moment it wakes.
+[Unit]
+Description=Check for software updates, a few times a day
+
+[Timer]
+OnStartupSec=5min
+OnUnitActiveSec=6h
+AccuracySec=5min
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target

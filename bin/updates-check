@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+"""updates-check — what apt has waiting, written down for the bar and the popup.
+
+Read-only. No root, no network: this walks the APT cache that is already on
+disk and never fetches package lists. Refreshing the lists is a separate,
+privileged thing and belongs to whoever asked for it — bin/updates-menu does
+it through aptkit, whose update-cache action is `allow_active=yes` and so
+needs no password.
+
+The work is Linux Mint's own: `checkAPT.APTCheck`, the same class behind
+`mintupdate-cli list` and the Update Manager window, so a package is grouped,
+named, typed and described here exactly as the Update Manager would group,
+name, type and describe it. Reimplementing that against python-apt would have
+been a second opinion about what an update *is*, and two opinions on the bar
+is one too many.
+
+It costs about 2.5 s of CPU, which is why nothing polls it:
+
+    bin/panel-updates      reads the state file below, and nothing else
+    control-center 70-updates    the same file
+    bin/updates-menu       reads it on open, then re-runs this in a thread
+    mintbook-updates-check.timer   runs it 5 min after login and every 6 h
+
+Two files come out, in ~/.cache/mintbook:
+
+    updates.state   `key = value`, for the two readers that are shell
+    updates.json    the list, for the popup
+
+Both are written atomically, because the popup reads them without a lock.
+
+    bin/updates-check           write both, print a summary line
+    bin/updates-check --print   write both, then print the list
+    bin/updates-check --json    write nothing, print the JSON
+
+Known gap: apt only. Flatpak updates are not counted — see docs/updates.md.
+"""
+import json
+import os
+import sys
+import time
+
+MINT = '/usr/lib/linuxmint/mintUpdate'
+CACHE = os.path.expanduser('~/.cache/mintbook')
+STATE = f'{CACHE}/updates.state'
+LIST = f'{CACHE}/updates.json'
+BLACKLIST = '/etc/mintupdate.blacklist'
+
+
+def blacklisted():
+    """/etc/mintupdate.blacklist, the file the Update Manager's own ignore
+    list writes. Honouring it is what keeps this from disagreeing with the
+    Update Manager about how many updates there are."""
+    out = []
+    try:
+        with open(BLACKLIST) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    out.append(line)
+    except OSError:
+        pass
+    return out
+
+
+def ignored(patterns, source_name, version):
+    import fnmatch
+    for pattern in patterns:
+        pkg, _, ver = pattern.partition('=')
+        if fnmatch.fnmatch(source_name, pkg) and (not ver or ver == version):
+            return True
+    return False
+
+
+def collect():
+    """The updates, as plain dicts. Raises whatever APTCheck raises."""
+    sys.path.insert(0, MINT)
+    from checkAPT import APTCheck                                  # noqa: E402
+    from Classes import PRIORITY_UPDATES                           # noqa: E402
+
+    check = APTCheck()
+    check.find_changes()
+    check.load_aliases()
+    check.apply_aliases()
+    check.clean_descriptions()
+
+    skip = blacklisted()
+    rows = []
+    for update in check.get_updates():
+        if (update.source_name not in PRIORITY_UPDATES
+                and ignored(skip, update.real_source_name, update.new_version)):
+            continue
+        rows.append({
+            'name': update.display_name,
+            'source': update.source_name,
+            'old': update.old_version,
+            'new': update.new_version,
+            'size': int(update.size or 0),
+            'type': update.type,          # package | security | kernel | unstable
+            'origin': getattr(update, 'origin', ''),
+            'summary': (update.short_description or '').strip(),
+            'packages': list(update.package_names),
+        })
+    # Security first, then kernel, then by name — the order you would install
+    # them in if you were only going to install some of them.
+    rank = {'security': 0, 'kernel': 1}
+    rows.sort(key=lambda r: (rank.get(r['type'], 2), r['name'].lower()))
+    return rows
+
+
+def write(rows, error=''):
+    os.makedirs(CACHE, exist_ok=True)
+    payload = {'checked': int(time.time()), 'error': error, 'updates': rows}
+    atomic(LIST, json.dumps(payload, indent=1))
+    # The state file exists so that the two readers on the hot path — a genmon
+    # tick and a Control Center plugin, both bash — never have to parse JSON.
+    # Same `key = value` shape the Control Center plugins already speak.
+    atomic(STATE, ''.join(f'{k} = {v}\n' for k, v in (
+        ('checked', payload['checked']),
+        ('count', len(rows)),
+        ('security', sum(1 for r in rows if r['type'] == 'security')),
+        ('kernel', sum(1 for r in rows if r['type'] == 'kernel')),
+        ('size', sum(r['size'] for r in rows)),
+        ('first', rows[0]['name'] if rows else ''),
+        ('error', error),
+    )))
+    return payload
+
+
+def atomic(path, text):
+    """The popup reads these while this runs. A rename is how it never sees
+    half a file."""
+    tmp = f'{path}.{os.getpid()}'
+    with open(tmp, 'w') as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def human(n):
+    for unit in ('B', 'kB', 'MB', 'GB'):
+        if n < 1024 or unit == 'GB':
+            return f'{n:.0f} {unit}' if unit == 'B' else f'{n:.1f} {unit}'
+        n /= 1024.0
+
+
+def main():
+    arg = sys.argv[1] if len(sys.argv) > 1 else ''
+    error = ''
+    try:
+        rows = collect()
+    except Exception as exc:
+        # A failure here is a fact about the machine, not a crash: apt is busy,
+        # or a source is broken. It goes in the file so the popup can say so
+        # rather than showing a confident zero.
+        rows, error = [], f'{type(exc).__name__}: {exc}'[:200]
+
+    if arg == '--json':
+        json.dump({'checked': int(time.time()), 'error': error,
+                   'updates': rows}, sys.stdout, indent=1)
+        print()
+        return 1 if error else 0
+
+    write(rows, error)
+    if error:
+        print(f'could not read the APT cache: {error}', file=sys.stderr)
+        return 1
+    if arg == '--print':
+        for row in rows:
+            print(f"{row['type']:<9} {row['name']:<38} {row['old'] or '—'} → "
+                  f"{row['new']}  {human(row['size'])}")
+    total = sum(r['size'] for r in rows)
+    sec = sum(1 for r in rows if r['type'] == 'security')
+    print(f'{len(rows)} updates, {human(total)}'
+          + (f', {sec} security' if sec else '')
+          + f' · {STATE}')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

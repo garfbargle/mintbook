@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+# updates-install — the software-update indicator, its popup, and the timer
+# that keeps them honest. No root. See docs/updates.md.
+#
+#   bin/updates-install            # plugin-20 on the bar, timer enabled
+#   bin/updates-install --revert   # both off; nothing installed is removed
+#
+# Nothing here touches APT, and nothing here needs a password. The privileged
+# half lives in aptkit, which the popup talks to when you press a button.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+BIN="$HOME/.local/bin"
+SHARE="$HOME/.local/share/mintbook/control-center/plugins"
+PANEL_RC="$HOME/.config/xfce4/panel"
+UNITS="$HOME/.config/systemd/user"
+STATE="$HOME/.config/mintbook"
+CONF="$STATE/updates.conf"
+SAVED="$STATE/panel-ids.before-updates"
+PLUGIN=20
+AFTER=10        # the indicator sits to the left of the CPU sparkline
+
+current_ids() {
+  xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids | grep -oE '^[0-9]+$'
+}
+
+write_ids() {
+  local args=() id
+  for id in "$@"; do args+=(-t int -s "$id"); done
+  xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids --force-array "${args[@]}"
+}
+
+if [ "${1:-}" = --revert ]; then
+  echo "==> timer"
+  systemctl --user disable --now mintbook-updates-check.timer 2>/dev/null || true
+
+  echo "==> panel"
+  ids=$(current_ids | tr '\n' ' ')
+  xfce4-panel -q 2>/dev/null || true
+  sleep 0.4
+  out=(); for id in $ids; do [ "$id" = "$PLUGIN" ] || out+=("$id"); done
+  write_ids "${out[@]}"
+  nohup xfce4-panel >/dev/null 2>&1 &
+
+  echo "==> files"
+  P=$(cat "$HOME/.cache/mintbook/updates-menu.pid" 2>/dev/null || true)
+  [ -n "$P" ] && kill "$P" 2>/dev/null || true
+  rm -f "$BIN/panel-updates" "$BIN/updates-menu" "$BIN/updates-check"
+  rm -f "$SHARE/70-updates" "$CONF"
+  rm -rf "$HOME/.local/share/mintbook/updates"
+  echo
+  echo "plugin-$PLUGIN stays registered but unused; the cached list in"
+  echo "~/.cache/mintbook/updates.json is left alone — delete it if you want it gone"
+  echo "Mint's own Update Manager was never touched: run 'mintupdate'"
+  exit 0
+fi
+
+[ -n "${DISPLAY:-}" ] || { echo "DISPLAY is unset" >&2; exit 1; }
+command -v mintupdate-cli >/dev/null \
+  || echo "note: mintupdate is not installed — bin/updates-check needs its checkAPT" >&2
+
+echo "==> $BIN"
+install -dm755 "$BIN"
+for f in panel-updates updates-menu updates-check; do
+  rm -f "$BIN/$f"                       # it may be running; replace, don't write
+  install -m755 "$ROOT/bin/$f" "$BIN/$f"
+done
+
+echo "==> icons"
+# The generator defaults to white, which is right for a dark bar and invisible
+# on a light one. bin/appearance-mode owns this file and re-runs every panel
+# generator when the appearance changes; read it here so a fresh install on a
+# light bar does not paint white-on-white until the next appearance switch.
+FG='#ffffff'
+# shellcheck disable=SC1090
+[ -r "$STATE/system-chrome.env" ] \
+  && . "$STATE/system-chrome.env" \
+  && FG=$PANEL_FOREGROUND
+MINTBOOK_PANEL_FG="$FG" python3 "$ROOT/icons/generate-updates-genmon.py"
+
+echo "==> $CONF"
+install -dm755 "$STATE"
+if [ ! -e "$CONF" ]; then
+  cat > "$CONF" <<CONFEOF
+# mintbook software updates. Read by bin/updates-menu.
+PANEL_ID=$PLUGIN   # so the popup can tell genmon to repaint after an install
+CONFEOF
+else
+  grep -q '^PANEL_ID=' "$CONF" || printf 'PANEL_ID=%s\n' "$PLUGIN" >> "$CONF"
+fi
+
+# Only if the Control Center is installed. The tile is the door that stays put
+# when the bar icon hides itself, and a plugin in a directory nothing reads is
+# just a file.
+if [ -d "$SHARE" ]; then
+  echo "==> control-center tile"
+  install -m755 "$ROOT/control-center/plugins/70-updates" "$SHARE/70-updates"
+  rm -f "$BIN/control-center"
+  install -m755 "$ROOT/bin/control-center" "$BIN/control-center"   # the box glyph
+fi
+
+echo "==> genmon-$PLUGIN.rc"
+install -dm755 "$PANEL_RC"
+sed "s|^Command=.*|Command=$BIN/panel-updates|" \
+  "$ROOT/config/xfce4-panel/genmon-$PLUGIN.rc" > "$PANEL_RC/genmon-$PLUGIN.rc"
+
+echo "==> panel"
+[ -s "$SAVED" ] || current_ids | tr '\n' ' ' > "$SAVED"
+
+# Running plugins write xfconf back on shutdown, so stop the panel first.
+ids=$(current_ids | tr '\n' ' ')
+xfce4-panel -q 2>/dev/null || true
+sleep 0.4
+xfconf-query -c xfce4-panel -p "/plugins/plugin-$PLUGIN" -n -t string -s genmon 2>/dev/null || true
+
+# Left of the readings, not right of them. The bar is packed against the right
+# edge, so an item added at the left of the group grows the group leftward and
+# nothing already on it moves. Added on the right, every appearance and
+# disappearance of this icon would have shuffled the clock.
+out=(); placed=0
+for id in $ids; do
+  [ "$id" = "$PLUGIN" ] && continue
+  out+=("$id")
+  if [ "$id" = "$AFTER" ]; then out+=("$PLUGIN"); placed=1; fi
+done
+[ "$placed" = 1 ] || out=("$PLUGIN" "${out[@]}")
+write_ids "${out[@]}"
+
+nohup xfce4-panel >/dev/null 2>&1 &
+sleep 1
+
+echo "==> timer"
+install -dm755 "$UNITS"
+install -m644 "$ROOT/config/systemd/mintbook-updates-check.service" "$UNITS/"
+install -m644 "$ROOT/config/systemd/mintbook-updates-check.timer" "$UNITS/"
+systemctl --user daemon-reload
+systemctl --user enable --now mintbook-updates-check.timer
+
+echo "==> first check"
+"$BIN/updates-check" || true
+xfce4-panel "--plugin-event=plugin-$PLUGIN:refresh:bool:true" >/dev/null 2>&1 || true
+
+echo
+echo "bar: ${out[*]}"
+echo "the icon is only there when something is waiting · the Updates tile always is"
+echo "undo: $(basename "$0") --revert"

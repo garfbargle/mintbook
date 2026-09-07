@@ -31,7 +31,16 @@ if [ -r "$STATE/battery.conf" ]; then    # `[ ] && x` would exit under set -e
   BATTERY=$(sed -n 's/^PANEL_ID=\([0-9]*\).*/\1/p' "$STATE/battery.conf" | head -1)
   [ -n "$BATTERY" ] || BATTERY=11
 fi
-VISIBLE=(1 7 8 10 19 17 18 "$BATTERY" $PLUGIN 13)
+# The software-update indicator is only on the bar once bin/updates-install
+# has run, and it hides itself when there is nothing waiting — so it is read
+# rather than hardcoded, the same way the battery is. Re-running this without
+# it would have quietly taken it back off.
+UPDATES=()
+if [ -r "$STATE/updates.conf" ]; then
+  uid=$(sed -n 's/^PANEL_ID=\([0-9]*\).*/\1/p' "$STATE/updates.conf" | head -1)
+  [ -n "$uid" ] && UPDATES=("$uid")
+fi
+VISIBLE=(1 7 8 10 "${UPDATES[@]}" 19 17 18 "$BATTERY" $PLUGIN 13)
 #  21 bluetooth  22 power profile  23 night light  24 appearance
 #  12 volume — its plugin was also the XF86Audio grab, so bin/volume-key
 #  takes that over below.
@@ -110,7 +119,7 @@ for pair in "XF86AudioRaiseVolume:up" "XF86AudioLowerVolume:down" \
 done
 
 echo
-echo "bar: app grid · systray · updates · cpu · temp · wi-fi · battery · control · clock"
+echo "bar: app grid · systray${UPDATES:+ · updates} · cpu · temp · wi-fi · battery · control · clock"
 echo "behind the click: ${RETIRED[*]} (bluetooth, power, night light, appearance, volume)"
 echo "plugins: $SHARE/plugins"
 echo "undo: $(basename "$0") --revert"

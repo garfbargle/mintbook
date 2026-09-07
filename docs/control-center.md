@@ -32,6 +32,7 @@ bin/control-install --revert # put the old indicators back
 | battery | same |
 | **Control Center** | everything else |
 | clock | |
+| software updates | *only when there is one* — see [updates.md](updates.md) |
 
 | behind the click | was |
 |---|---|
@@ -132,13 +133,14 @@ newlines or characters `key = value` would mangle.
 | `slider` | a thick pill you drag or scroll | `0`–`100` | 4 |
 | `meter` | a reading, optionally over a sparkline | never called | 2 |
 
-Nothing installed uses `meter` today — `80-cpu.disabled` and `85-temp.disabled`
-in the same directory are what it looks like when something does.
+`70-updates` is the installed example of `meter`, and `80-cpu.disabled` /
+`85-temp.disabled` in the same directory are what one looks like with a
+`graph` under it.
 
 ### Glyphs
 
 `wifi`, `bluetooth`, `moon`, `sun`, `speaker`, `display`, `cpu`,
-`thermometer`, `bolt`, `gear`, `dot`.
+`thermometer`, `bolt`, `gear`, `box`, `dot`.
 
 They are cairo paths in a unit box, not image files, so they are crisp at any
 size and take the panel's own colour in both appearances. Adding one is a
