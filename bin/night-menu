@@ -9,6 +9,19 @@ import signal
 import subprocess
 import sys
 
+# The pointer, read now rather than after the GTK import. This popup hangs off
+# the icon that was clicked, and clicking that icon is the only way to open it,
+# so the pointer at startup *is* the icon. Reading it on the far side of the
+# import read it ~590 ms later instead — long enough to aim, click, move the
+# mouse on, and watch the popup open somewhere else. Costs nothing in wall
+# time: xdotool answers inside the import, like the readings around it.
+try:
+    PTR_PROC = subprocess.Popen(['xdotool', 'getmouselocation', '--shell'],
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, text=True)
+except OSError:
+    PTR_PROC = None
+
 import gi
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, Gdk
@@ -52,10 +65,20 @@ def write_pid():
 
 
 def pointer_xy():
-    display = Gdk.Display.get_default()
-    seat = display.get_default_seat()
-    pointer = seat.get_pointer()
-    _screen, x, y = pointer.get_position()
+    """Where the pointer was when this process started, not where it is now.
+
+    Falls back to asking Gdk, which is the old behaviour — drift and all — and
+    is where this lands if xdotool is not installed.
+    """
+    if PTR_PROC is not None:
+        try:
+            out = PTR_PROC.communicate(timeout=3)[0] or ''
+            d = dict(p.split('=', 1) for p in out.split() if '=' in p)
+            return int(d['X']), int(d['Y'])
+        except Exception:
+            pass
+    _s, x, y = (Gdk.Display.get_default().get_default_seat()
+                .get_pointer().get_position())
     return int(x), int(y)
 
 
