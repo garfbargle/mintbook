@@ -35,12 +35,14 @@ quiet() { printf '<img>%s/updates-none.svg</img>\n' "$DIR"; exit 0; }
 
 # `key = value`, the same shape the Control Center plugins speak. Split on the
 # first ' = ' only: the error line is a sentence and keeps its spaces.
-count=0 security=0 kernel=0 size=0 checked=0 error=''
+count=0 security=0 kernel=0 flatpak=0 size=0 checked=0 fpchecked=0 error=''
 while read -r line; do
   case "$line" in
     'count = '*)    count=${line#count = } ;;
     'security = '*) security=${line#security = } ;;
     'kernel = '*)   kernel=${line#kernel = } ;;
+    'flatpak = '*)  flatpak=${line#flatpak = } ;;
+    'flatpak_checked = '*) fpchecked=${line#flatpak_checked = } ;;
     'size = '*)     size=${line#size = } ;;
     'checked = '*)  checked=${line#checked = } ;;
     'error = '*)    error=${line#error = } ;;
@@ -66,6 +68,7 @@ if [ "$count" = 1 ]; then head="1 update · $human"; else head="$count updates �
 parts=''
 [ "$security" -gt 0 ] && parts="$security security"
 [ "$kernel" -gt 0 ] && parts="${parts:+$parts, }$kernel kernel"
+[ "$flatpak" -gt 0 ] && parts="${parts:+$parts, }$flatpak flatpak"
 
 # The badge is for the updates you would not put off. Everything else gets the
 # plain arrow — a bar that shouts at you about a translation package is a bar
@@ -84,4 +87,13 @@ elif [ "$age" -lt 48 ]; then when="checked ${age}h ago"
 else                         when="checked $(( age / 24 )) days ago"
 fi
 
-printf '<tool>%s%s\n%s</tool>\n' "$head" "${parts:+ ($parts)}" "$when"
+# The flatpak half asks the network and the apt half does not, so the two can
+# be answered at different times. When they are far apart, say so — a count
+# that is half fresh is not a fresh count.
+fpwhen=''
+if [ "$flatpak" -gt 0 ] 2>/dev/null && [ "$fpchecked" -gt 0 ] 2>/dev/null; then
+  fpage=$(( (now - fpchecked) / 3600 ))
+  [ "$fpage" -ge 24 ] && fpwhen=" · flatpaks $(( fpage / 24 ))d ago"
+fi
+
+printf '<tool>%s%s\n%s%s</tool>\n' "$head" "${parts:+ ($parts)}" "$when" "$fpwhen"

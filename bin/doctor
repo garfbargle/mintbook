@@ -357,6 +357,26 @@ if [ -e "$HOME/.config/mintbook/updates.conf" ]; then
     else
       ok "updates state" "${UN} waiting (${USEC} security), checked ${UAGE}h ago"
     fi
+
+    # The flatpak half is answered over the network, so it can be older than
+    # the apt half beside it in the same file — or never answered at all. A
+    # count that is half fresh is not a fresh count, and the whole reason
+    # updates-check carries the old flatpak answer forward instead of writing
+    # a zero is so that this line can tell you which half is stale.
+    UFP=$(sed -n 's/^flatpak = //p' "$USTATE")
+    UFPC=$(sed -n 's/^flatpak_checked = //p' "$USTATE")
+    if ! python3 -c 'import gi; gi.require_version("Flatpak","1.0")' 2>/dev/null; then
+      warn "flatpak updates" "no gir1.2-flatpak-1.0 — flatpaks are not counted"
+    elif [ -z "${UFPC:-}" ] || [ "${UFPC:-0}" = 0 ]; then
+      warn "flatpak updates" "never checked — needs the network once"
+    else
+      UFPAGE=$(( ( $(date +%s) - UFPC ) / 3600 ))
+      if [ "$UFPAGE" -gt 48 ]; then
+        warn "flatpak updates" "${UFP:-0} waiting, but last asked ${UFPAGE}h ago — offline since?"
+      else
+        ok "flatpak updates" "${UFP:-0} waiting, asked ${UFPAGE}h ago"
+      fi
+    fi
   else
     warn "updates state" "no state file yet — the timer writes one 5 min after login"
   fi

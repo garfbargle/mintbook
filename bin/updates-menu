@@ -66,14 +66,21 @@ def read_file(path, default=''):
 
 def read_cache():
     """The list bin/updates-check left behind. Missing or unreadable is not an
-    error here — it is "we have not looked yet", and the popup says so."""
+    error here — it is "we have not looked yet", and the popup says so.
+
+    The flatpak half comes back separately because it can be older than the
+    rest: it needs the network, so it is skipped offline and carries the
+    previous answer forward. A list that is half fresh should not be presented
+    as a fresh list.
+    """
     try:
         with open(LIST) as f:
             data = json.load(f)
-        return data.get('updates', []), int(data.get('checked', 0)), \
-            data.get('error', '')
-    except (OSError, ValueError):
-        return [], 0, ''
+        return (data.get('updates', []), int(data.get('checked', 0)),
+                data.get('error', ''), int(data.get('flatpak_checked', 0) or 0),
+                data.get('flatpak_error', ''))
+    except (OSError, ValueError, TypeError):
+        return [], 0, '', 0, ''
 
 
 def conf():
@@ -218,6 +225,8 @@ def humanise(error):
         return 'Not authorised', False
     if 'Cancel' in err or 'cancel' in err:
         return 'Cancelled', False
+    if 'Operation was cancelled' in err or 'G_IO_ERROR_CANCELLED' in err:
+        return 'Cancelled', False
     if 'dpkg' in err and 'lock' in err.lower():
         return 'Something else is using apt right now', True
     err = err.split('\n')[0].strip()
@@ -225,9 +234,14 @@ def humanise(error):
 
 
 def version_line(row):
+    """`old → new` for apt. A flatpak has no knowable new version — see
+    bin/updates-check — so its row shows what is installed and where it comes
+    from, rather than an arrow pointing at a blank."""
     old, new = row.get('old', ''), row.get('new', '')
     if old and new:
         return f'{old} → {new}'
+    if row.get('type') == 'flatpak':
+        return ' · '.join(b for b in (old, row.get('origin', '')) if b)
     return new or old or ''
 
 
@@ -361,7 +375,24 @@ def box_glyph(cr, x, y, s, color, alpha=1.0):
     cr.restore()
 
 
-TYPE_GLYPH = {'security': shield_glyph, 'kernel': chip_glyph}
+def sandbox_glyph(cr, x, y, s, color, alpha=1.0):
+    """An app inside a box it cannot get out of — which is the whole of what a
+    flatpak is, and the one thing that has to distinguish it from the parcel
+    sitting next to it in the same list. Flatpak's own mark is a cube of
+    rhombi and does not survive being drawn at 22 px."""
+    cr.save()
+    cr.translate(x, y)
+    rgba(cr, color, alpha)
+    cr.set_line_width(.085 * s)
+    rrect(cr, .12 * s, .12 * s, .76 * s, .76 * s, .18 * s)
+    cr.stroke()
+    rrect(cr, .34 * s, .34 * s, .32 * s, .32 * s, .08 * s)
+    cr.fill()
+    cr.restore()
+
+
+TYPE_GLYPH = {'security': shield_glyph, 'kernel': chip_glyph,
+              'flatpak': sandbox_glyph}
 
 
 def refresh_glyph(cr, cx, cy, r, color, alpha=1.0):
@@ -759,13 +790,18 @@ class EmptyRow(Row):
 
 class NoticeRow(Row):
     """One line that is not a list and not a button: the result of the last
-    thing you pressed, or the restart a new kernel is waiting for."""
+    thing you pressed, the restart a new kernel is waiting for, or a reason
+    not to trust part of the list above it."""
     h = 42
+
+    def __init__(self, panel, notice=None):
+        super().__init__(panel)
+        self.notice = notice
 
     def draw(self, cr, w):
         p = self.panel
         self.card(cr, w, self.h)
-        colour, message = p.notice
+        colour, message = self.notice or p.notice
         rrect(cr, 15, self.h / 2 - 3.5, 7, 7, 3.5)
         rgba(cr, colour)
         cr.fill()
@@ -820,12 +856,15 @@ class Menu:
         self.trans = None
         self.trans_error = ''
         self.reboot = False
+        self.queue = []            # the backends still to run for this job
+        self.fp_cancel = None      # Gio.Cancellable, while flatpak is running
         self.grabbed = None
         self.gdk_win = None
         self.geo = None
         self.x = self.y = 0
 
-        self.updates, self.checked, self.error = read_cache()
+        (self.updates, self.checked, self.error,
+         self.fp_checked, self.fp_error) = read_cache()
 
         self.win = win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
         win.set_decorated(False)
@@ -905,8 +944,30 @@ class Menu:
             rows.append(EmptyRow(self))
         if self.notice:
             rows.append(NoticeRow(self))
+        elif self.flatpak_gripe:
+            rows.append(NoticeRow(self, self.flatpak_gripe))
         rows.append(FooterRow(self))
         return rows
+
+    @property
+    def flatpak_gripe(self):
+        """Why the flatpak half of this list might not be true, or nothing.
+
+        Only ever shown when it is actually load-bearing: an error we were
+        told about, or an answer old enough that "no flatpak updates" has
+        stopped being evidence of anything."""
+        if self.busy or self.checking:
+            return None
+        if self.fp_error:
+            return (self.colors['amber'],
+                    'Flatpaks not checked: ' + self.fp_error[:56])
+        if not self.fp_checked:
+            return (self.colors['amber'], 'Flatpaks have not been checked yet')
+        days = (int(time.time()) - self.fp_checked) // 86400
+        if days >= 2:
+            return (self.colors['amber'],
+                    f'Flatpaks last checked {days} days ago')
+        return None
 
     def rebuild(self):
         """The row set changes under the pointer — a check lands, an install
@@ -1104,7 +1165,8 @@ class Menu:
 
     def landed(self):
         self.checking = False
-        self.updates, self.checked, self.error = read_cache()
+        (self.updates, self.checked, self.error,
+         self.fp_checked, self.fp_error) = read_cache()
         # Anything this session installed is gone from the fresh list, so the
         # ticks have nothing left to sit on. Drop them rather than keep a row
         # that no longer exists.
@@ -1133,36 +1195,79 @@ class Menu:
     # ---- installing
 
     def install(self, rows):
-        """One update, or all of them.
+        """One update, or all of them, apt and flatpak together.
 
-        Two steps, and the split matters. First python-apt works out what the
-        request actually entails — that is a read of the cache this user can
-        already read, it needs no password, and it is the only way to show you
-        the removals *before* a polkit prompt rather than after. Then aptkit
-        does the privileged half: it owns the polkit action, the dpkg run and
-        the progress, and it keeps going in its own daemon even if this popup
-        dies.
+        The two backends have nothing in common and are run one after the
+        other rather than interleaved — apt first, because a kernel or a
+        library is the half that other things depend on, and because a failure
+        there is a reason not to start the second half at all. `self.queue` is
+        that running order; `next_phase()` walks it.
         """
         if self.busy or not rows:
             return
+        apt_rows = [r for r in rows if r['type'] != 'flatpak']
+        fp_rows = [r for r in rows if r['type'] == 'flatpak']
+
+        self.queue = []
+        if apt_rows:
+            self.queue.append(('apt', apt_rows))
+        if fp_rows:
+            self.queue.append(('flatpak', fp_rows))
+        if not self.queue:
+            return
+
+        self.busy = True
+        self.cancellable = False
+        # Everything selected spins, not just the phase in flight. They are all
+        # queued, and a row that sits inert for two minutes while apt works
+        # looks like a row that was ignored.
+        self.working = {r['name'] for r in rows}
+        self.reboot = any(r['type'] == 'kernel' for r in rows)
+        self.status = 'Preparing…'
+        self.detail = ''
+        self.progress = None
+        self.notice = None
+        self.rebuild()
+        self.tick_spinner()
+        self.next_phase()
+
+    def next_phase(self):
+        """The next backend in the queue, or the end of the job."""
+        if not self.queue:
+            done = len(self.working)
+            message = ('Installed 1 update' if done == 1
+                       else f'Installed {done} updates')
+            colour = self.colors['green']
+            if self.reboot:
+                message += ' · restart to finish the kernel'
+                colour = self.colors['amber']
+            self.installed |= self.working
+            self.finish(message, colour)
+            self.run_check()
+            return False
+        kind, rows = self.queue.pop(0)
+        (self.start_apt if kind == 'apt' else self.start_flatpak)(rows)
+        return False
+
+    def start_apt(self, rows):
+        """apt, in two steps, and the split matters. First python-apt works out
+        what the request actually entails — a read of the cache this user can
+        already read, needing no password, and the only way to show the
+        removals *before* a polkit prompt rather than after. Then aptkit does
+        the privileged half: it owns the polkit action, the dpkg run and the
+        progress, and it keeps going in its own daemon even if this popup
+        dies."""
         names = []
         for row in rows:
             for name in row['packages']:
                 if name not in names:
                     names.append(name)
         if not names:
+            self.next_phase()
             return
-
-        self.busy = True
-        self.cancellable = False
-        self.working = {r['name'] for r in rows}
-        self.reboot = any(r['type'] == 'kernel' for r in rows)
         self.status = 'Working out what that needs…'
-        self.detail = ''
         self.progress = None
-        self.notice = None
         self.rebuild()
-        self.tick_spinner()
 
         def work():
             GLib.idle_add(self.resolved, *resolve(names))
@@ -1234,7 +1339,138 @@ class Menu:
         # of run() instead of reaching the handler.
         trans.run(reply_handler=lambda: None, error_handler=self.on_apt_error)
 
+    # ---- flatpak
+
+    def start_flatpak(self, rows):
+        """Flatpak's own Transaction, in a thread.
+
+        Nothing here is aptkit and nothing here is apt. A user-scope update
+        needs no password at all — the files belong to this user — so the
+        common case on this machine is a progress bar and no prompt. A
+        system-scope one goes through flatpak's own polkit action, which is
+        why the seat is dropped for this phase too even though most of the
+        time nothing asks for it.
+
+        Transaction.run() blocks until the whole thing is done, so it runs off
+        the main loop and every signal it raises is marshalled back with
+        GLib.idle_add. A Gio.Cancellable is what the Cancel button holds.
+        """
+        self.status = 'Preparing…'
+        self.detail = ''
+        self.progress = None
+        self.grab(False)
+        self.rebuild()
+
+        try:
+            import gi
+            gi.require_version('Flatpak', '1.0')
+            from gi.repository import Flatpak, Gio
+        except Exception as exc:
+            self.queue = []
+            self.finish(f'No flatpak support: {exc}'[:90], self.colors['red'])
+            return
+
+        # One transaction per installation. A user ref and a system ref cannot
+        # share one, and mixing them would also mix one prompt with none.
+        groups = {}
+        for row in rows:
+            info = row.get('flatpak') or {}
+            groups.setdefault(info.get('scope', 'user'), []).append(
+                info.get('ref', ''))
+
+        self.fp_cancel = Gio.Cancellable()
+        cancel = self.fp_cancel
+
+        def work():
+            # No `failures = []` here: on_operation_error appends to the list
+            # below from a signal, and a local one would shadow it so every
+            # per-operation failure vanished and the job reported success.
+            for scope, refs in groups.items():
+                if cancel.is_cancelled():
+                    break
+                try:
+                    inst = (Flatpak.Installation.new_user() if scope == 'user'
+                            else Flatpak.Installation.new_system())
+                    trans = Flatpak.Transaction.new_for_installation(inst, cancel)
+                except Exception as exc:
+                    failures.append(f'{scope}: {exc}')
+                    continue
+                trans.connect('new-operation', on_operation)
+                trans.connect('operation-error', on_operation_error)
+                added = 0
+                for ref in refs:
+                    if not ref:
+                        continue
+                    try:
+                        trans.add_update(ref, None, None)
+                        added += 1
+                    except Exception as exc:
+                        failures.append(f'{ref}: {exc}')
+                if not added:
+                    continue
+                try:
+                    trans.run(cancel)
+                except Exception as exc:
+                    # A cancel comes back as an exception too. It is an answer,
+                    # not a fault, and humanise() is what knows the difference.
+                    failures.append(str(exc))
+            GLib.idle_add(self.flatpaks_done, failures,
+                          bool(cancel.is_cancelled()))
+
+        def on_operation(_trans, operation, progress):
+            ref = operation.get_ref() or ''
+            GLib.idle_add(self.fp_status, ref.split('/')[1] if '/' in ref else ref)
+            progress.connect('changed', on_progress, progress)
+
+        def on_progress(_p, progress):
+            GLib.idle_add(self.fp_progress, progress.get_progress(),
+                          progress.get_status() or '')
+
+        def on_operation_error(_trans, operation, error, _details):
+            ref = operation.get_ref() or ''
+            failures.append(f'{ref}: {error.message}')
+            return True             # keep going; the rest may still be fine
+
+        failures = []
+        threading.Thread(target=work, daemon=True).start()
+
+    def fp_status(self, name):
+        self.status = f'Updating {name}…' if name else 'Updating…'
+        self.progress = None
+        self.area.queue_draw()
+        return False
+
+    def fp_progress(self, value, detail):
+        self.progress = value
+        self.detail = detail
+        self.cancellable = True
+        self.area.queue_draw()
+        return False
+
+    def flatpaks_done(self, failures, cancelled):
+        self.cancellable = False
+        if cancelled:
+            self.queue = []
+            self.finish('Cancelled', self.colors['fg'])
+            self.run_check()
+            return False
+        if failures:
+            self.queue = []
+            message, bad = humanise(failures[0])
+            self.finish(message, self.colors['red'] if bad else self.colors['fg'])
+            self.run_check()
+            return False
+        self.next_phase()
+        return False
+
     def cancel(self):
+        cancellable = getattr(self, 'fp_cancel', None)
+        if cancellable is not None and not cancellable.is_cancelled():
+            try:
+                cancellable.cancel()
+                return
+            except Exception:
+                pass
         try:
             self.trans.cancel()
         except Exception:
@@ -1287,23 +1523,17 @@ class Menu:
 
     def on_finished(self, _t, exit_state):
         if exit_state == 'exit-success':
-            self.installed |= self.working
-            done = len(self.working)
-            message = ('Installed 1 update' if done == 1
-                       else f'Installed {done} updates')
-            colour = self.colors['green']
-            if self.reboot:
-                message += ' · restart to finish the kernel'
-                colour = self.colors['amber']
-            self.finish(message, colour)
-        elif exit_state == 'exit-cancelled':
+            self.next_phase()       # the flatpaks, if there are any, or done
+            return
+        if exit_state == 'exit-cancelled':
+            self.queue = []
             self.finish('Cancelled', self.colors['fg'])
             return                # nothing ran, so nothing on disk changed
-        else:
-            message, bad = humanise(self.trans_error)
-            self.finish(message, self.colors['red'] if bad else self.colors['fg'])
-            if not bad:
-                return            # a refused password installed nothing
+        self.queue = []           # apt failed; do not go on to the flatpaks
+        message, bad = humanise(self.trans_error)
+        self.finish(message, self.colors['red'] if bad else self.colors['fg'])
+        if not bad:
+            return                # a refused password installed nothing
         # dpkg either finished or stopped part way. Either way the list on
         # disk is now a guess, so ask again rather than keep showing it.
         self.run_check()
@@ -1311,6 +1541,7 @@ class Menu:
     def finish(self, message, colour):
         self.busy = False
         self.cancellable = False
+        self.fp_cancel = None
         self.working = set()
         self.progress = None
         self.status = self.detail = ''

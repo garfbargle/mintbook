@@ -9,12 +9,13 @@ STATE="$HOME/.cache/mintbook/updates.state"
 MENU="$HOME/.local/bin/updates-menu"
 [ -x "$MENU" ] || MENU=mintupdate
 
-count=0 security=0 kernel=0 checked=0 error=''
+count=0 security=0 kernel=0 flatpak=0 checked=0 error=''
 while read -r line; do
   case "$line" in
     'count = '*)    count=${line#count = } ;;
     'security = '*) security=${line#security = } ;;
     'kernel = '*)   kernel=${line#kernel = } ;;
+    'flatpak = '*)  flatpak=${line#flatpak = } ;;
     'checked = '*)  checked=${line#checked = } ;;
     'error = '*)    error=${line#error = } ;;
   esac
@@ -28,6 +29,7 @@ elif [ "$count" -gt 0 ] 2>/dev/null; then
   parts=''
   [ "$security" -gt 0 ] && parts="$security security"
   [ "$kernel" -gt 0 ] && parts="${parts:+$parts, }$kernel kernel"
+  [ "$flatpak" -gt 0 ] && parts="${parts:+$parts, }$flatpak flatpak"
   sub=${parts:-Ready to install}
 elif [ "$checked" -gt 0 ] 2>/dev/null; then
   printf -v now '%(%s)T' -1

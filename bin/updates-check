@@ -1,11 +1,21 @@
 #!/usr/bin/env python3
-"""updates-check — what apt has waiting, written down for the bar and the popup.
+"""updates-check — what is waiting, written down for the bar and the popup.
 
-Read-only. No root, no network: this walks the APT cache that is already on
-disk and never fetches package lists. Refreshing the lists is a separate,
-privileged thing and belongs to whoever asked for it — bin/updates-menu does
-it through aptkit, whose update-cache action is `allow_active=yes` and so
-needs no password.
+Read-only, and no root. Two halves that behave differently and are kept apart
+on purpose:
+
+  **apt** is local. It walks the package cache already on disk and never
+  fetches anything. Refreshing the lists is a separate, privileged thing and
+  belongs to whoever asked for it — bin/updates-menu does it through aptkit,
+  whose update-cache action is `allow_active=yes` and so needs no password.
+
+  **flatpak** is not local. There is no cached "what is new" to read: asking
+  means asking flathub, which is a network round trip of about two and a half
+  seconds. So it is skipped when NetworkManager says there is no route out,
+  and — this is the part that matters — a skipped or failed flatpak check
+  *keeps the previous answer and the previous timestamp* rather than reporting
+  a confident zero. An empty list because we could not look is not the same
+  fact as an empty list because there is nothing there.
 
 The work is Linux Mint's own: `checkAPT.APTCheck`, the same class behind
 `mintupdate-cli list` and the Update Manager window, so a package is grouped,
@@ -14,7 +24,8 @@ name, type and describe it. Reimplementing that against python-apt would have
 been a second opinion about what an update *is*, and two opinions on the bar
 is one too many.
 
-It costs about 2.5 s of CPU, which is why nothing polls it:
+It costs about 2.5 s of CPU for apt and about 2.5 s of waiting for flatpak,
+which is why nothing polls it:
 
     bin/panel-updates      reads the state file below, and nothing else
     control-center 70-updates    the same file
@@ -28,11 +39,12 @@ Two files come out, in ~/.cache/mintbook:
 
 Both are written atomically, because the popup reads them without a lock.
 
-    bin/updates-check           write both, print a summary line
-    bin/updates-check --print   write both, then print the list
-    bin/updates-check --json    write nothing, print the JSON
+    bin/updates-check            write both, print a summary line
+    bin/updates-check --print    write both, then print the list
+    bin/updates-check --json     write nothing, print the JSON
+    bin/updates-check --no-net   apt only; leave the flatpak answer alone
 
-Known gap: apt only. Flatpak updates are not counted — see docs/updates.md.
+See docs/updates.md.
 """
 import json
 import os
@@ -44,6 +56,11 @@ CACHE = os.path.expanduser('~/.cache/mintbook')
 STATE = f'{CACHE}/updates.state'
 LIST = f'{CACHE}/updates.json'
 BLACKLIST = '/etc/mintupdate.blacklist'
+
+# Past this, sizes stop being fetched and the remaining flatpak rows report 0.
+# Each fetch_remote_ref_sync() is a round trip of roughly half a second, and a
+# check that takes half a minute to tell you a size is not worth the size.
+SIZE_BUDGET = 6.0
 
 
 def blacklisted():
@@ -70,6 +87,115 @@ def ignored(patterns, source_name, version):
             return True
     return False
 
+
+# ------------------------------------------------------------------- flatpak
+
+def online():
+    """NetworkManager's cached answer, not a probe. The *property* costs 15 ms;
+    CheckConnectivity() goes and asks the network. bin/panel-wifi reads the
+    same one for the same reason — see docs/desktop.md.
+
+    4 is full, 2 is a captive portal, 3 is limited, 1 is none. Anything that is
+    not a clear "no" is treated as a yes: being wrong the optimistic way costs
+    a timeout, being wrong the other way silently reports no flatpak updates.
+    """
+    import subprocess
+    try:
+        out = subprocess.run(
+            ['busctl', '--system', 'get-property',
+             'org.freedesktop.NetworkManager',
+             '/org/freedesktop/NetworkManager',
+             'org.freedesktop.NetworkManager', 'Connectivity'],
+            capture_output=True, text=True, timeout=5).stdout
+    except Exception:
+        return True                  # no NetworkManager to ask; try anyway
+    return out.strip().split()[-1] != '1' if out.strip() else True
+
+
+def installations():
+    import gi
+    gi.require_version('Flatpak', '1.0')
+    from gi.repository import Flatpak
+    out = []
+    for scope, make in (('user', Flatpak.Installation.new_user),
+                        ('system', Flatpak.Installation.new_system)):
+        try:
+            out.append((scope, make()))
+        except Exception:
+            pass                      # a scope that does not exist is not news
+    return out
+
+
+def flatpaks():
+    """What flathub has that this machine does not.
+
+    `list_installed_refs_for_update()` is the same question `flatpak update`
+    asks, and it is a network call — about 2.5 s against flathub. Sizes are a
+    second round trip each, so they run against a budget and the rows past it
+    honestly report 0 rather than making the check take a minute.
+
+    Apps get their appdata name; runtimes and extensions keep their ref name,
+    because that is what `flatpak update` calls them and inventing a friendlier
+    label for `org.freedesktop.Platform.GL.default` would only make it harder
+    to match up the two.
+    """
+    import gi
+    gi.require_version('Flatpak', '1.0')
+    from gi.repository import Flatpak
+
+    rows = []
+    start = time.monotonic()
+    for scope, inst in installations():
+        for ref in inst.list_installed_refs_for_update(None):
+            app = ref.get_kind() == Flatpak.RefKind.APP
+            size = 0
+            if time.monotonic() - start < SIZE_BUDGET:
+                try:
+                    remote = inst.fetch_remote_ref_sync(
+                        ref.get_origin(), ref.get_kind(), ref.get_name(),
+                        ref.get_arch(), ref.get_branch(), None)
+                    size = int(remote.get_download_size() or 0)
+                except Exception:
+                    size = 0
+            rows.append({
+                'name': (ref.get_appdata_name() if app else ref.get_name())
+                        or ref.get_name(),
+                'source': ref.get_name(),
+                # There is no "new version" here. A FlatpakRemoteRef carries a
+                # commit and two sizes, not appdata, so the version on the far
+                # side is not knowable without pulling and parsing the remote's
+                # appstream. The row shows what you have and leaves it there
+                # rather than printing a guess with an arrow in front of it.
+                'old': ref.get_appdata_version() or '',
+                'new': '',
+                'size': size,
+                'type': 'flatpak',
+                'origin': f"{ref.get_origin()} · {scope}"
+                          + ('' if app else ' · runtime'),
+                'summary': (ref.get_appdata_summary() or '').strip(),
+                # Everything the installer needs to find this again, without
+                # having to guess a scope or re-derive an arch.
+                'flatpak': {'scope': scope, 'ref': ref.format_ref(),
+                            'app': app},
+                'packages': [],
+            })
+    rows.sort(key=lambda r: (not r['flatpak']['app'], r['name'].lower()))
+    return rows
+
+
+def previous():
+    """The last answer on disk, for carrying a flatpak result forward when we
+    could not go and get a new one."""
+    try:
+        with open(LIST) as f:
+            data = json.load(f)
+        return ([r for r in data.get('updates', []) if r.get('type') == 'flatpak'],
+                int(data.get('flatpak_checked', 0) or 0))
+    except (OSError, ValueError, TypeError):
+        return [], 0
+
+
+# ----------------------------------------------------------------------- apt
 
 def collect():
     """The updates, as plain dicts. Raises whatever APTCheck raises."""
@@ -107,18 +233,27 @@ def collect():
     return rows
 
 
-def write(rows, error=''):
+def write(rows, error='', fp_checked=0, fp_error=''):
     os.makedirs(CACHE, exist_ok=True)
-    payload = {'checked': int(time.time()), 'error': error, 'updates': rows}
+    now = int(time.time())
+    payload = {'checked': now, 'error': error,
+               'flatpak_checked': fp_checked, 'flatpak_error': fp_error,
+               'updates': rows}
     atomic(LIST, json.dumps(payload, indent=1))
     # The state file exists so that the two readers on the hot path — a genmon
     # tick and a Control Center plugin, both bash — never have to parse JSON.
     # Same `key = value` shape the Control Center plugins already speak.
+    #
+    # `count` is everything, apt and flatpak together, because that is the
+    # number the bar is answering: how many things are waiting to be installed.
+    # `flatpak` is broken out beside it so the tile can say so without JSON.
     atomic(STATE, ''.join(f'{k} = {v}\n' for k, v in (
-        ('checked', payload['checked']),
+        ('checked', now),
         ('count', len(rows)),
         ('security', sum(1 for r in rows if r['type'] == 'security')),
         ('kernel', sum(1 for r in rows if r['type'] == 'kernel')),
+        ('flatpak', sum(1 for r in rows if r['type'] == 'flatpak')),
+        ('flatpak_checked', fp_checked),
         ('size', sum(r['size'] for r in rows)),
         ('first', rows[0]['name'] if rows else ''),
         ('error', error),
@@ -143,7 +278,7 @@ def human(n):
 
 
 def main():
-    arg = sys.argv[1] if len(sys.argv) > 1 else ''
+    args = sys.argv[1:]
     error = ''
     try:
         rows = collect()
@@ -153,24 +288,49 @@ def main():
         # rather than showing a confident zero.
         rows, error = [], f'{type(exc).__name__}: {exc}'[:200]
 
-    if arg == '--json':
+    # The flatpak half. Every way of not getting a fresh answer ends in the
+    # same place: keep the last one, keep its timestamp, and say why. The one
+    # thing that must never happen is an empty list dated now.
+    fp_rows, fp_checked = previous()
+    fp_error = ''
+    if '--no-net' in args:
+        fp_error = 'skipped (--no-net)'
+    elif not online():
+        fp_error = 'skipped, no route to the network'
+    else:
+        try:
+            fp_rows, fp_checked, fp_error = flatpaks(), int(time.time()), ''
+        except Exception as exc:
+            fp_error = f'{type(exc).__name__}: {exc}'[:200]
+    rows = rows + fp_rows
+
+    if '--json' in args:
         json.dump({'checked': int(time.time()), 'error': error,
+                   'flatpak_checked': fp_checked, 'flatpak_error': fp_error,
                    'updates': rows}, sys.stdout, indent=1)
         print()
         return 1 if error else 0
 
-    write(rows, error)
+    write(rows, error, fp_checked, fp_error)
     if error:
         print(f'could not read the APT cache: {error}', file=sys.stderr)
         return 1
-    if arg == '--print':
+    if fp_error:
+        print(f'flatpak: {fp_error} — kept the answer from '
+              + (time.strftime('%H:%M', time.localtime(fp_checked)) if fp_checked
+                 else 'nowhere, there is none yet'), file=sys.stderr)
+    if '--print' in args:
         for row in rows:
-            print(f"{row['type']:<9} {row['name']:<38} {row['old'] or '—'} → "
-                  f"{row['new']}  {human(row['size'])}")
+            arrow = f"{row['old'] or '—'} → {row['new']}" if row['new'] else \
+                    (row['old'] or row['origin'])
+            print(f"{row['type']:<9} {row['name']:<38} {arrow}  "
+                  f"{human(row['size'])}")
     total = sum(r['size'] for r in rows)
     sec = sum(1 for r in rows if r['type'] == 'security')
+    fpn = sum(1 for r in rows if r['type'] == 'flatpak')
     print(f'{len(rows)} updates, {human(total)}'
           + (f', {sec} security' if sec else '')
+          + (f', {fpn} flatpak' if fpn else '')
           + f' · {STATE}')
     return 0
 

@@ -33,8 +33,8 @@ executables in a directory. Adding a tile is a twelve-line file.
 Cmd+Shift+3 takes a screenshot. On battery it stays cool. Plug in, and it opens up.
 
 When something needs updating, an arrow appears at the left of the indicators
-and a Software Update panel installs them one at a time or all at once. When
-nothing does, the arrow is not there.
+and a Software Update panel installs them one at a time or all at once — apt
+and Flatpak in the same list. When nothing does, the arrow is not there.
 
 <p align="center">
   <img src="docs/images/updates.jpg" alt="Software Update" width="440">

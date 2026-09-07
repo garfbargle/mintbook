@@ -27,18 +27,20 @@ live: update history, the kernel list, sources, automation, the blacklist.
 
 | | what it is | what it costs |
 |---|---|---|
-| [`bin/updates-check`](../bin/updates-check) | reads the APT cache, writes two files | **2.5 s of CPU** |
+| [`bin/updates-check`](../bin/updates-check) | reads the APT cache, asks flathub, writes two files | **2.5 s of CPU + ~2.5 s of network** |
 | [`bin/panel-updates`](../bin/panel-updates) | the bar icon; reads one of those files | **6 ms**, every 5 min |
 | [`bin/updates-menu`](../bin/updates-menu) | the glass popup | 300 ms to open |
 | `mintbook-updates-check.timer` | runs the check 5 min after login, then every 6 h | |
 
 The whole design is that ratio. Working out what apt has waiting means loading
 the package cache and running a dist-upgrade resolution, which is two and a
-half seconds of a fanless Core M — about four hundred times what a bar
-indicator can spend. So the indicator never asks. It reads
+half seconds of a fanless Core M; asking flathub what is new is another two
+and a half seconds of waiting on a network. Together that is roughly a
+thousand times what a bar indicator can spend. So the indicator never asks. It
+reads
 
 ```
-~/.cache/mintbook/updates.state     count = 4, security = 1, size = 82190144, …
+~/.cache/mintbook/updates.state     count = 4, security = 1, flatpak = 2, …
 ~/.cache/mintbook/updates.json      the list, for the popup
 ```
 
@@ -62,6 +64,45 @@ an update ignored there is ignored here too.
 
 Writing that against python-apt directly would have been a second opinion about
 what an update is, and two opinions on one bar is one too many.
+
+### apt is local; flatpak is not
+
+The two halves of `updates-check` behave differently on purpose, and the
+difference is the only interesting thing about the flatpak support.
+
+**apt** never touches the network. Everything it needs is the package cache
+already on disk, so it is the same answer whether you are on wifi, tethered or
+on a train.
+
+**flatpak** has no such cache. `list_installed_refs_for_update()` — the same
+question `flatpak update` asks — is a round trip to flathub. So:
+
+- it is skipped when NetworkManager's cached `Connectivity` property says
+  there is no route out. That property costs 15 ms; `CheckConnectivity()` goes
+  and asks the network, and is not used here for the same reason
+  [`bin/panel-wifi`](../bin/panel-wifi) does not use it.
+- **a skipped or failed flatpak check keeps the previous answer and the
+  previous timestamp.** It does not write a zero. An empty list because we
+  could not look is not the same fact as an empty list because there is
+  nothing there, and the one thing this indicator must never do is report the
+  first as the second.
+- `updates.json` therefore carries `flatpak_checked` and `flatpak_error`
+  alongside `checked` and `error`, and the popup shows an amber line when the
+  flatpak half is stale, errored, or has never run. `bin/doctor` says the same
+  thing in words.
+- `bin/updates-check --no-net` forces the skip, for when you want the apt
+  answer and nothing else.
+
+Sizes are a second round trip each — about half a second per ref — so they run
+against a six-second budget and any rows past it honestly report `0` rather
+than making the whole check take a minute.
+
+**A flatpak row has no "new version".** A `FlatpakRemoteRef` carries a commit
+and two sizes, not appdata, so the version on the far side is not knowable
+without pulling and parsing the remote's appstream. The row shows what you
+have and where it comes from — `1.2.0 · flathub · user` — rather than an arrow
+pointing at a blank. Apps get their appdata name; runtimes and extensions keep
+their ref name, because that is what `flatpak update` calls them.
 
 ---
 
@@ -114,6 +155,23 @@ hiding the bar icon is not a trap.
 - **Update Manager…** — Mint's window, for everything else.
 
 Six rows fit; a longer list scrolls under the pointer and says `1–6 of 9`.
+
+### Two backends, one after the other
+
+A selection can contain both kinds. `install()` splits it and runs **apt
+first, then flatpak** — a kernel or a library is the half other things depend
+on, and a failure there is a reason not to start the second half at all.
+`self.queue` is that running order and `next_phase()` walks it. Every selected
+row spins for the whole job rather than only during its own phase: they are
+all queued, and a row sitting inert for two minutes while apt works looks like
+a row that was ignored.
+
+Flatpak updates go through Flatpak's own `Transaction`, in a thread, with
+progress marshalled back through `GLib.idle_add` and a `Gio.Cancellable`
+behind the Cancel button. **A user-scope flatpak update needs no password at
+all** — the files belong to you — so on this machine, where both apps are user
+installs, that phase is a progress bar and no prompt. A system-scope one goes
+through flatpak's own polkit action.
 
 ### The privileged half is aptkit, not us
 
@@ -195,16 +253,28 @@ and it warns past 18 hours, which is three missed runs of a 6-hour timer. The
 popup's header carries the same fact in words — *checked 2 hours ago* — every
 time you open it.
 
+The flatpak half gets its own line, because it can be stale on its own:
+
+```
+  ok    flatpak updates  0 waiting, asked 1h ago
+  warn  flatpak updates  2 waiting, but last asked 73h ago — offline since?
+```
+
+A machine that has been off the network for three days has a perfectly fresh
+apt answer and a three-day-old flatpak answer sitting in the same file, and
+the bar's tooltip appends `· flatpaks 3d ago` once the two are more than a day
+apart. That is the whole reason the carry-forward exists.
+
 ---
 
 ## What this does not do
 
-- **Flatpaks.** The Update Manager counts them; this does not. Two flatpak apps
-  are installed on this machine and neither has ever needed an update badge, so
-  the cost of a second backend with its own refs, its own resolution and its own
-  progress model was not worth paying yet. `flatpak update` and the Update
-  Manager both still work. **The count in the popup is an apt count, and the
-  doc says so rather than the popup implying otherwise.**
+- **Tell you a flatpak's new version number.** It shows the one you have. See
+  above for why the other one is not cheaply knowable.
+- **Group a flatpak's runtimes under the app that needs them.** The Update
+  Manager does; here `org.freedesktop.Platform.GL.default` gets its own row,
+  the way `flatpak update` lists it. Honest, and one less thing to be wrong
+  about.
 - **Cinnamon spices.** Not applicable — this is XFCE.
 - **Automatic installs.** Nothing here installs anything you did not press a
   button for. Mint's `mintupdate-automation` is untouched and, if you want it,
@@ -228,9 +298,11 @@ bar by a factor of ten, and it stays that way because it never grows a second
 job. Compare `panel-cpu` at 46.7 ms every 2 s (2.34%) and `panel-wifi` at
 29.7 ms every 5 s (0.59%); see [control-center.md](control-center.md).
 
-`bin/updates-check`, the expensive half, on a busy machine: **2.5–3.0 s**
-across the runs measured here, of which nearly all is `apt.Cache()` and the
-dist-upgrade resolution. Four runs a day is about 11 seconds of CPU a day.
+`bin/updates-check`, the expensive half, on a busy machine: **2.5–3.0 s** for
+apt across the runs measured here, of which nearly all is `apt.Cache()` and
+the dist-upgrade resolution, plus **~2.5 s** of waiting on flathub for the
+flatpak half — waiting, not CPU. Four runs a day is about 11 seconds of CPU
+and four network round trips.
 
 Opening the popup: the cached list is drawn immediately and the re-check runs
 behind it, the same way `bin/wifi-menu` shows the cached scan and rescans
@@ -267,6 +339,12 @@ in the first place — `mintupdate` still opens the window it always did.
   The fix is `updates-none.svg`, one transparent pixel, 34 high. Not zero-width:
   a zero-width SVG is not guaranteed to load, and a loader that refuses it puts
   us straight back to stdout on the bar.
+- **A local `failures = []` inside the worker silently ate every flatpak
+  error.** `operation-error` is a signal: it fires on the transaction and
+  appends to the closure's list, while the thread function had declared a list
+  of its own with the same name. The result was a job that reported success no
+  matter what went wrong inside it. Caught by reading it back rather than by
+  running it, because there is nothing on this machine to fail yet.
 - **`trans.run(error_handler=…)` alone raises.** aptkit's `MissingReplyHandlerException`
   says *"if you define an error_handler you must also define a reply_handler"* —
   and it comes out of `run()` rather than reaching the handler you did give it,
