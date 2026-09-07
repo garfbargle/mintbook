@@ -23,7 +23,7 @@ No Apple logo. No blur. A 52px glass bar, a dock, and Cmd+Space.
 </p>
 
 The bar keeps what you read — CPU, temperature, Wi-Fi, battery, the clock.
-Everything you *set* is one click away, in a Control Center that is nine small
+Everything you *set* is one click away, in a Control Center that is seven small
 executables in a directory. Adding a tile is a twelve-line file.
 
 <p align="center">

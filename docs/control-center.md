@@ -41,10 +41,15 @@ bin/control-install --revert # put the old indicators back
 | Appearance | `plugin-24` genmon |
 | Night Light | `plugin-23` genmon |
 | Power profile | `plugin-22` genmon, and `bin/power-menu`'s popup |
-| CPU, temperature | these stayed on the bar too; the tiles read the same state |
 
 The rule the split follows: **a reading stays, a switch moves.** You do not
 click a temperature.
+
+CPU and temperature had tiles for about an hour and then lost them. They were
+the same numbers the bar already shows, one click further away — the panel is
+where you go to *change* something. Both plugins are still in the directory as
+`80-cpu.disabled` and `85-temp.disabled`: they are the working examples of the
+`meter` kind and the `graph` field, and `mv` puts either one back.
 
 > `bin/power-menu` and `bin/night-menu` still work and are still installed —
 > nothing calls them now. They are the pointer-anchored popups the genmon
@@ -62,7 +67,9 @@ Every tile in that screenshot is a separate executable in
 
 installed from [`control-center/plugins/`](../control-center/plugins). They are
 run in filename order, so the leading number is the position. `bin/control-center`
-does not know what Wi-Fi is; it runs whatever is in that directory.
+does not know what Wi-Fi is; it runs whatever is in that directory — anything
+executable that is not named `*.md` or `*.disabled`. Renaming a plugin to
+`60-power.disabled` takes it out of the panel without deleting it.
 
 A plugin answers two verbs:
 
@@ -125,6 +132,9 @@ newlines or characters `key = value` would mangle.
 | `slider` | a thick pill you drag or scroll | `0`–`100` | 4 |
 | `meter` | a reading, optionally over a sparkline | never called | 2 |
 
+Nothing installed uses `meter` today — `80-cpu.disabled` and `85-temp.disabled`
+in the same directory are what it looks like when something does.
+
 ### Glyphs
 
 `wifi`, `bluetooth`, `moon`, `sun`, `speaker`, `display`, `cpu`,
@@ -145,7 +155,10 @@ function of about six lines in `bin/control-center` and a line in `GLYPHS`.
 - **`skip = on` when the hardware is missing.** `20-bluetooth` does this when
   the SSDC regression has eaten `hci0` — see [bluetooth.md](bluetooth.md).
 - **Report the truth, not the request.** Every plugin here reads the state back
-  from the system rather than from whatever it last wrote.
+  from the system rather than from whatever it last wrote. This is why the
+  Power tile appears to change on its own: [`bin/turbo-budget`](../bin/turbo-budget)
+  moves the profile between `power-saver` and `balanced` as it grants and
+  revokes bursts, and the tile shows whichever is live at that moment.
 
 ---
 
@@ -200,17 +213,22 @@ starting up.
 **Opening the panel**, `MINTBOOK_CC_TIME=1` on the same busy machine:
 
 ```
-9 tiles: 287 ms to import and read, 444 ms to on screen
+7 tiles: 304 ms to import and read, 548 ms to on screen
 ```
 
-Nine plugins read sequentially would be 297 ms and the GTK import 224 ms.
-They overlap instead: the plugins are launched as subprocesses on the first
-line of the file, *before* `import gi`, and collected after. That is worth
-about 150 ms of the click.
+Read one after another the plugins are about 230 ms and the GTK import about
+224 ms. They overlap instead: the plugins are launched as subprocesses on the
+first line of the file, *before* `import gi`, and collected after.
 
-While the panel is open, the two `live` tiles cost 82 ms every 2 s. While it is
-closed it costs nothing at all — which is the whole argument for a panel over
-a bar full of indicators.
+Dropping the CPU and temperature tiles did **not** make it open faster — nine
+tiles measured 287 ms on the same machine and seven measure 304. That is the
+point of the overlap: the reads finish inside the import, so the import is the
+floor and the plugin count barely shows. Run-to-run variance from load is
+larger than the difference.
+
+Nothing installed asks to be `live` any more, so an open panel now costs
+nothing until you touch it. A closed one costs nothing at all — which is the
+whole argument for a panel over a bar full of indicators.
 
 ---
 
