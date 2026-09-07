@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Output volume, through PipeWire's default sink. Dragging to 0 does not mute
+# the sink — mute is its own state, and unmuting is what the icon click is for.
+case "${1:-read}" in
+  set) wpctl set-mute @DEFAULT_AUDIO_SINK@ 0 >/dev/null 2>&1
+       wpctl set-volume @DEFAULT_AUDIO_SINK@ "${2:-0}%" >/dev/null 2>&1
+       exit 0 ;;
+esac
+
+read -r _ vol muted <<< "$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null)"
+pct=$(awk -v v="${vol:-0}" 'BEGIN { printf "%d", v * 100 + 0.5 }')
+sink=$(wpctl inspect @DEFAULT_AUDIO_SINK@ 2>/dev/null \
+        | awk -F'"' '/node.description/ { print $2; exit }')
+[ "$muted" = '[MUTED]' ] && sub='Muted' || sub=${sink:-$pct%}
+cat <<EOF
+kind = slider
+glyph = speaker
+title = Sound
+value = $pct
+subtitle = $sub
+EOF

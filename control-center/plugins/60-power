@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Power profile. Writes the request file a root path unit watches, which is
+# what keeps this password-free; a genmon-spawned pkexec still prompted.
+# See docs/hardware.md for why Sustained caps at 75% rather than 100%.
+WANT=/run/mintbook-power/want
+case "${1:-read}" in
+  set)
+    tmp=$(mktemp "$(dirname "$WANT")/want.XXXXXX" 2>/dev/null) || exit 0
+    printf '%s\n' "${2:-balanced}" > "$tmp" && mv -f "$tmp" "$WANT"
+    for _ in $(seq 20); do
+      sleep 0.1
+      [ "$(busctl --system get-property net.hadess.PowerProfiles \
+            /net/hadess/PowerProfiles net.hadess.PowerProfiles ActiveProfile \
+            2>/dev/null)" = "s \"${2}\"" ] && break
+    done
+    exit 0 ;;
+esac
+
+p=$(busctl --system get-property net.hadess.PowerProfiles \
+      /net/hadess/PowerProfiles net.hadess.PowerProfiles ActiveProfile 2>/dev/null)
+p=${p#s \"}; p=${p%\"}
+case "$p" in power-saver|performance) ;; *) p=balanced ;; esac
+case "$(cat /sys/class/power_supply/ADP1/online 2>/dev/null)" in
+  1) sub='Plugged in' ;;
+  0) sub='On battery' ;;
+  *) sub='Power' ;;
+esac
+cat <<EOF
+kind = segment
+glyph = bolt
+title = Power
+subtitle = $sub
+value = $p
+option = power-saver|Saver
+option = balanced|Balanced
+option = performance|Sustained
+EOF

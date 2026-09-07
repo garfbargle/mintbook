@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Bluetooth. Same adapter blueman uses; blueman-applet stays the pairing agent.
+case "${1:-read}" in
+  set) case "$2" in on|true|1) bluetoothctl power on ;; *) bluetoothctl power off ;; esac \
+         >/dev/null 2>&1; exit 0 ;;
+esac
+
+shopt -s nullglob
+adapters=(/sys/class/bluetooth/hci*)
+shopt -u nullglob
+if [ ${#adapters[@]} -eq 0 ]; then
+  # The SSDC regression eats hci0 outright; say so instead of showing a dead switch.
+  printf 'kind = toggle\nglyph = bluetooth\ntitle = Bluetooth\nvalue = off\nsubtitle = No adapter\n'
+  exit 0
+fi
+
+hci=$(basename "${adapters[0]}")
+p=$(busctl --system get-property org.bluez "/org/bluez/$hci" org.bluez.Adapter1 \
+      Powered 2>/dev/null)
+[ "$p" = 'b true' ] && on=on || on=off
+
+sub='Off'
+if [ "$on" = on ]; then
+  names=$(timeout 3 bluetoothctl devices Connected 2>/dev/null | cut -d' ' -f3-)
+  n=$(printf '%s' "$names" | grep -c . || true)
+  case "$n" in
+    0) sub='On' ;;
+    1) sub=$names ;;
+    *) sub="$n devices" ;;
+  esac
+fi
+cat <<EOF
+kind = toggle
+glyph = bluetooth
+title = Bluetooth
+value = $on
+subtitle = $sub
+detail = blueman-manager
+EOF

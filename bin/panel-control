@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Control Center indicator for xfce4-genmon-plugin.
+#
+# The icon never changes, so the update period is only here to carry the job
+# the retired appearance indicator used to do: re-check Redshift's period so
+# `appearance-mode auto` still turns the chrome over at sunset without a
+# daemon. Everything else the bar used to poll now lives behind the click.
+CC="$HOME/.local/bin/control-center"
+
+"$HOME/.local/bin/appearance-mode" --refresh >/dev/null 2>&1
+
+printf '<click>%s</click>\n<iconclick>%s</iconclick>\n' "$CC" "$CC"
+printf '<img>%s/.local/share/mintbook/control-center.svg</img>\n' "$HOME"
+printf '<tool>Control Center\nWi-Fi, Bluetooth, display, sound, night light, power</tool>\n'

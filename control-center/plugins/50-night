@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Night Light. Auto is sunset to sunrise from ~/.config/redshift.conf.
+APPLY="$HOME/.local/bin/night-apply"
+case "${1:-read}" in
+  set) "$APPLY" "${2:-auto}" >/dev/null 2>&1; exit 0 ;;
+esac
+mode=$(cat "$HOME/.config/mintbook/night.mode" 2>/dev/null || echo auto)
+sub=$(redshift -p -c "$HOME/.config/redshift.conf" 2>/dev/null \
+        | awk -F': *' '/^Color temperature:/ { print $2; exit }')
+cat <<EOF
+kind = segment
+glyph = moon
+title = Night Light
+subtitle = ${sub:-Colour temperature}
+value = $mode
+option = auto|Auto
+option = on|On
+option = off|Off
+EOF

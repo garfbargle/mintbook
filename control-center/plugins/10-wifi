@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Wi-Fi. Toggles the radio; the chevron opens the connection editor.
+case "${1:-read}" in
+  set) case "$2" in on|true|1) nmcli radio wifi on ;; *) nmcli radio wifi off ;; esac
+       exit 0 ;;
+esac
+
+radio=$(nmcli -t radio wifi 2>/dev/null)
+if [ "$radio" != enabled ]; then
+  sub='Off'
+else
+  ssid=$(/usr/sbin/iwgetid -r 2>/dev/null)
+  sub=${ssid:-Not connected}
+fi
+cat <<EOF
+kind = toggle
+glyph = wifi
+title = Wi-Fi
+value = $([ "$radio" = enabled ] && echo on || echo off)
+subtitle = $sub
+detail = nm-connection-editor
+EOF

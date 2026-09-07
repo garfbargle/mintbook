@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Package temperature. coretemp is found by name — hwmon numbering is not
+# stable across boots. Shares bin/panel-temp's EMA state file, so the reading
+# does not slam when the panel opens during a burst.
+t=''
+for h in /sys/class/hwmon/hwmon*; do
+  [ "$(cat "$h/name" 2>/dev/null)" = coretemp ] || continue
+  for f in "$h"/temp*_input; do
+    [ -e "$f" ] || continue
+    case "$(cat "${f%_input}_label" 2>/dev/null)" in
+      Package*) t=$(cat "$f" 2>/dev/null) ;;
+    esac
+  done
+  [ -n "$t" ] || t=$(cat "$h/temp1_input" 2>/dev/null)
+done
+[ -n "$t" ] || { echo 'skip = on'; exit 0; }
+
+c=$(( t / 1000 ))
+SF="$HOME/.cache/mintbook/temp.state"
+mkdir -p "$(dirname "$SF")"
+prev=$(cat "$SF" 2>/dev/null)
+case "$prev" in ''|*[!0-9]*) prev=$c ;; esac
+c=$(( (35 * c + 65 * prev) / 100 ))
+printf '%s' "$c" > "$SF"
+
+# The fanless Core M throttles at 100C; 80 and 90 are the colours the bar used.
+if   [ "$c" -ge 90 ]; then sub='Hot'
+elif [ "$c" -ge 80 ]; then sub='Warm'
+else                       sub=''
+fi
+cat <<EOF
+kind = meter
+glyph = thermometer
+title = Temperature
+live = 2
+value = ${c}°
+subtitle = $sub
+EOF

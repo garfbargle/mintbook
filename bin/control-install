@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# control-install — Control Center on the top bar, and the indicators it
+# replaces taken off it. No root. See docs/control-center.md.
+#
+# What stays visible is the macOS set: Wi-Fi, battery, Control Center, clock,
+# plus whatever the apps put in the systray. Everything else moves behind the
+# click. Both lists are right here — move an id back to VISIBLE and re-run if
+# you want its indicator on the bar again.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+BIN="$HOME/.local/bin"
+SHARE="$HOME/.local/share/mintbook/control-center"
+PANEL_RC="$HOME/.config/xfce4/panel"
+STATE="$HOME/.config/mintbook"
+SAVED="$STATE/panel-ids.before-control-center"
+PLUGIN=25
+
+#   1 whiskermenu   7 separator     8 systray     10 xapp-status
+#  18 wifi         11 battery      25 control    13 clock
+VISIBLE=(1 7 8 10 18 11 $PLUGIN 13)
+#  19 cpu  17 temperature  21 bluetooth  23 night light  24 appearance
+#  12 volume — its plugin was also the XF86Audio grab, so bin/volume-key
+#  takes that over below.
+RETIRED=(19 17 21 23 24 12)
+
+if [ "${1:-}" = --revert ]; then
+  echo "==> restoring the bar"
+  ids=$(cat "$SAVED" 2>/dev/null || echo '1 7 8 10 19 17 18 21 23 24 12 22 11 13')
+  xfce4-panel -q 2>/dev/null || true
+  sleep 0.4
+  args=(); for id in $ids; do args+=(-t int -s "$id"); done
+  xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids --force-array "${args[@]}"
+  for key in XF86AudioRaiseVolume XF86AudioLowerVolume XF86AudioMute XF86AudioMicMute; do
+    xfconf-query -c xfce4-keyboard-shortcuts -p "/commands/custom/$key" -r 2>/dev/null || true
+  done
+  nohup xfce4-panel >/dev/null 2>&1 &
+  echo "the old indicators are back; plugin-$PLUGIN is still registered but unused"
+  exit 0
+fi
+
+[ -n "${DISPLAY:-}" ] || { echo "DISPLAY is unset" >&2; exit 1; }
+
+echo "==> icon"
+FG=$(sed -n 's/^PANEL_FOREGROUND=//p' "$STATE/system-chrome.env" 2>/dev/null | tr -d "'\"")
+MINTBOOK_PANEL_FG="${FG:-#ffffff}" python3 "$ROOT/icons/generate-control-genmon.py"
+
+echo "==> $BIN"
+install -dm755 "$BIN"
+for f in control-center panel-control volume-key; do
+  rm -f "$BIN/$f"
+  install -m755 "$ROOT/bin/$f" "$BIN/$f"
+done
+
+echo "==> plugins"
+install -dm755 "$SHARE"
+rm -rf "$SHARE/plugins"
+install -dm755 "$SHARE/plugins"
+install -m755 "$ROOT"/control-center/plugins/* "$SHARE/plugins/"
+
+echo "==> genmon-$PLUGIN.rc"
+install -dm755 "$PANEL_RC"
+install -m644 "$ROOT/config/xfce4-panel/genmon-$PLUGIN.rc" "$PANEL_RC/genmon-$PLUGIN.rc"
+
+echo "==> volume keys"
+# The pulseaudio plugin held these; it is not on the bar any more.
+for pair in "XF86AudioRaiseVolume:up" "XF86AudioLowerVolume:down" \
+            "XF86AudioMute:mute" "XF86AudioMicMute:mic"; do
+  key=${pair%%:*}; arg=${pair##*:}
+  xfconf-query -c xfce4-keyboard-shortcuts -p "/commands/custom/$key" \
+    -n -t string -s "$BIN/volume-key $arg" 2>/dev/null \
+    || xfconf-query -c xfce4-keyboard-shortcuts -p "/commands/custom/$key" \
+         -t string -s "$BIN/volume-key $arg"
+done
+
+echo "==> panel"
+install -dm755 "$STATE"
+[ -s "$SAVED" ] || xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids \
+  | grep -oE '^[0-9]+$' | tr '\n' ' ' > "$SAVED"
+
+# Running plugins write xfconf back on shutdown, so stop the panel first.
+xfce4-panel -q 2>/dev/null || true
+sleep 0.4
+xfconf-query -c xfce4-panel -p "/plugins/plugin-$PLUGIN" -n -t string -s genmon 2>/dev/null || true
+
+args=(); for id in "${VISIBLE[@]}"; do args+=(-t int -s "$id"); done
+xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids --force-array "${args[@]}"
+
+nohup xfce4-panel >/dev/null 2>&1 &
+sleep 1
+
+echo
+echo "bar: whisker · systray · updates · wi-fi · battery · control center · clock"
+echo "behind the click: ${RETIRED[*]} (cpu, temp, bluetooth, night, appearance, volume)"
+echo "plugins: $SHARE/plugins"
+echo "undo: $(basename "$0") --revert"

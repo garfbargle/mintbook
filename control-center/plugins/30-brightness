@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Display brightness. logind's SetBrightness needs no password for the active
+# session; /sys/class/backlight is root-owned, so writing it directly does not
+# work. xfce4-power-manager keeps its own idea of brightness and is unaffected.
+BL=/sys/class/backlight/acpi_video0
+[ -d "$BL" ] || { for d in /sys/class/backlight/*; do BL=$d; break; done; }
+[ -d "$BL" ] || { echo 'skip = on'; exit 0; }
+max=$(cat "$BL/max_brightness" 2>/dev/null || echo 100)
+name=$(basename "$BL")
+
+case "${1:-read}" in
+  set)
+    pct=${2:-50}
+    want=$(( pct * max / 100 ))
+    [ "$want" -lt 1 ] && want=1          # never black the panel out entirely
+    busctl --system call org.freedesktop.login1 \
+      /org/freedesktop/login1/session/auto org.freedesktop.login1.Session \
+      SetBrightness ssu backlight "$name" "$want" >/dev/null 2>&1
+    exit 0 ;;
+esac
+
+cur=$(cat "$BL/brightness" 2>/dev/null || echo 0)
+printf 'kind = slider\nglyph = sun\ntitle = Display\nvalue = %s\n' \
+  "$(( cur * 100 / max ))"

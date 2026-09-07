@@ -1,0 +1,902 @@
+#!/usr/bin/env python3
+"""Mintbook Control Center — the macOS/iOS-style panel behind the bar icon.
+
+Everything in it is a *plugin*: a small executable that prints what its tile
+should say and takes one `set` argument when the tile is used. Nothing about
+Wi-Fi, volume or the power profile is known to this file. See
+docs/control-center.md for the eight-line contract.
+
+Drawn entirely in cairo rather than themed GTK widgets. The panel has to sit on
+top of WhiteSur without inheriting it, and every tile is a shape the theme has
+no opinion about anyway. It is also an override-redirect window, for the same
+reason bin/power-menu is: genmon spawns its click command with
+g_spawn_command_line_async, there is no Gdk event behind it, and xfwm4 rejects
+a Gtk.Menu grab at time 0.
+"""
+import math
+import os
+import signal
+import subprocess
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
+
+import gi
+gi.require_version('Gtk', '3.0')
+gi.require_version('PangoCairo', '1.0')
+from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo
+
+PLUGINS = os.path.expanduser('~/.local/share/mintbook/control-center/plugins')
+APPLIED = os.path.expanduser('~/.config/mintbook/appearance.applied')
+PIDFILE = os.path.expanduser('~/.cache/mintbook/control-center.pid')
+
+# Panel geometry. WIDTH is macOS Control Center's 330 plus a little, because
+# three-option segments ("Power Saver / Balanced / Sustained") need the room.
+# All geometry below is in 1x units. XFCE only does integer window scaling, so
+# this display runs WindowScalingFactor=1 with Xft/DPI at 168 — every
+# pixel-sized thing has to be scaled by hand (see docs/display.md). The cairo
+# context is scaled by SC once, and the rest of this file can stay in 1x.
+SC = round((Gdk.Screen.get_default().get_resolution() or 96) / 96.0, 3) or 1.0
+WIDTH, COLS, PAD, GAP, SHADOW = 356, 4, 14, 10, 16
+RADIUS, TILE_RADIUS = 18, 12
+COLW = (WIDTH - 2 * PAD - (COLS - 1) * GAP) / COLS
+ROWH = {'toggle': 66, 'segment': 58, 'slider': 58, 'meter': 66}
+SPAN = {'toggle': 2, 'segment': 4, 'slider': 4, 'meter': 2}
+
+LIGHT = {
+    'top': (229, 231, 234, .965), 'bottom': (202, 205, 210, .945),
+    'edge': (255, 255, 255, .75), 'rim': (65, 68, 74, .18),
+    'fg': (45, 48, 54), 'tile': (255, 255, 255, .55),
+    'tile_hi': (255, 255, 255, .78), 'tile_edge': (255, 255, 255, .65),
+    'track': (65, 68, 74, .13), 'fill': (255, 255, 255, .95),
+    'on_fill': (45, 48, 54), 'accent': (10, 132, 255),
+    'seg': (65, 68, 74, .10), 'seg_on': (255, 255, 255, .95),
+}
+DARK = {
+    'top': (104, 109, 119, .955), 'bottom': (74, 78, 86, .945),
+    'edge': (255, 255, 255, .18), 'rim': (0, 0, 0, .35),
+    'fg': (255, 255, 255), 'tile': (255, 255, 255, .13),
+    'tile_hi': (255, 255, 255, .20), 'tile_edge': (255, 255, 255, .10),
+    'track': (255, 255, 255, .16), 'fill': (255, 255, 255, .92),
+    'on_fill': (48, 51, 58), 'accent': (10, 132, 255),
+    'seg': (0, 0, 0, .20), 'seg_on': (255, 255, 255, .28),
+}
+
+
+# ---------------------------------------------------------------- plugin I/O
+
+TRUE = ('on', 'true', 'yes', '1', 'active', 'enabled')
+
+
+def parse(text):
+    """A plugin's stdout -> a spec dict.
+
+    `key = value` lines, because a plugin should be writable in bash without
+    quoting anything. Repeat `option` to build a segment. A leading `{` is
+    taken as JSON instead, for values that need newlines or awkward characters.
+    """
+    text = text.strip()
+    if text.startswith('{'):
+        import json
+        return json.loads(text)
+    spec = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+        key, _, val = line.partition('=')
+        key, val = key.strip(), val.strip()
+        if key == 'option':
+            label, _, sub = val.partition('|')
+            spec.setdefault('options', []).append([label.strip(), (sub or label).strip()])
+        elif key == 'graph':
+            spec['graph'] = [float(v) for v in val.replace(',', ' ').split() if v]
+        else:
+            spec[key] = val
+    return spec
+
+
+def read_plugin(path):
+    try:
+        out = subprocess.run([path, 'read'], capture_output=True, text=True,
+                             timeout=4).stdout
+        spec = parse(out)
+    except Exception as e:
+        spec = {'kind': 'meter', 'title': os.path.basename(path),
+                'subtitle': str(e)[:40], 'value': 0}
+    spec['path'] = path
+    spec['name'] = os.path.basename(path)
+    return spec
+
+
+def discover():
+    try:
+        names = sorted(os.listdir(PLUGINS))
+    except OSError:
+        return []
+    paths = [os.path.join(PLUGINS, n) for n in names
+             if not n.startswith('.') and not n.endswith(('.md', '.disabled'))]
+    paths = [p for p in paths if os.access(p, os.X_OK)]
+    # All of them at once: the panel opens in one plugin's time, not nine.
+    with ThreadPoolExecutor(max_workers=max(1, len(paths))) as pool:
+        specs = list(pool.map(read_plugin, paths))
+    return [s for s in specs
+            if s.get('kind') in ROWH and str(s.get('skip', '')).lower() not in TRUE]
+
+
+# ------------------------------------------------------------------- drawing
+
+def rgba(cr, c, alpha=None):
+    a = c[3] if len(c) > 3 else 1.0
+    cr.set_source_rgba(c[0] / 255, c[1] / 255, c[2] / 255,
+                       a if alpha is None else a * alpha)
+
+
+def rrect(cr, x, y, w, h, r):
+    r = min(r, w / 2, h / 2)
+    cr.new_sub_path()
+    cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
+    cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
+    cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
+    cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
+    cr.close_path()
+
+
+def text(cr, s, x, y, size, color, alpha=1.0, weight='normal', align=None, width=0):
+    layout = PangoCairo.create_layout(cr)
+    font = Pango.FontDescription('Inter Semi-Bold' if weight == 'bold' else 'Inter')
+    # Absolute size, in the context's own units: the layout must not pick up
+    # the 96 dpi a bare cairo context reports while SC already carries the DPI.
+    font.set_absolute_size(size * Pango.SCALE)
+    layout.set_font_description(font)
+    layout.set_text(str(s), -1)
+    layout.set_ellipsize(Pango.EllipsizeMode.END)
+    if width:
+        layout.set_width(int(width * Pango.SCALE))
+        if align == 'center':
+            layout.set_alignment(Pango.Alignment.CENTER)
+        elif align == 'right':
+            layout.set_alignment(Pango.Alignment.RIGHT)
+    rgba(cr, color, alpha)
+    cr.move_to(x, y)
+    PangoCairo.show_layout(cr, layout)
+    return layout.get_pixel_size()
+
+
+# Glyphs are cairo paths in a unit box so a plugin can name one and get an
+# icon that is crisp at any size and takes the panel's own colour. Adding one
+# is a function and a line in GLYPHS.
+
+def _wifi(cr, s):
+    cr.set_line_width(.085 * s)
+    cr.set_line_cap(cairo_round())
+    for r in (.46, .31, .16):
+        cr.new_sub_path()
+        cr.arc(.5 * s, .78 * s, r * s, math.pi * 1.22, math.pi * 1.78)
+        cr.stroke()
+    cr.arc(.5 * s, .77 * s, .055 * s, 0, 2 * math.pi)
+    cr.fill()
+
+
+def _bluetooth(cr, s):
+    cr.set_line_width(.09 * s)
+    cr.set_line_cap(cairo_round())
+    cr.set_line_join(cairo_round_join())
+    cr.move_to(.28 * s, .30 * s)
+    cr.line_to(.72 * s, .70 * s)
+    cr.line_to(.50 * s, .88 * s)
+    cr.line_to(.50 * s, .12 * s)
+    cr.line_to(.72 * s, .30 * s)
+    cr.line_to(.28 * s, .70 * s)
+    cr.stroke()
+
+
+def _moon(cr, s):
+    # A crescent is one disc minus another, and cairo's fill rules will not do
+    # it alone: even-odd also fills the part of the bite that hangs outside.
+    # Clip to the disc first, then fill everything but the bite.
+    cr.save()
+    cr.arc(.5 * s, .5 * s, .42 * s, 0, 2 * math.pi)
+    cr.clip()
+    cr.set_fill_rule(cairo_even_odd())
+    cr.rectangle(0, 0, s, s)
+    cr.new_sub_path()
+    cr.arc(.70 * s, .26 * s, .50 * s, 0, 2 * math.pi)
+    cr.fill()
+    cr.restore()
+
+
+def _sun(cr, s):
+    cr.arc(.5 * s, .5 * s, .21 * s, 0, 2 * math.pi)
+    cr.fill()
+    cr.set_line_width(.075 * s)
+    cr.set_line_cap(cairo_round())
+    for i in range(8):
+        a = i * math.pi / 4
+        cr.move_to(.5 * s + math.cos(a) * .32 * s, .5 * s + math.sin(a) * .32 * s)
+        cr.line_to(.5 * s + math.cos(a) * .44 * s, .5 * s + math.sin(a) * .44 * s)
+    cr.stroke()
+
+
+def _speaker(cr, s):
+    cr.move_to(.10 * s, .36 * s)
+    cr.line_to(.26 * s, .36 * s)
+    cr.line_to(.46 * s, .16 * s)
+    cr.line_to(.46 * s, .84 * s)
+    cr.line_to(.26 * s, .64 * s)
+    cr.line_to(.10 * s, .64 * s)
+    cr.close_path()
+    cr.fill()
+    cr.set_line_width(.075 * s)
+    cr.set_line_cap(cairo_round())
+    for r in (.16, .30):
+        cr.new_sub_path()
+        cr.arc(.50 * s, .50 * s, (r + .12) * s, -math.pi / 3.2, math.pi / 3.2)
+        cr.stroke()
+
+
+def _display(cr, s):
+    cr.set_line_width(.08 * s)
+    rrect(cr, .08 * s, .16 * s, .84 * s, .56 * s, .10 * s)
+    cr.stroke()
+    cr.set_line_cap(cairo_round())
+    cr.move_to(.32 * s, .86 * s)
+    cr.line_to(.68 * s, .86 * s)
+    cr.stroke()
+
+
+def _cpu(cr, s):
+    cr.set_line_width(.075 * s)
+    cr.set_line_cap(cairo_round())
+    rrect(cr, .22 * s, .22 * s, .56 * s, .56 * s, .08 * s)
+    cr.stroke()
+    rrect(cr, .38 * s, .38 * s, .24 * s, .24 * s, .04 * s)
+    cr.fill()
+    for f in (.34, .5, .66):          # four sets of pins, one per edge
+        cr.move_to(f * s, .22 * s); cr.line_to(f * s, .06 * s)
+        cr.move_to(f * s, .78 * s); cr.line_to(f * s, .94 * s)
+        cr.move_to(.22 * s, f * s); cr.line_to(.06 * s, f * s)
+        cr.move_to(.78 * s, f * s); cr.line_to(.94 * s, f * s)
+    cr.stroke()
+
+
+def _thermometer(cr, s):
+    cr.set_line_width(.085 * s)
+    cr.set_line_cap(cairo_round())
+    cr.move_to(.5 * s, .16 * s)
+    cr.line_to(.5 * s, .60 * s)
+    cr.stroke()
+    cr.arc(.5 * s, .74 * s, .16 * s, 0, 2 * math.pi)
+    cr.fill()
+
+
+def _bolt(cr, s):
+    cr.move_to(.58 * s, .06 * s)
+    cr.line_to(.22 * s, .54 * s)
+    cr.line_to(.46 * s, .54 * s)
+    cr.line_to(.40 * s, .94 * s)
+    cr.line_to(.78 * s, .44 * s)
+    cr.line_to(.53 * s, .44 * s)
+    cr.close_path()
+    cr.fill()
+
+
+def _gear(cr, s):
+    for i in range(8):
+        a = i * math.pi / 4
+        cr.save()
+        cr.translate(.5 * s, .5 * s)
+        cr.rotate(a)
+        rrect(cr, -.07 * s, -.48 * s, .14 * s, .22 * s, .04 * s)
+        cr.fill()
+        cr.restore()
+    cr.set_line_width(.11 * s)
+    cr.arc(.5 * s, .5 * s, .26 * s, 0, 2 * math.pi)
+    cr.stroke()
+
+
+def _dot(cr, s):
+    cr.arc(.5 * s, .5 * s, .30 * s, 0, 2 * math.pi)
+    cr.fill()
+
+
+# cairo enum shims keep the glyph bodies readable
+import cairo as _cairo
+cairo_round = lambda: _cairo.LINE_CAP_ROUND
+cairo_round_join = lambda: _cairo.LINE_JOIN_ROUND
+cairo_even_odd = lambda: _cairo.FILL_RULE_EVEN_ODD
+cairo_winding = lambda: _cairo.FILL_RULE_WINDING
+
+GLYPHS = {'wifi': _wifi, 'bluetooth': _bluetooth, 'moon': _moon, 'sun': _sun,
+          'speaker': _speaker, 'display': _display, 'cpu': _cpu,
+          'thermometer': _thermometer, 'bolt': _bolt, 'gear': _gear, 'dot': _dot}
+
+
+def glyph(cr, name, x, y, size, color, alpha=1.0):
+    cr.save()
+    cr.translate(x, y)
+    rgba(cr, color, alpha)
+    GLYPHS.get(name, _dot)(cr, size)
+    cr.restore()
+
+
+def sparkline(cr, values, x, y, w, h, color, alpha=.7):
+    """Filled area with both edges faded out — the panel-cpu look, in cairo."""
+    if len(values) < 2:
+        return
+    cr.save()
+    cr.push_group()
+    step = w / (len(values) - 1)
+    cr.move_to(x, y + h)
+    for i, v in enumerate(values):
+        cr.line_to(x + i * step, y + h - max(0.0, min(100.0, v)) / 100.0 * h)
+    cr.line_to(x + w, y + h)
+    cr.close_path()
+    rgba(cr, color, alpha)
+    cr.fill()
+    pattern = cr.pop_group()
+    mask = _cairo.LinearGradient(x, 0, x + w, 0)
+    mask.add_color_stop_rgba(0, 0, 0, 0, 0)
+    mask.add_color_stop_rgba(.16, 0, 0, 0, 1)
+    mask.add_color_stop_rgba(.84, 0, 0, 0, 1)
+    mask.add_color_stop_rgba(1, 0, 0, 0, 0)
+    cr.set_source(pattern)
+    cr.mask(mask)
+    cr.restore()
+
+
+# --------------------------------------------------------------------- tiles
+
+class Tile(Gtk.DrawingArea):
+    def __init__(self, spec, panel):
+        super().__init__()
+        self.spec, self.panel = spec, panel
+        self.hover = self.pressing = False
+        self.hit = None          # index of the segment under the pointer
+        self.drag_value = None
+        self.last_set = 0.0
+        self.pending = None
+        self.span = int(spec.get('span', SPAN[spec['kind']]))
+        self.set_size_request(
+            round((self.span * COLW + (self.span - 1) * GAP) * SC),
+            round(ROWH[spec['kind']] * SC))
+        self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK
+                        | Gdk.EventMask.BUTTON_RELEASE_MASK
+                        | Gdk.EventMask.POINTER_MOTION_MASK
+                        | Gdk.EventMask.LEAVE_NOTIFY_MASK
+                        | Gdk.EventMask.SCROLL_MASK)
+        self.connect('draw', self.on_draw)
+        self.connect('button-press-event', self.on_press)
+        self.connect('button-release-event', self.on_release)
+        self.connect('motion-notify-event', self.on_motion)
+        self.connect('scroll-event', self.on_scroll)
+        self.connect('leave-notify-event', self.on_leave)
+        if spec.get('subtitle') and spec['kind'] in ('slider', 'meter'):
+            self.set_tooltip_text(spec['subtitle'])
+
+    # ---- state helpers
+
+    @property
+    def c(self):
+        return self.panel.colors
+
+    def on_value(self):
+        return str(self.spec.get('value', '')).lower() in TRUE
+
+    def number(self):
+        try:
+            return max(0.0, min(100.0, float(self.spec.get('value', 0))))
+        except (TypeError, ValueError):
+            return 0.0
+
+    def options(self):
+        opts = self.spec.get('options') or []
+        return [(o[0], o[1] if len(o) > 1 else o[0]) if isinstance(o, (list, tuple))
+                else (str(o), str(o)) for o in opts]
+
+    def update(self, spec):
+        spec['path'], spec['name'] = self.spec['path'], self.spec['name']
+        self.spec = spec
+        if self.drag_value is None:
+            self.queue_draw()
+
+    # ---- drawing
+
+    def on_draw(self, _w, cr):
+        a = self.get_allocation()
+        cr.set_antialias(_cairo.ANTIALIAS_BEST)
+        cr.scale(SC, SC)
+        getattr(self, 'draw_' + self.spec['kind'])(cr, a.width / SC, a.height / SC)
+        return False
+
+    def width(self):
+        return self.get_allocation().width / SC
+
+    def _card(self, cr, w, h, lit=False):
+        rrect(cr, 0, 0, w, h, TILE_RADIUS)
+        rgba(cr, self.c['tile_hi'] if (lit or self.hover) else self.c['tile'])
+        cr.fill_preserve()
+        rgba(cr, self.c['tile_edge'])
+        cr.set_line_width(1)
+        cr.stroke()
+
+    def _detail_chevron(self, cr, w, h):
+        if not self.spec.get('detail'):
+            return
+        cx, cy = w - 15, h / 2
+        rgba(cr, self.c['fg'], .55 if self.hit == 'detail' else .28)
+        cr.set_line_width(1.6)
+        cr.set_line_cap(_cairo.LINE_CAP_ROUND)
+        cr.move_to(cx - 2, cy - 4)
+        cr.line_to(cx + 2.5, cy)
+        cr.line_to(cx - 2, cy + 4)
+        cr.stroke()
+
+    def draw_toggle(self, cr, w, h):
+        on = self.on_value()
+        self._card(cr, w, h)
+        d = 34
+        x, y = 13, (h - d) / 2
+        cr.save()
+        rrect(cr, x, y, d, d, d / 2)
+        if on:
+            rgba(cr, self.spec_accent())
+        else:
+            rgba(cr, self.c['track'])
+        cr.fill()
+        cr.restore()
+        glyph(cr, self.spec.get('glyph', 'dot'), x + d * .22, y + d * .22, d * .56,
+              (255, 255, 255) if on else self.c['fg'], 1 if on else .8)
+        tw = w - (x + d) - 12 - (14 if self.spec.get('detail') else 0)
+        text(cr, self.spec.get('title', ''), x + d + 10, h / 2 - 17, 10.5,
+             self.c['fg'], .95, 'bold', width=tw)
+        text(cr, self.spec.get('subtitle', ''), x + d + 10, h / 2 + 1, 9.5,
+             self.c['fg'], .55, width=tw)
+        self._detail_chevron(cr, w, h)
+
+    def draw_segment(self, cr, w, h):
+        opts = self.options()
+        self._card(cr, w, h)
+        gx, gs = 14, 21
+        glyph(cr, self.spec.get('glyph', 'dot'), gx, (h - gs) / 2, gs, self.c['fg'], .85)
+        label_w = 94
+        text(cr, self.spec.get('title', ''), gx + gs + 9, h / 2 - 16, 10.5,
+             self.c['fg'], .95, 'bold', width=label_w)
+        text(cr, self.spec.get('subtitle', ''), gx + gs + 9, h / 2 + 2, 9.5,
+             self.c['fg'], .5, width=label_w)
+        if not opts:
+            return
+        x0 = gx + gs + 9 + label_w + 8
+        tw, th = w - x0 - 13, 30
+        ty = (h - th) / 2
+        rrect(cr, x0, ty, tw, th, 9)
+        rgba(cr, self.c['seg'])
+        cr.fill()
+        cur = str(self.spec.get('value', ''))
+        sw = tw / len(opts)
+        self.seg_rects = []
+        for i, (key, label) in enumerate(opts):
+            sx = x0 + i * sw
+            self.seg_rects.append((sx, sw, key))
+            if key == cur:
+                rrect(cr, sx + 2, ty + 2, sw - 4, th - 4, 7.5)
+                rgba(cr, self.c['seg_on'])
+                cr.fill()
+            elif self.hit == i:
+                rrect(cr, sx + 2, ty + 2, sw - 4, th - 4, 7.5)
+                rgba(cr, self.c['fg'], .07)
+                cr.fill()
+            text(cr, label, sx, ty + th / 2 - 9, 9.5, self.c['fg'],
+                 .95 if key == cur else .6, 'bold' if key == cur else 'normal',
+                 align='center', width=sw)
+
+    def draw_slider(self, cr, w, h):
+        v = self.drag_value if self.drag_value is not None else self.number()
+        text(cr, self.spec.get('title', ''), 2, 4, 9.5, self.c['fg'], .55)
+        text(cr, self.spec.get('subtitle', f'{round(v)}%'), 0, 4, 9.5,
+             self.c['fg'], .4, align='right', width=w - 2)
+        th = 30
+        ty = h - th - 3
+        rrect(cr, 0, ty, w, th, th / 2)
+        rgba(cr, self.c['track'])
+        cr.fill()
+        fw = max(th, w * v / 100.0) if v > 0 else 0
+        if fw:
+            cr.save()
+            rrect(cr, 0, ty, w, th, th / 2)
+            cr.clip()
+            rrect(cr, 0, ty, fw, th, th / 2)
+            rgba(cr, self.c['fill'])
+            cr.fill()
+            cr.restore()
+        gs, gx = 17, 8
+        gy = ty + (th - gs) / 2
+        glyph(cr, self.spec.get('glyph', 'dot'), gx, gy, gs, self.c['fg'], .45)
+        if fw > gx:                      # the part of the icon over the fill
+            cr.save()
+            cr.rectangle(0, ty, fw, th)
+            cr.clip()
+            glyph(cr, self.spec.get('glyph', 'dot'), gx, gy, gs, self.c['on_fill'], .75)
+            cr.restore()
+
+    def draw_meter(self, cr, w, h):
+        self._card(cr, w, h)
+        g = self.spec.get('graph')
+        if g:
+            cr.save()
+            rrect(cr, 0, 0, w, h, TILE_RADIUS)
+            cr.clip()
+            sparkline(cr, g, 0, h * .42, w, h * .58, self.c['fg'], .22)
+            cr.restore()
+        gs = 15
+        glyph(cr, self.spec.get('glyph', 'dot'), 13, 12, gs, self.c['fg'], .55)
+        text(cr, self.spec.get('title', ''), 13 + gs + 7, 12, 9.5, self.c['fg'], .6)
+        text(cr, self.spec.get('value', ''), 13, h - 32, 17, self.c['fg'], .95, 'bold')
+        if self.spec.get('subtitle'):
+            text(cr, self.spec['subtitle'], 0, h - 24, 9.5, self.c['fg'], .45,
+                 align='right', width=w - 13)
+
+    def spec_accent(self):
+        a = self.spec.get('accent')
+        if a and a.startswith('#') and len(a) == 7:
+            return (int(a[1:3], 16), int(a[3:5], 16), int(a[5:7], 16))
+        return self.c['accent']
+
+    # ---- input
+
+    def _hit(self, x, y):
+        if self.spec.get('detail') and x > self.width() - 26 \
+                and self.spec['kind'] in ('toggle', 'meter'):
+            return 'detail'
+        if self.spec['kind'] == 'segment':
+            for i, (sx, sw, _k) in enumerate(getattr(self, 'seg_rects', [])):
+                if sx <= x <= sx + sw:
+                    return i
+        return None
+
+    def on_motion(self, _w, e):
+        self.hover = True
+        hit = self._hit(e.x / SC, e.y / SC)
+        if self.pressing and self.spec['kind'] == 'slider':
+            self.drag_value = self._slider_value(e.x / SC)
+            self.apply_slider(False)
+        if hit != self.hit:
+            self.hit = hit
+        self.queue_draw()
+        return True
+
+    def on_leave(self, *_a):
+        self.hover, self.hit = False, None
+        self.queue_draw()
+        return True
+
+    def _slider_value(self, x):
+        return max(0.0, min(100.0, 100.0 * x / max(1, self.width())))
+
+    def on_press(self, _w, e):
+        if e.button == 3 and self.spec.get('detail'):
+            return self.run_detail()
+        self.pressing = True
+        if self.spec['kind'] == 'slider':
+            self.drag_value = self._slider_value(e.x / SC)
+            self.apply_slider(False)
+        self.queue_draw()
+        return True
+
+    def on_release(self, _w, e):
+        self.pressing = False
+        kind = self.spec['kind']
+        hit = self._hit(e.x / SC, e.y / SC)
+        if hit == 'detail':
+            return self.run_detail()
+        if kind == 'toggle':
+            self.spec['value'] = 'off' if self.on_value() else 'on'
+            self.queue_draw()
+            self.panel.set_value(self, self.spec['value'])
+        elif kind == 'segment' and isinstance(hit, int):
+            key = self.seg_rects[hit][2]
+            if key != str(self.spec.get('value', '')):
+                self.spec['value'] = key
+                self.queue_draw()
+                self.panel.set_value(self, key)
+        elif kind == 'slider':
+            self.drag_value = self._slider_value(e.x / SC)
+            self.apply_slider(True)
+        return True
+
+    def on_scroll(self, _w, e):
+        if self.spec['kind'] != 'slider':
+            return False
+        step = 5 if e.direction in (Gdk.ScrollDirection.UP, Gdk.ScrollDirection.RIGHT) else -5
+        if e.direction == Gdk.ScrollDirection.SMOOTH:
+            step = -5 if e.delta_y > 0 else 5
+        self.drag_value = max(0.0, min(100.0, (self.drag_value if self.drag_value
+                                               is not None else self.number()) + step))
+        self.apply_slider(True)
+        self.queue_draw()
+        return True
+
+    def apply_slider(self, final):
+        """Rate-limit a drag to ~20 Hz, but never drop the value it ended on."""
+        self.queue_draw()
+        now = time.monotonic()
+        if final or now - self.last_set > 0.05:
+            self.last_set = now
+            self.pending = None
+            self.panel.set_value(self, round(self.drag_value))
+            if final:
+                self.drag_value = None
+        else:
+            self.pending = round(self.drag_value)
+            GLib.timeout_add(60, self._flush)
+
+    def _flush(self):
+        if self.pending is not None:
+            self.panel.set_value(self, self.pending)
+            self.pending = None
+        return False
+
+    def run_detail(self):
+        cmd = self.spec.get('detail')
+        if cmd:
+            subprocess.Popen(cmd, shell=True, start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.panel.close()
+        return True
+
+
+# --------------------------------------------------------------------- panel
+
+class Panel:
+    def __init__(self, specs):
+        self.mode = 'dark' if read_file(APPLIED, 'light') == 'dark' else 'light'
+        self.colors = DARK if self.mode == 'dark' else LIGHT
+        self.tiles = []
+        self.pool = ThreadPoolExecutor(max_workers=4)
+        self.closing = False
+
+        self.win = win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
+        win.set_decorated(False)
+        win.set_skip_taskbar_hint(True)
+        win.set_skip_pager_hint(True)
+        win.set_keep_above(True)
+        win.set_resizable(False)
+        win.set_app_paintable(True)
+        win.set_type_hint(Gdk.WindowTypeHint.POPUP_MENU)
+        screen = Gdk.Screen.get_default()
+        visual = screen.get_rgba_visual()
+        if visual:
+            win.set_visual(visual)
+        win.connect('draw', self.draw_background)
+        win.connect('key-press-event', self.on_key)
+        win.connect('destroy', lambda *_a: self.close())
+
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=round(GAP * SC))
+        for setter in (outer.set_margin_top, outer.set_margin_bottom,
+                       outer.set_margin_start, outer.set_margin_end):
+            setter(round((SHADOW + PAD) * SC))
+        win.add(outer)
+
+        row, used = None, COLS
+        for spec in specs:
+            tile = Tile(spec, self)
+            if used + tile.span > COLS:
+                row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
+                              spacing=round(GAP * SC))
+                outer.pack_start(row, False, False, 0)
+                used = 0
+            row.pack_start(tile, False, False, 0)
+            used += tile.span
+            self.tiles.append(tile)
+
+        self.height = 0
+        win.show_all()
+
+    # ---- chrome
+
+    def draw_background(self, _w, cr):
+        a = self.win.get_allocation()
+        # GTK propagates this same context to the children afterwards, so every
+        # change here has to be undone or the scale below lands on them twice.
+        cr.save()
+        cr.set_operator(_cairo.OPERATOR_SOURCE)
+        cr.set_source_rgba(0, 0, 0, 0)
+        cr.paint()
+        cr.set_operator(_cairo.OPERATOR_OVER)
+        cr.scale(SC, SC)
+        x, y = SHADOW, SHADOW
+        w, h = a.width / SC - 2 * SHADOW, a.height / SC - 2 * SHADOW
+        # A soft edge without a blur pass: concentric strokes, falling off.
+        for i in range(SHADOW, 0, -1):
+            rrect(cr, x - i, y - i + 2, w + 2 * i, h + 2 * i, RADIUS + i)
+            cr.set_line_width(1.4)
+            cr.set_source_rgba(0, 0, 0, .055 * (1 - i / SHADOW) ** 2)
+            cr.stroke()
+        grad = _cairo.LinearGradient(0, y, 0, y + h)
+        top, bot = self.colors['top'], self.colors['bottom']
+        grad.add_color_stop_rgba(0, top[0] / 255, top[1] / 255, top[2] / 255, top[3])
+        grad.add_color_stop_rgba(1, bot[0] / 255, bot[1] / 255, bot[2] / 255, bot[3])
+        rrect(cr, x, y, w, h, RADIUS)
+        cr.set_source(grad)
+        cr.fill_preserve()
+        rgba(cr, self.colors['rim'])
+        cr.set_line_width(1)
+        cr.stroke()
+        rrect(cr, x + .75, y + .75, w - 1.5, h - 1.5, RADIUS - .75)
+        rgba(cr, self.colors['edge'])
+        cr.set_line_width(1)
+        cr.stroke()
+        cr.restore()
+        return False
+
+    def place(self, px, py):
+        win = self.win
+        win.realize()
+        gdk_win = win.get_window()
+        if gdk_win is not None:
+            gdk_win.set_override_redirect(True)
+        alloc = win.get_allocation()
+        w, h = alloc.width, alloc.height
+        display = Gdk.Display.get_default()
+        monitor = (display.get_monitor_at_point(px, py)
+                   or display.get_primary_monitor())
+        geo = monitor.get_geometry()
+        # Hangs from the bar icon, right-aligned like macOS, clamped on screen.
+        edge = round(SHADOW * SC)
+        x = int(px - w + edge + round(24 * SC))
+        x = max(geo.x + 2, min(x, geo.x + geo.width - w + edge - 4))
+        y = 52 - edge + 4 if py < 64 else int(py) - edge + 8
+        if y + h > geo.y + geo.height:
+            y = geo.y + geo.height - h
+        win.move(x, y)
+        win.set_opacity(0.0)
+        win.present()
+        self.grab(gdk_win, w, h)
+        self.fade_in()
+
+    def fade_in(self):
+        self.t0 = time.monotonic()
+
+        def step():
+            if self.closing:
+                return False
+            f = min(1.0, (time.monotonic() - self.t0) / 0.11)
+            self.win.set_opacity(f * f * (3 - 2 * f))
+            return f < 1.0
+        GLib.timeout_add(16, step)
+
+    def grab(self, gdk_win, w, h):
+        if gdk_win is None:
+            return
+        seat = Gdk.Display.get_default().get_default_seat()
+        seat.grab(gdk_win, Gdk.SeatCapabilities.ALL_POINTING, True, None, None, None)
+
+        def on_press(_w, e):
+            if e.window != gdk_win:
+                return False
+            edge = round(SHADOW * SC)
+            if not (edge < e.x < w - edge and edge < e.y < h - edge):
+                self.close()
+                return True
+            return False
+        self.win.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.win.connect('button-press-event', on_press)
+
+    def on_key(self, _w, e):
+        if e.keyval in (Gdk.KEY_Escape, Gdk.KEY_q):
+            self.close()
+            return True
+        return False
+
+    def close(self):
+        if self.closing:
+            return
+        self.closing = True
+        try:
+            Gdk.Display.get_default().get_default_seat().ungrab()
+        except Exception:
+            pass
+        Gtk.main_quit()
+
+    # ---- plugin traffic
+
+    def set_value(self, tile, value):
+        path = tile.spec['path']
+
+        def work():
+            try:
+                subprocess.run([path, 'set', str(value)], timeout=8,
+                               capture_output=True)
+            except Exception:
+                pass
+            spec = read_plugin(path)
+            GLib.idle_add(tile.update, spec)
+        self.pool.submit(work)
+
+    def refresh(self):
+        """Re-read the tiles that asked to be live, on their own periods."""
+        if self.closing:
+            return False
+        now = time.monotonic()
+        due = []
+        for tile in self.tiles:
+            period = tile.spec.get('live')
+            if not period:
+                continue
+            try:
+                period = float(period)
+            except (TypeError, ValueError):
+                period = 1.0
+            if now - getattr(tile, 'read_at', 0) >= period:
+                tile.read_at = now
+                due.append(tile)
+        for tile in due:
+            self.pool.submit(self._reread, tile)
+        return True
+
+    def _reread(self, tile):
+        spec = read_plugin(tile.spec['path'])
+        GLib.idle_add(tile.update, spec)
+
+
+def read_file(path, default=''):
+    try:
+        return open(path).read().strip() or default
+    except OSError:
+        return default
+
+
+def single_instance():
+    """Second click on the bar icon closes the open panel, like macOS."""
+    os.makedirs(os.path.dirname(PIDFILE), exist_ok=True)
+    try:
+        pid = int(read_file(PIDFILE, '0'))
+    except ValueError:
+        pid = 0
+    if pid and pid != os.getpid():
+        try:
+            os.kill(pid, signal.SIGTERM)
+            # It was up; this click was the dismiss.
+            return False
+        except OSError:
+            pass
+    with open(PIDFILE, 'w') as f:
+        f.write(str(os.getpid()))
+    return True
+
+
+def pointer_xy():
+    _s, x, y = Gdk.Display.get_default().get_default_seat().get_pointer().get_position()
+    return int(x), int(y)
+
+
+def main():
+    if not single_instance():
+        return
+    specs = discover()
+    if not specs:
+        subprocess.run(['notify-send', 'Control Center',
+                        f'No plugins in {PLUGINS}'])
+        return
+    px, py = pointer_xy()
+    panel = Panel(specs)
+    signal.signal(signal.SIGTERM, lambda *_a: panel.close())
+    now = time.monotonic()
+    for tile in panel.tiles:
+        tile.read_at = now
+    GLib.timeout_add(250, panel.refresh)
+    panel.place(px, py)
+    Gtk.main()
+
+
+if __name__ == '__main__':
+    Gdk.set_program_class('mintbook-control-center')
+    try:
+        main()
+    finally:
+        try:
+            if read_file(PIDFILE) == str(os.getpid()):
+                os.remove(PIDFILE)
+        except OSError:
+            pass
+    sys.exit(0)

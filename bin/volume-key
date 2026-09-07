@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Volume keys and the on-screen readout.
+#
+# XF86Audio* was grabbed by the XFCE pulseaudio plugin, which is what took
+# volume off the bar with it when the Control Center replaced that group.
+# These are bound in xfce4-keyboard-shortcuts by bin/control-install.
+#
+# The notification carries x-canonical-private-synchronous, so repeated presses
+# replace one popup instead of stacking a column of them.
+set -u
+SINK=@DEFAULT_AUDIO_SINK@
+STEP=${STEP:-5}
+
+case "${1:-show}" in
+  up)   wpctl set-mute "$SINK" 0; wpctl set-volume -l 1.0 "$SINK" "${STEP}%+" ;;
+  down) wpctl set-mute "$SINK" 0; wpctl set-volume "$SINK" "${STEP}%-" ;;
+  mute) wpctl set-mute "$SINK" toggle ;;
+  mic)  wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle ;;
+  show) ;;
+  *) echo "usage: $(basename "$0") up|down|mute|mic" >&2; exit 2 ;;
+esac
+
+if [ "${1:-show}" = mic ]; then
+  read -r _ _ m <<< "$(wpctl get-volume @DEFAULT_AUDIO_SOURCE@ 2>/dev/null)"
+  [ "$m" = '[MUTED]' ] \
+    && icon=microphone-sensitivity-muted title='Microphone off' \
+    || icon=audio-input-microphone       title='Microphone on'
+  notify-send -h string:x-canonical-private-synchronous:mintbook-volume \
+    -i "$icon" "$title"
+  exit 0
+fi
+
+read -r _ vol muted <<< "$(wpctl get-volume "$SINK" 2>/dev/null)"
+pct=$(awk -v v="${vol:-0}" 'BEGIN { printf "%d", v * 100 + 0.5 }')
+if [ "$muted" = '[MUTED]' ]; then
+  icon=audio-volume-muted; title='Muted'; bar=0
+else
+  bar=$pct
+  title="${pct}%"
+  if   [ "$pct" -ge 66 ]; then icon=audio-volume-high
+  elif [ "$pct" -ge 33 ]; then icon=audio-volume-medium
+  elif [ "$pct" -gt 0 ];  then icon=audio-volume-low
+  else                         icon=audio-volume-muted
+  fi
+fi
+notify-send -h string:x-canonical-private-synchronous:mintbook-volume \
+  -h "int:value:$bar" -i "$icon" 'Volume' "$title"
