@@ -94,6 +94,7 @@ All read-only or self-restoring, and none need root.
 | [`bin/focus-priority`](../bin/focus-priority) | `--check` lists app scopes and their weights |
 | [`bin/warm-cache`](../bin/warm-cache) | `--check` lists what would be read, and free memory |
 | [`bin/turbo-budget`](../bin/turbo-budget) | `--check` reports the cap and whether the budget is armed |
+| [`bin/runaway-watch`](../bin/runaway-watch) | `--check` lists orphaned processes and what they are burning |
 
 ## What is left for root
 
@@ -557,3 +558,125 @@ The two results worth carrying forward:
   Idle temperature is therefore a performance parameter, not a comfort one.
 - **Background I/O costs launches, not drawing.** Two probes aimed at the
   compositor found nothing before one aimed at a cold read found 1.8x.
+
+---
+
+## 11. Notice what was left running — **built, running**
+
+On 2026-09-07 a `python3 -` from a background task whose shell had exited sat
+at 99% of a core for three and a half hours. Nothing said so. The chassis is
+fanless, so the symptoms were the temperature reading, a desktop that felt
+slow, and — found afterwards — a set of panel-open timings taken that
+afternoon that read 570–670 ms against a documented 304. The measurement was
+wrong because the machine was busy, and the machine was busy because of a
+process nobody knew about.
+
+[`bin/runaway-watch`](../bin/runaway-watch), on a five-minute user timer,
+asks about it:
+
+<p align="center">
+  <img src="images/runaway-notification.jpg" alt="A process was left running" width="620">
+</p>
+
+### It is not a "high CPU" watcher, on purpose
+
+High CPU is usually *correct*. A compile, an encode, a browser decoding video,
+`turbo-budget` deliberately spending a burst — a notifier that interrupts
+those is a notifier you turn off within a day, and then it is not there for
+the one time it mattered. The value of this thing is entirely in how rarely it
+speaks.
+
+So it does not look for load. It looks for one shape, and every part of it has
+to hold:
+
+| test | what it rules out |
+|---|---|
+| `ppid == 1` | anything with a live parent — a shell, a supervisor, an IDE. Somebody owns it |
+| no controlling terminal | anything printing to a window you have open |
+| cgroup leaf is not a `*.service` | every systemd unit. A managed service is somebody's job by definition |
+| no window on screen (`wmctrl -lp`) | every application. You have not forgotten something you can see |
+| alive ≥ 10 minutes | every short task, and every launch that is briefly parentless |
+| ≥ 80% of a core **since the last pass** | everything idle, and anything that was hot an hour ago and has since stopped |
+| `comm` not on a short never-list | session plumbing that is legitimately parentless on some setups |
+
+The CPU test is a rate over the five-minute gap, not an average over the
+process's life, and it is load-bearing rather than decorative. Measured on
+this machine, `--check` at the default bar lists **34** processes that pass
+the parent/terminal/age tests:
+
+| | |
+|---|---|
+| 19 | systemd units — journald, NetworkManager, bluetoothd, polkitd, upowerd… |
+| 3 | have a window — Firefox, the Claude desktop app, ChatGPT |
+| 12 | genuinely orphaned session leftovers — `mintreport-tray`, `mintUpdate`, `blueman-applet`, two crashpad handlers, and four `redshift` daemons |
+
+Every one of them is between 0% and 7%. Four of the twelve are `redshift`,
+which is orphaned, terminal-less and windowless and is the thing that turns
+the screen warm at night: **without the rate test this would have offered to
+kill the night light.** The unit and window tests carry the other 22.
+
+### What it will not catch, and will not try to
+
+- **A runaway with a living parent.** A stuck child of a supervisor that is
+  still up fails the first test. That is the right miss: something is still
+  responsible for it, and guessing otherwise is how a notifier starts
+  suggesting you kill a build.
+- **A memory leak, or a disk thrasher.** Only CPU is measured.
+- **Anything with a window.** A hung GUI app pegging a core is visible, and
+  the window manager already offers to kill it.
+- **A deliberately detached job.** `nohup make -j4 &` in a terminal you then
+  closed matches every test here, and it *will* be nominated. This is the one
+  real false positive and there is no signal that separates it from a leak —
+  the difference is entirely in whether you meant it. Which is why the
+  notification asks instead of acting, names the command line so you recognise
+  your own work in one glance, and carries a **Never ask again** button that
+  writes the command to `~/.config/mintbook/runaway.ignore`.
+
+It never ends anything on its own. The only thing that sends a signal is the
+button, and it sends `SIGTERM`, then says so if that was ignored.
+
+### One thing this found on the way
+
+Four concurrent `redshift` daemons, ages 10h and 3×3.4h, where there should be
+one. `bin/night-apply` has a `stop_redshift()` that SIGTERMs then SIGKILLs
+every one it finds, behind an flock, with a comment saying multiple daemons
+fighting over the RandR LUT is a failure mode it already knows about — and its
+pid finder does match all four when run by hand. So the duplicates are real
+and the cause is **not established**: the session that produced them is not
+this one, and the obvious test (run `night-apply auto` and count) cannot be
+run from the agent shell this was written in, which can signal its own
+descendants and nothing else. `kill -0` succeeds on those pids and `kill
+-TERM` returns `Permission denied`, so every `os.kill` in `stop_redshift`
+would have been swallowed by its own `except OSError: pass` regardless of
+whether the logic is right. Left open.
+
+### Two things that had to be got right
+
+**Pid reuse.** The question can sit on screen for hours — it is
+`urgency=critical` so it does not expire unread — and in that time the process
+can exit and the kernel can hand its pid to something innocent. Both the
+nomination and the kill are keyed on `starttime` from `/proc/PID/stat`, which
+is what makes a pid unambiguous; and between passes, a state row is discarded
+unless the process aged by about the length of the gap.
+
+**Cost.** The first version read `/proc/PID/stat` for all 286 processes with
+the `read` builtin, forking nothing — and still cost **0.9 s of CPU a pass**,
+most of it the temp file bash creates for the herestring that splits a line
+into fields. That is 0.75% of a core continuously, on a machine whose panel
+jobs were removed for costing 0.10%. One `ps -eo pid=,ppid=,tty=,times=,etimes=,comm=`
+does the same walk in C:
+
+```
+systemd's own accounting, per pass:   223 ms
+every five minutes:                   0.07% of a core
+```
+
+`cgroup` and `/proc/PID/cmdline` are read per *candidate*, not per process, so
+a quiet machine never pays for them.
+
+```bash
+bin/runaway-install            # the five-minute user timer, no root
+bin/runaway-install --revert   # take it off
+bin/runaway-watch --check      # what it sees right now
+bin/runaway-watch --ignore PID # never ask about that command again
+```
