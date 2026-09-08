@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+"""Place the active window in either half of its monitor; restore its geometry."""
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import time
+
+STATE = Path(os.environ.get('XDG_RUNTIME_DIR', f'/run/user/{os.getuid()}')) / 'mintbook-windows.json'
+
+
+def run(*args):
+    return subprocess.check_output(args, text=True, stderr=subprocess.DEVNULL).strip()
+
+
+def prop(window, name):
+    return run('xprop', '-id', window, name).partition('=')[2].strip()
+
+
+def place(mode):
+    import gi
+    gi.require_version('Gdk', '3.0')
+    gi.require_version('GdkX11', '3.0')
+    from gi.repository import Gdk, GdkX11
+    window = run('xdotool', 'getactivewindow')
+    kinds = prop(window, '_NET_WM_WINDOW_TYPE')
+    if '_DOCK' in kinds or '_DESKTOP' in kinds:
+        return
+    identity = (prop(window, '_NET_WM_PID'), prop(window, 'WM_CLASS'))
+    try:
+        state = json.loads(STATE.read_text())
+    except (OSError, ValueError):
+        state = {}
+    saved = state.get(window)
+    if saved and saved['identity'] != list(identity):
+        saved = None
+    if mode == 'restore' and not saved:
+        return
+    flags = prop(window, '_NET_WM_STATE')
+    if '_FULLSCREEN' in flags:
+        return
+    display = Gdk.Display.get_default()
+    foreign = GdkX11.X11Window.foreign_new_for_display(display, int(window))
+    if foreign is None:
+        return
+    work = display.get_monitor_at_window(foreign).get_workarea()
+    # xdotool getwindowgeometry double-counts reparented frame offsets here.
+    # Gdk's root origin agrees with xwininfo's absolute client coordinates.
+    origin = foreign.get_origin()
+    geometry = dict(X=origin[-2], Y=origin[-1], WIDTH=foreign.get_width(), HEIGHT=foreign.get_height())
+    frame = [int(n) for n in re.findall(r'\d+', prop(window, '_NET_FRAME_EXTENTS'))]
+    left, right, top, bottom = frame if len(frame) == 4 else (0, 0, 0, 0)
+    if not saved:
+        saved = dict(identity=identity, geometry=[int(geometry['X']) - left, int(geometry['Y']) - top,
+                                                 int(geometry['WIDTH']), int(geometry['HEIGHT'])],
+                     maximized=('_MAXIMIZED_HORZ' in flags and '_MAXIMIZED_VERT' in flags))
+        state[window] = saved
+    run('wmctrl', '-ir', window, '-b', 'remove,maximized_vert,maximized_horz')
+    # xfwm4 processes the EWMH state and geometry requests asynchronously.
+    for _ in range(30):
+        if '_MAXIMIZED_' not in prop(window, '_NET_WM_STATE'):
+            break
+        time.sleep(.01)
+    if mode == 'restore':
+        x, y, width, height = saved['geometry']
+        # An unplugged monitor must not strand the restored window offscreen.
+        width = min(width, work.width - left - right)
+        height = min(height, work.height - top - bottom)
+        x = min(max(x, work.x), work.x + work.width - width - left - right)
+        y = min(max(y, work.y), work.y + work.height - height - top - bottom)
+        del state[window]
+    else:
+        half = work.width // 2
+        x, y = work.x + (half if mode == 'right' else 0), work.y
+        width = (work.width - half if mode == 'right' else half) - left - right
+        height = work.height - top - bottom
+    run('wmctrl', '-ir', window, '-e', f'0,{x},{y},{max(1, width)},{max(1, height)}')
+    if mode == 'restore' and saved['maximized']:
+        run('wmctrl', '-ir', window, '-b', 'add,maximized_vert,maximized_horz')
+    tmp = STATE.with_suffix('.tmp')
+    tmp.write_text(json.dumps(state))
+    tmp.replace(STATE)
+
+
+if __name__ == '__main__':
+    if len(sys.argv) != 2 or sys.argv[1] not in ('left', 'right', 'restore'):
+        sys.exit('usage: window-place left|right|restore')
+    with STATE.with_suffix('.lock').open('w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        place(sys.argv[1])

@@ -1,0 +1,161 @@
+"""Focused regression tests for action dispatch, keyboard focus and write ordering."""
+import ast
+import importlib.machinery
+import importlib.util
+from pathlib import Path
+from types import SimpleNamespace as NS
+import unittest
+import tempfile
+import json
+import os
+import time
+from unittest.mock import patch
+import gi
+gi.require_version('Gdk', '3.0')
+from gi.repository import Gdk
+
+ROOT = Path(__file__).resolve().parents[1]
+
+def load(name):
+    loader = importlib.machinery.SourceFileLoader(name.replace('-', '_'), str(ROOT / 'bin' / name))
+    module = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(module)
+    return module
+
+
+def panel_class():
+    tree = ast.parse((ROOT / 'bin/control-center').read_text())
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'Panel')
+    namespace = dict(Gdk=Gdk)
+    exec(compile(ast.Module(body=[cls], type_ignores=[]), '<Panel>', 'exec'), namespace)
+    return namespace['Panel']
+
+class DailyTests(unittest.TestCase):
+    def test_rofi_custom_input_cannot_execute(self):
+        actions = load('spotlight-actions')
+        with patch.dict(actions.os.environ, {'ROFI_RETV': '2', 'ROFI_INFO': 'dark'}), patch.object(actions.subprocess, 'Popen') as spawn:
+            actions.main()
+            spawn.assert_not_called()
+
+    def test_rofi_selection_is_fixed_argv(self):
+        actions = load('spotlight-actions')
+        with patch.dict(actions.os.environ, {'ROFI_RETV': '1', 'ROFI_INFO': 'dark'}), patch.object(actions.subprocess, 'Popen') as spawn:
+            actions.main()
+            self.assertEqual(spawn.call_args.args[0][-2:], ['--execute', 'dark'])
+            self.assertNotIn('shell', spawn.call_args.kwargs)
+
+    def test_health_parse_ignores_noise(self):
+        health = load('mintbook-health')
+        rows = health.parse('noise\nok\twifi\tworking\nfail\tinput\treinstall hook\nsummary\t1\t0\t1\n')
+        self.assertEqual([r['status'] for r in rows], ['ok', 'fail'])
+        self.assertEqual(rows[1]['detail'], 'reinstall hook')
+
+    def test_health_skips_unchanged_kernel_and_duplicate_failures(self):
+        health = load('mintbook-health')
+        with tempfile.TemporaryDirectory() as directory:
+            health.STATE = Path(directory) / 'health.json'
+            old = dict(kernel=os.uname().release, rows=[dict(status='fail', label='input', detail='old')])
+            health.STATE.write_text(json.dumps(old))
+            with patch.object(health.subprocess, 'run') as run:
+                self.assertEqual(health.check(only_changed=True), old)
+                run.assert_not_called()
+            result = NS(returncode=1, stdout='fail\tinput\tnew detail\nsummary\t0\t0\t1\n')
+            with patch.object(health.subprocess, 'run', return_value=result) as run:
+                health.check(notify=True)
+                self.assertEqual(run.call_count, 1)  # doctor only; no duplicate notification
+
+    def test_health_rejects_partial_results(self):
+        health = load('mintbook-health')
+        with tempfile.TemporaryDirectory() as directory:
+            health.STATE = Path(directory) / 'health.json'
+            result = NS(returncode=1, stdout='ok\twifi\tworking\n')
+            with patch.object(health.subprocess, 'run', return_value=result):
+                with self.assertRaises(RuntimeError):
+                    health.check()
+            self.assertFalse(health.STATE.exists())
+
+    def test_awake_status_rejects_expired_and_reused_process_ids(self):
+        awake = load('keep-awake')
+        with tempfile.TemporaryDirectory() as directory:
+            awake.STATE = Path(directory) / 'awake.json'
+            pid = os.getpid()
+            start = Path(f'/proc/{pid}/stat').read_text().split(') ', 1)[1].split()[19]
+            state = dict(pid=pid, start=start, until=time.monotonic() + 61)
+            awake.STATE.write_text(json.dumps(state))
+            self.assertEqual(awake.status(), 2)
+            state['start'] = 'stale'
+            awake.STATE.write_text(json.dumps(state))
+            self.assertEqual(awake.status(), 0)
+            state.update(start=start, until=time.monotonic() - 1)
+            awake.STATE.write_text(json.dumps(state))
+            self.assertEqual(awake.status(), 0)
+
+    def test_writes_coalesce_until_previous_finishes(self):
+        Panel = panel_class()
+        panel = Panel.__new__(Panel)
+        sent, updated = [], []
+        panel._send_value = lambda tile: sent.append(tile.requested_value)
+        tile = NS(update=updated.append)
+        panel.set_value(tile, 5)
+        panel.set_value(tile, 10)
+        panel.set_value(tile, 15)
+        self.assertEqual(sent, [5])
+        panel._set_done(tile, 5, {'value': 5}, None)
+        self.assertEqual(sent, [5, 15])
+        self.assertEqual(updated, [])
+        panel._set_done(tile, 15, {'value': 15}, None)
+        self.assertEqual(updated, [{'value': 15}])
+        self.assertFalse(tile.setting)
+
+    def test_tab_visits_toggle_and_detail_without_activation(self):
+        Panel = panel_class()
+        panel = Panel.__new__(Panel)
+        panel.menu = NS(get_visible=lambda: False)
+        tile = NS(spec={'kind': 'toggle', 'detail': 'wifi-menu'})
+        panel.tiles = [tile]
+        panel.key_target = None
+        panel.queue_tiles = lambda: None
+        event = NS(keyval=Gdk.KEY_Tab, state=0)
+        panel.on_key(None, event)
+        self.assertEqual(panel.key_target, (tile, 'value'))
+        panel.on_key(None, event)
+        self.assertEqual(panel.key_target, (tile, 'detail'))
+        self.assertEqual(tile.keyboard_part, 'detail')
+        event.state = Gdk.ModifierType.SHIFT_MASK
+        panel.on_key(None, event)
+        self.assertEqual(panel.key_target, (tile, 'value'))
+
+    def test_slider_keyboard_clamps(self):
+        Panel = panel_class()
+        panel = Panel.__new__(Panel)
+        tile = NS(spec={'kind': 'slider', 'value': 99})
+        tile.number = lambda: float(tile.spec['value'])
+        panel.tiles = [tile]
+        panel.key_target = (tile, 'value')
+        panel.menu = NS(get_visible=lambda: False)
+        panel.queue_tiles = lambda: None
+        calls = []
+        panel.set_value = lambda t, v: calls.append(v)
+        panel.on_key(None, NS(keyval=Gdk.KEY_Right, state=0))
+        panel.on_key(None, NS(keyval=Gdk.KEY_Home, state=0))
+        self.assertEqual(calls, [100, 0])
+
+    def test_menu_refresh_does_not_activate_different_device(self):
+        keys = load('mintbook_keys.py')
+        activated = []
+        class DeviceRow:
+            interactive=True; LINE=30; LEAD=20; h=60; hit=None
+            visible=[{'path': 'speaker-one'}]
+            def test(self,x,y): return 0
+            def release(self,x,y): activated.append(self.visible[0]['path'])
+        row = DeviceRow()
+        panel = NS(rows=[row], area=NS(queue_draw=lambda: None))
+        keys.key(panel, NS(keyval=Gdk.KEY_Tab,state=0), 350)
+        row.visible = [{'path': 'speaker-two'}]
+        keys.key(panel, NS(keyval=Gdk.KEY_Return,state=0), 350)
+        self.assertEqual(activated, [])
+        keys.key(panel, NS(keyval=Gdk.KEY_Return,state=0), 350)
+        self.assertEqual(activated, ['speaker-two'])
+
+if __name__ == '__main__':
+    unittest.main()

@@ -7,19 +7,26 @@
 # See docs/hardware.md.
 set -u
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 PASS=0 WARN=0 FAIL=0
+FORMAT=${1:-}
+case "$FORMAT" in ''|--tsv) ;; *) echo 'usage: doctor [--tsv]' >&2; exit 2 ;; esac
 
-section() { printf '\n\033[1m%s\033[0m\n' "$1"; }
-ok()   { printf '  \033[32mok\033[0m    %-28s %s\n' "$1" "${2-}"; PASS=$((PASS+1)); }
-warn() { printf '  \033[33mwarn\033[0m  %-28s %s\n' "$1" "${2-}"; WARN=$((WARN+1)); }
-bad()  { printf '  \033[31mFAIL\033[0m  %-28s %s\n' "$1" "${2-}"; FAIL=$((FAIL+1)); }
+section() { if [ "$FORMAT" != --tsv ]; then printf '\n\033[1m%s\033[0m\n' "$1"; fi; }
+record() {
+  local detail=${3-}
+  detail=${detail//$'\n'/ }; detail=${detail//$'\t'/ }
+  printf '%s\t%s\t%s\n' "$1" "$2" "$detail"
+}
+ok()   { if [ "$FORMAT" = --tsv ]; then record ok "$@"; else printf '  \033[32mok\033[0m    %-28s %s\n' "$1" "${2-}"; fi; PASS=$((PASS+1)); }
+warn() { if [ "$FORMAT" = --tsv ]; then record warn "$@"; else printf '  \033[33mwarn\033[0m  %-28s %s\n' "$1" "${2-}"; fi; WARN=$((WARN+1)); }
+bad()  { if [ "$FORMAT" = --tsv ]; then record fail "$@"; else printf '  \033[31mFAIL\033[0m  %-28s %s\n' "$1" "${2-}"; fi; FAIL=$((FAIL+1)); }
 
 # check <label> <detail> <test...>  — ok if the test succeeds, FAIL if not
 check() { local l=$1 d=$2; shift 2; if "$@" >/dev/null 2>&1; then ok "$l" "$d"; else bad "$l" "$d"; fi; }
 have()  { [ -e "$1" ]; }
 
-printf '\033[1mmintbook doctor\033[0m — %s\n' "$(date '+%Y-%m-%d %H:%M')"
+if [ "$FORMAT" != --tsv ]; then printf '\033[1mmintbook doctor\033[0m — %s\n' "$(date '+%Y-%m-%d %H:%M')"; fi
 
 section "Kernel"
 KREL=$(uname -r)
@@ -486,5 +493,9 @@ if [ -n "${BATH:-}" ]; then
   [ "$BATH" -ge 70 ] && ok "battery health" "${BATH}% of design" || warn "battery health" "${BATH}% of design"
 fi
 
-printf '\n%d ok, %d warn, %d FAIL\n' "$PASS" "$WARN" "$FAIL"
+if [ "$FORMAT" = --tsv ]; then
+  printf 'summary\t%d\t%d\t%d\n' "$PASS" "$WARN" "$FAIL"
+else
+  printf '\n%d ok, %d warn, %d FAIL\n' "$PASS" "$WARN" "$FAIL"
+fi
 [ "$FAIL" -eq 0 ]

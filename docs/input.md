@@ -1,12 +1,12 @@
 # Input — Apple SPI keyboard and trackpad
 
-**Status: working at boot. Sleep is fixed but UNVERIFIED.** Three separate
+**Status: working at boot; sleep reported working in daily use (2026-09-07).** Three separate
 problems:
 
 | | |
 |---|---|
 | Dead at boot | **Fixed.** `dw_dmac_pci` is blacklisted, so SPI always uses PIO. |
-| Dead after sleep | **Fix written, not yet tested.** applespi does not survive S3; a resume hook rebinds it. No suspend has been run since installing it. |
+| Dead after sleep | **Working in daily use, per user report on 2026-09-07.** The resume hook rebinds applespi. Controlled cycle and overnight-drain measurements remain outstanding. |
 | Palm / typing | **Quirk installed.** Disable-while-typing was a no-op until the keyboard was marked internal. **Log out once** for Xorg to reload it. |
 
 `bin/input-check` reports all three. `sudo bin/input-install` copies the quirk, the
@@ -221,10 +221,11 @@ sudo systemctl disable mintbook-applespi-resume.service
 sudo rm /etc/systemd/system/mintbook-applespi-resume.service /usr/local/sbin/mintbook-applespi-rebind
 ```
 
-### Verifying it — this has NOT been done yet
+### Verification status
 
-The hook is written and wired in, but **no suspend has been run since**. Until one is,
-treat it as untested. After the next wake:
+On 2026-09-07 the user reported that sleep has been working over the last few days.
+The hook is left unchanged. This is evidence from normal use, not a recorded
+repeat-cycle or overnight-drain test. For a future controlled check, after wake:
 
 ```bash
 bin/input-check                    # want: timeouts 0, touchpad present

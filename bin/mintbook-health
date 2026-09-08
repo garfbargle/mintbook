@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+"""Read-only doctor view and quiet checks after the running kernel changes."""
+import fcntl
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import threading
+import time
+
+STATE = Path.home() / '.cache/mintbook/health.json'
+DOCTOR = Path(__file__).resolve().parent / 'doctor'
+
+
+def load():
+    try:
+        return json.loads(STATE.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def parse(output):
+    rows = []
+    for line in output.splitlines():
+        fields = line.split('\t', 2)
+        if len(fields) == 3 and fields[0] in ('ok', 'warn', 'fail'):
+            rows.append(dict(zip(('status', 'label', 'detail'), fields)))
+    return rows
+
+
+def check(only_changed=False, notify=False):
+    STATE.parent.mkdir(parents=True, exist_ok=True)
+    with STATE.with_suffix('.lock').open('w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        old = load()
+        kernel = os.uname().release
+        if only_changed and old.get('kernel') == kernel:
+            return old
+        result = subprocess.run([str(DOCTOR), '--tsv'], text=True, capture_output=True, timeout=90)
+        rows = parse(result.stdout)
+        complete = any(line.startswith('summary\t') for line in result.stdout.splitlines())
+        if not rows or not complete or result.returncode not in (0, 1):
+            raise RuntimeError('System check could not complete. Run bin/doctor in a terminal.')
+        state = dict(kernel=kernel, checked=time.time(), rows=rows)
+        tmp = STATE.with_suffix('.tmp')
+        tmp.write_text(json.dumps(state))
+        tmp.replace(STATE)
+        before = {r['label'] for r in old.get('rows', []) if r['status'] == 'fail'}
+        new = [r['label'] for r in rows if r['status'] == 'fail' and r['label'] not in before]
+        if notify and new:
+            subprocess.run(['notify-send', '-a', 'Mintbook', 'System needs attention',
+                            ', '.join(new) + '. Open “Check system health” in Spotlight.'], timeout=5)
+        return state
+
+
+def show():
+    import gi
+    gi.require_version('Gtk', '3.0')
+    from gi.repository import Gtk, GLib, Gdk
+    win = Gtk.Window(title='Mintbook — System Health')
+    win.set_default_size(720, 620)
+    win.set_position(Gtk.WindowPosition.CENTER)
+    win.connect('destroy', Gtk.main_quit)
+    win.connect('key-press-event', lambda w, e: (w.destroy(), True)[1] if e.keyval == Gdk.KEY_Escape else False)
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin=20)
+    win.add(box)
+    heading = Gtk.Label(label='Checking system…', xalign=0)
+    box.pack_start(heading, False, False, 0)
+    sub = Gtk.Label(label='Read-only checks. Repair instructions appear with each finding.', xalign=0)
+    sub.set_line_wrap(True)
+    box.pack_start(sub, False, False, 0)
+    scroll = Gtk.ScrolledWindow()
+    scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+    items = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    scroll.add(items)
+    box.pack_start(scroll, True, True, 0)
+    refresh = Gtk.Button(label='Check again')
+    box.pack_start(refresh, False, False, 0)
+
+    def landed(state, error):
+        if not win.get_visible():
+            return False
+        refresh.set_sensitive(True)
+        for child in items.get_children():
+            items.remove(child)
+        if error:
+            heading.set_text('Could not finish checking')
+            sub.set_text(error)
+            return False
+        rows = state['rows']
+        fails = sum(r['status'] == 'fail' for r in rows)
+        warns = sum(r['status'] == 'warn' for r in rows)
+        heading.set_text(f'{fails} failures · {warns} notes' if fails or warns else 'All checks passed')
+        sub.set_text('Checked ' + time.strftime('%H:%M', time.localtime(state['checked'])) + ' · Kernel ' + state['kernel'])
+        passed = Gtk.Expander(label=f"Passed checks ({sum(r['status'] == 'ok' for r in rows)})")
+        pass_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        passed.add(pass_box)
+        for row in sorted(rows, key=lambda r: {'fail': 0, 'warn': 1, 'ok': 2}[r['status']]):
+            icon = {'fail': 'Needs attention', 'warn': 'Note', 'ok': 'Passed'}[row['status']]
+            detail = row['detail']
+            if row['status'] == 'fail' and row['label'] == 'updates genmon rc':
+                detail += ('\nThe saved update-indicator configuration is missing. '
+                           'To restore its bar icon, run:\n' + str(DOCTOR.parent / 'updates-install'))
+            label = Gtk.Label(label=f"{icon} — {row['label']}\n{detail}", xalign=0)
+            label.set_selectable(True)
+            label.set_line_wrap(True)
+            label.set_max_width_chars(72)
+            label.set_margin_bottom(8)
+            (pass_box if row['status'] == 'ok' else items).pack_start(label, False, False, 0)
+        items.pack_start(passed, False, False, 0)
+        items.show_all()
+        return False
+
+    def run(*_):
+        refresh.set_sensitive(False)
+        heading.set_text('Checking system…')
+        def worker():
+            try:
+                state, error = check(), None
+            except Exception as exc:
+                state, error = None, str(exc)
+            GLib.idle_add(landed, state, error)
+        threading.Thread(target=worker, daemon=True).start()
+    refresh.connect('clicked', run)
+    win.show_all()
+    run()
+    Gtk.main()
+
+
+if __name__ == '__main__':
+    if sys.argv[1:] == ['--on-kernel-change']:
+        check(only_changed=True, notify=True)
+    elif sys.argv[1:] == ['--check']:
+        print(json.dumps(check()))
+    elif not sys.argv[1:]:
+        show()
+    else:
+        sys.exit('usage: mintbook-health [--check|--on-kernel-change]')

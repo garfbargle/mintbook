@@ -4,15 +4,22 @@
 set -euo pipefail
 
 theme="$HOME/.config/rofi/spotlight.rasi"
+actions="$HOME/.local/bin/spotlight-actions"
+args=(-show drun)
+if [ -x "$actions" ]; then
+    args=(-show combi -modes "combi,drun,actions:$actions"
+          -combi-modes drun,actions -combi-hide-mode-prefix
+          -display-combi '⌕' -matching fuzzy)
+fi
 if [ "${1:-}" = --filter ]; then
     filter=${2:-}
     pkill -x rofi 2>/dev/null || true
-    exec rofi -show drun -theme "$theme" -filter "$filter"
+    exec rofi "${args[@]}" -theme "$theme" -filter "$filter"
 elif [ "$#" -ne 0 ]; then
     echo "usage: $(basename "$0") [--filter text]" >&2
     exit 2
 elif pgrep -x rofi > /dev/null; then
     pkill -x rofi
 else
-    exec rofi -show drun -theme "$theme"
+    exec rofi "${args[@]}" -theme "$theme"
 fi

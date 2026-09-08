@@ -1,0 +1,8 @@
+[Unit]
+Description=Check Mintbook hardware after a kernel change
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/mintbook-health --on-kernel-change
+TimeoutStartSec=120
+Nice=10

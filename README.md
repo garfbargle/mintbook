@@ -54,15 +54,30 @@ window to do it.
 
 The wiring: [desktop](docs/desktop.md) · [control center](docs/control-center.md) · [updates](docs/updates.md) · [battery](docs/battery.md) · [bluetooth](docs/bluetooth.md) · [display](docs/display.md)
 
+## Daily shortcuts
+
+Cmd+Space searches applications and system actions: appearance, Bluetooth,
+battery history, system health, updates, and timed Keep Awake. Cmd+Left/Right
+places the current window in either half of its monitor; Cmd+Down restores it.
+Screenshots offer **Copy** and **Open** in their notification.
+
+Control Center and the network, Bluetooth, battery and update menus support
+Tab/Shift+Tab, arrows, Enter and Escape. Keep Awake expires automatically;
+System Health explains `doctor` findings and checks after a running-kernel change.
+
+Install or undo this set with `bin/daily-install` / `bin/daily-install --revert`.
+[Details and verification](docs/daily.md) · [Implementation guide](CONTRIBUTING.md)
+
 ## Hardware
 
 Wi-Fi, speakers, headphones, camera, Bluetooth, keyboard, trackpad.
 
 Speakers, camera, and Bluetooth want kernel **7.0**. **6.14** is the fallback if 7.0 will not boot — silent speakers, but it boots. OpenCore is the picker. GRUB is not.
 
-Sleep is the open one: `applespi` does not survive S3, so every wake used to come
-back with a dead keyboard and trackpad. A resume hook now rebinds it — written,
-wired in, **not yet confirmed on a real wake**. See [input](docs/input.md).
+Sleep has been working in daily use over the last few days, reported on
+2026-09-07. The resume hook rebinds `applespi`, which previously left the keyboard
+and trackpad dead after S3. A controlled cycle/battery test is still outstanding;
+see [input](docs/input.md).
 
 `bin/hw-report` is live. Read-only. No sudo.
 

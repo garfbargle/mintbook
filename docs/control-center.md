@@ -1,5 +1,8 @@
 # Control Center — the panel behind the bar icon
 
+> 2026-09-07: keyboard navigation and daily conveniences are documented in
+> [daily.md](daily.md). Earlier measurements below retain their original scope.
+
 <p align="center">
   <img src="images/control-center.jpg" alt="Control Center" width="420">
 </p>

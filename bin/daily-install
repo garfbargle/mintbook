@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+"""Install Mintbook daily-use improvements, with a persistent undo snapshot."""
+import json
+import os
+from pathlib import Path
+import shlex
+import shutil
+import subprocess
+import sys
+import time
+
+ROOT = Path(__file__).resolve().parent.parent
+HOME = Path.home()
+SAVED = HOME / '.config/mintbook/daily-install.json'
+BIN = HOME / '.local/bin'
+UNIT_DIR = HOME / '.config/systemd/user'
+SCRIPTS = ('spotlight', 'spotlight-actions', 'keep-awake', 'screenshot', 'screenshot-notify',
+           'window-place', 'mintbook-health', 'doctor', 'control-center', 'wifi-menu', 'bt-menu',
+           'battery-menu', 'battery-history', 'updates-menu', 'mintbook_keys.py')
+PLUGINS = ('65-awake', '75-health')
+UNIT = 'mintbook-health.timer'
+KEYS = {'<Super>Left': 'left', '<Super>Right': 'right', '<Super>Down': 'restore'}
+
+
+def run(*argv, check=True):
+    return subprocess.run(argv, check=check, text=True, capture_output=True)
+
+
+def targets():
+    result = [(ROOT / 'bin' / name, BIN / name) for name in SCRIPTS]
+    result += [(ROOT / 'control-center/plugins' / name,
+                HOME / '.local/share/mintbook/control-center/plugins' / name) for name in PLUGINS]
+    result += [(ROOT / 'config/systemd' / name, UNIT_DIR / name)
+               for name in ('mintbook-health.service', UNIT)]
+    return result
+
+
+def snapshot():
+    if SAVED.exists():
+        return json.loads(SAVED.read_text())
+    backup = HOME / '.local/state/mintbook' / ('daily-before-' + time.strftime('%Y%m%d-%H%M%S') + '-' + str(time.time_ns() % 1000000000))
+    backup.mkdir(parents=True)
+    data = dict(files=[], keys={}, timer=run('systemctl', '--user', 'is-enabled', UNIT, check=False).returncode == 0)
+    for i, (_, dest) in enumerate(targets()):
+        entry = dict(path=str(dest), backup=None)
+        if dest.exists() or dest.is_symlink():
+            copy = backup / str(i)
+            shutil.copy2(dest, copy, follow_symlinks=False)
+            entry['backup'] = str(copy)
+        data['files'].append(entry)
+    for key in KEYS:
+        for kind in ('commands', 'xfwm4'):
+            prop = f'/{kind}/custom/{key}'
+            result = run('xfconf-query', '-c', 'xfce4-keyboard-shortcuts', '-p', prop, check=False)
+            data['keys'][prop] = result.stdout.rstrip('\n') if result.returncode == 0 else None
+    SAVED.parent.mkdir(parents=True, exist_ok=True)
+    SAVED.write_text(json.dumps(data, indent=2))
+    return data
+
+
+def restore():
+    data = json.loads(SAVED.read_text())
+    run('systemctl', '--user', 'stop', 'mintbook-awake.service', check=False)
+    run('systemctl', '--user', 'disable', '--now', UNIT, check=False)
+    for entry in data['files']:
+        dest = Path(entry['path'])
+        dest.unlink(missing_ok=True)
+        if entry['backup']:
+            shutil.copy2(entry['backup'], dest, follow_symlinks=False)
+    for prop, value in data['keys'].items():
+        run('xfconf-query', '-c', 'xfce4-keyboard-shortcuts', '-p', prop, '-r', check=False)
+        if value is not None:
+            run('xfconf-query', '-c', 'xfce4-keyboard-shortcuts', '-p', prop, '-n', '-t', 'string', '-s', value)
+    run('systemctl', '--user', 'daemon-reload')
+    if data['timer']:
+        run('systemctl', '--user', 'enable', '--now', UNIT)
+    SAVED.unlink()
+    print('Restored the previous scripts, tiles, timer and window shortcuts. Backup files retained.')
+
+
+def install():
+    for command in ('rofi', 'xfconf-query', 'systemctl', 'systemd-run', 'xdotool', 'wmctrl', 'notify-send'):
+        if not shutil.which(command):
+            sys.exit(f'Missing dependency: {command}')
+    if not os.environ.get('DISPLAY'):
+        sys.exit('Run this in the desktop session (DISPLAY is unset).')
+    import gi
+    gi.require_version('Gtk', '3.0')
+    gi.require_version('GdkX11', '3.0')
+    run(sys.executable, str(ROOT / 'bin/palette-generate'), '--check')
+    snapshot()
+    for source, dest in targets():
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.unlink(missing_ok=True)
+        dest.symlink_to(source)
+    for key, mode in KEYS.items():
+        run('xfconf-query', '-c', 'xfce4-keyboard-shortcuts', '-p', f'/xfwm4/custom/{key}', '-r', check=False)
+        prop = f'/commands/custom/{key}'
+        run('xfconf-query', '-c', 'xfce4-keyboard-shortcuts', '-p', prop, '-r', check=False)
+        run('xfconf-query', '-c', 'xfce4-keyboard-shortcuts', '-p', prop, '-n', '-t', 'string',
+            '-s', shlex.quote(str(BIN / 'window-place')) + ' ' + mode)
+    run('systemctl', '--user', 'daemon-reload')
+    run('systemctl', '--user', 'enable', '--now', UNIT)
+    print('Installed. Cmd+Space searches apps and actions; Cmd+Left/Right places windows; Cmd+Down restores.')
+    print('Reopen Control Center to see Keep Awake and System Health. No panel restart needed.')
+    print(f'Undo: {ROOT}/bin/daily-install --revert')
+
+
+if __name__ == '__main__':
+    if sys.argv[1:] == ['--revert']:
+        restore()
+    elif not sys.argv[1:]:
+        install()
+    else:
+        sys.exit('usage: daily-install [--revert]')

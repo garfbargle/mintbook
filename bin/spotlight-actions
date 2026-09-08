@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+"""Curated rofi actions. Labels are display text; only fixed argv lists execute."""
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+BIN = Path.home() / '.local/bin'
+ACTIONS = {
+    'control': ('Open Control Center', 'preferences-system', 'settings brightness volume', ['control-center']),
+    'wifi': ('Choose Wi-Fi network', 'network-wireless', 'internet connect network', ['wifi-menu']),
+    'bluetooth': ('Connect headphones or Bluetooth device', 'bluetooth', 'speaker audio pairing', ['bt-menu']),
+    'battery': ('Show battery history', 'battery', 'energy charge usage power', ['battery-history']),
+    'health': ('Check system health', 'dialog-information', 'doctor diagnostics repair', ['mintbook-health']),
+    'updates': ('Open Software Update', 'system-software-update', 'apt flatpak packages', ['updates-menu']),
+    'light': ('Use light appearance', 'weather-clear', 'theme pearl day', ['appearance-mode', 'light']),
+    'dark': ('Use dark appearance', 'weather-clear-night', 'theme slate night', ['appearance-mode', 'dark']),
+    'auto': ('Use automatic appearance', 'preferences-desktop-theme', 'theme sunrise sunset', ['appearance-mode', 'auto']),
+    'awake30': ('Keep awake for 30 minutes', 'weather-clear', 'sleep screen presentation', ['keep-awake', '30']),
+    'awake60': ('Keep awake for 1 hour', 'weather-clear', 'sleep screen presentation', ['keep-awake', '60']),
+    'awake120': ('Keep awake for 2 hours', 'weather-clear', 'sleep screen presentation', ['keep-awake', '120']),
+    'sleep-normal': ('Stop keeping awake', 'weather-clear-night', 'sleep screen normal', ['keep-awake', 'off']),
+    'screenshots': ('Open screenshots folder', 'folder-pictures', 'capture pictures', ['@folder']),
+}
+
+
+def execute(key):
+    label, _, _, argv = ACTIONS[key]
+    if argv[0] == '@folder':
+        folder = Path.home() / 'Pictures/Screenshots'
+        folder.mkdir(parents=True, exist_ok=True)
+        command = ['xdg-open', str(folder)]
+    else:
+        command = [str(BIN / argv[0]), *argv[1:]]
+    try:
+        result = subprocess.run(command, timeout=3600, capture_output=True, text=True)
+        if result.returncode:
+            raise RuntimeError(result.stderr.strip()[-240:] or 'The action did not complete.')
+        if key in ('light', 'dark', 'auto'):
+            subprocess.run(['notify-send', 'Mintbook', label], timeout=5)
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+        subprocess.run(['notify-send', '-u', 'normal', 'Mintbook action failed', str(error)], timeout=5)
+
+
+def main():
+    if len(sys.argv) == 3 and sys.argv[1] == '--execute':
+        if sys.argv[2] not in ACTIONS:
+            return 2
+        execute(sys.argv[2])
+        return 0
+    if os.environ.get('ROFI_RETV', '0') == '0':
+        print('\0no-custom\x1ftrue')
+        for key, (label, icon, keywords, argv) in ACTIONS.items():
+            if key == 'sleep-normal':
+                try:
+                    if int(subprocess.check_output([str(BIN / 'keep-awake'), 'status'], timeout=1)) == 0:
+                        continue
+                except (OSError, ValueError, subprocess.SubprocessError):
+                    continue
+            if argv[0] != '@folder' and not os.access(BIN / argv[0], os.X_OK):
+                continue
+            print(f'{label}\0icon\x1f{icon}\x1finfo\x1f{key}\x1fmeta\x1f{keywords}')
+    elif os.environ.get('ROFI_RETV') == '1':
+        key = os.environ.get('ROFI_INFO', '')
+        if key in ACTIONS:
+            # Detach all pipes so rofi closes before a popup takes the grab.
+            subprocess.Popen([sys.executable, str(Path(__file__).resolve()), '--execute', key],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

@@ -16,7 +16,7 @@ case "$mode" in
   -f|-r|-w) ;;
   *) echo "usage: $0 -f|-r|-w" >&2; exit 1 ;;
 esac
-file="$dir/Screenshot_$(date +%Y-%m-%d_%H-%M-%S).png"
+file="$dir/Screenshot_$(date +%Y-%m-%d_%H-%M-%S_%N).png"
 xfce4-screenshooter "$mode" -s "$file"
 [ -f "$file" ] || exit 1
 
@@ -52,3 +52,8 @@ win.show_all()
 GLib.timeout_add(160, Gtk.main_quit)
 Gtk.main()
 PY
+
+helper="$HOME/.local/bin/screenshot-notify"
+if [ -x "$helper" ]; then
+    nohup "$helper" "$file" >/dev/null 2>&1 &
+fi

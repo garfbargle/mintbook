@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+"""Timed, process-owned sleep/display inhibitors; never rewrites power settings."""
+import json
+import math
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
+
+STATE = Path(os.environ.get('XDG_RUNTIME_DIR', f'/run/user/{os.getuid()}')) / 'mintbook-awake.json'
+UNIT = 'mintbook-awake.service'
+
+
+def status():
+    try:
+        state = json.loads(STATE.read_text())
+        # Only report an inhibitor held by this process in this boot.
+        if Path(f"/proc/{state['pid']}/stat").read_text().split(') ', 1)[1].split()[19] != state['start']:
+            return 0
+        return max(0, math.ceil((state['until'] - time.monotonic()) / 60))
+    except (OSError, ValueError, KeyError, IndexError):
+        return 0
+
+
+def hold(seconds):
+    import gi
+    gi.require_version('Gio', '2.0')
+    from gi.repository import Gio, GLib
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+    held = []
+    loop = GLib.MainLoop()
+    try:
+        for name, path in (
+            ('org.freedesktop.PowerManagement.Inhibit', '/org/freedesktop/PowerManagement/Inhibit'),
+            ('org.freedesktop.ScreenSaver', '/org/freedesktop/ScreenSaver'),
+        ):
+            destination = 'org.freedesktop.PowerManagement' if 'PowerManagement' in name else name
+            cookie = bus.call_sync(destination, path, name, 'Inhibit',
+                                   GLib.Variant('(ss)', ('Mintbook', 'Timed Keep Awake')),
+                                   GLib.VariantType.new('(u)'), Gio.DBusCallFlags.NONE, 5000, None).unpack()[0]
+            held.append((destination, path, name, cookie))
+        pid = os.getpid()
+        state = dict(pid=pid, start=Path(f'/proc/{pid}/stat').read_text().split(') ', 1)[1].split()[19],
+                     until=time.monotonic() + seconds)
+        STATE.write_text(json.dumps(state))
+        os.chmod(STATE, 0o600)
+        GLib.timeout_add_seconds(seconds, lambda: (loop.quit(), False)[1])
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, lambda: (loop.quit(), False)[1])
+        loop.run()
+    finally:
+        STATE.unlink(missing_ok=True)
+        for destination, path, name, cookie in reversed(held):
+            bus.call_sync(destination, path, name, 'UnInhibit', GLib.Variant('(u)', (cookie,)),
+                          None, Gio.DBusCallFlags.NONE, 5000, None)
+
+
+def main():
+    arg = sys.argv[1] if len(sys.argv) > 1 else 'status'
+    if arg == '--hold' and len(sys.argv) == 3:
+        hold(int(sys.argv[2]))
+    elif arg == 'status':
+        print(status())
+    elif arg == 'off' or arg in ('30', '60', '120'):
+        subprocess.run(['systemctl', '--user', 'stop', UNIT], capture_output=True)
+        if arg != 'off':
+            subprocess.run(['systemd-run', '--user', '--quiet', '--collect', '--unit', UNIT,
+                            '--property=Type=exec', '--', str(Path(__file__).resolve()),
+                            '--hold', str(int(arg) * 60)], check=True)
+            for _ in range(50):
+                if status():
+                    break
+                time.sleep(.1)
+            else:
+                raise RuntimeError('Could not hold sleep/display inhibitors; see journalctl --user -u mintbook-awake')
+        subprocess.run(['notify-send', 'Keep Awake',
+                        'Normal sleep restored' if arg == 'off' else f'Screen and idle sleep paused for {arg} minutes'], timeout=5)
+    else:
+        print('usage: keep-awake 30|60|120|off|status', file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

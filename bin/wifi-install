@@ -36,7 +36,7 @@ fi
 
 echo "==> $BIN"
 install -dm755 "$BIN"
-for f in panel-wifi wifi-menu; do
+for f in panel-wifi wifi-menu mintbook_keys.py; do
   rm -f "$BIN/$f"                       # it may be running; replace, don't write
   install -m755 "$ROOT/bin/$f" "$BIN/$f"
 done

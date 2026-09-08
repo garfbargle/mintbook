@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+APPLY="$HOME/.local/bin/keep-awake"
+[ -x "$APPLY" ] || { echo 'skip = on'; exit; }
+if [ "${1:-read}" = set ]; then
+  case "${2:-}" in on) exec "$APPLY" 30 ;; off) exec "$APPLY" off ;; *) exit 2 ;; esac
+fi
+minutes=$("$APPLY" status)
+value=off; sub='30-minute timer'
+if [ "$minutes" -gt 0 ] 2>/dev/null; then value=on; sub="${minutes}m remaining"; fi
+cat <<EOF
+kind = toggle
+glyph = sun
+title = Keep Awake
+subtitle = $sub
+value = $value
+live = 10
+accent = #ff9f0a
+EOF

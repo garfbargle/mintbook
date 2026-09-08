@@ -1,5 +1,8 @@
 # Desktop — the macOS look
 
+> 2026-09-07: keyboard navigation and daily conveniences are documented in
+> [daily.md](daily.md). Earlier measurements below retain their original scope.
+
 Making XFCE on this machine look and behave like macOS: the top bar, the dock,
 Spotlight, the window manager and the panel indicators.
 
