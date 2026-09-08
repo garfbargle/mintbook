@@ -124,7 +124,15 @@ keyboard — are in [desktop.md](desktop.md).
 
 Charge over **3 h / 12 h / 24 h / 3 d**, with the power source as a strip under
 the axis and a readout that follows the pointer; three numbers; and a ranked
-list of what discharged the battery.
+list of what discharged the battery. Drag across the graph to restrict all
+numbers and the application list to that interval; press **R** or Escape to
+clear the selection. The graph retains the full range for context.
+
+Energy and CPU counters are clipped proportionally at selection boundaries and
+weighted by elapsed time. Intervals with source transitions, inconsistent
+timestamps, zero discharge power, resets (`dt=0`), or gaps longer than three
+minutes are excluded rather than counted as battery use. The charge line and AC
+strip also stop at recording gaps.
 
 ### The per-application watts are a fit, not a guess
 
@@ -135,14 +143,16 @@ in the same minute, so
 watts = base + k × busy-cores
 ```
 
-is solved by least squares over the discharging samples in view, and an
+is solved by time-weighted least squares over valid discharging intervals in view, and an
 application's energy is `k × its own CPU seconds`. `base` is the floor —
 screen, radios, chipset — that no process is responsible for, and it gets **its
 own row** rather than being quietly spread over the applications.
 
-Under **twenty** discharging samples, or a fit that comes back with a negative
-slope or a negative floor, the window says so instead of printing a number it
-made up: *"Not enough discharging samples to fit yet — n of the 20 this needs."*
+Under **twenty** discharging samples or **twenty minutes**, a nonpositive slope,
+a negative floor, no CPU variation, or weighted R² below 0.25, app energy is
+withheld. Apps then shows **recorded CPU time** and each app's share of recorded
+app CPU. A weak positive correlation no longer becomes a confident watt-hour
+column. The R² threshold is a display guard, not evidence of causation.
 
 ### What it cannot see
 

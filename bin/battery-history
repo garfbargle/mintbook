@@ -6,13 +6,13 @@ genmon tick that draws the bar icon. Nothing runs for this window until you
 open it. See docs/battery.md for the format and for what the numbers do and
 do not mean.
 
-The per-application watts are a *fit*, not a guess and not a model: every
+The per-application watts are a CPU-based estimate: every
 sample carries the measured discharge power and the CPU the machine did in the
 same minute, so
 
     watts = base + k x busy-cores
 
-is solved by least squares over the discharging samples in view, and an
+is solved by time-weighted least squares over valid discharging intervals, and an
 application's energy is k x its own CPU seconds. `base` is the floor — screen,
 radios, chipset — that no process is responsible for. What this cannot see is
 in the footer and in the docs, and it is not nothing: GPU work, disk, and a
@@ -20,22 +20,15 @@ process that holds a radio awake while using no CPU are all invisible to it.
 """
 import math
 import os
-import subprocess
 import sys
 import time
-
-import gi
-gi.require_version('Gtk', '3.0')
-gi.require_version('PangoCairo', '1.0')
-import cairo                                                       # noqa: E402
-from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo        # noqa: E402
 
 HOME = os.path.expanduser('~')
 LOG = os.environ.get('MINTBOOK_BAT_LOG', f'{HOME}/.cache/mintbook/battery/history')
 APPLIED = f'{HOME}/.config/mintbook/appearance.applied'
 CLK = os.sysconf('SC_CLK_TCK')
 
-SC = round((Gdk.Screen.get_default().get_resolution() or 96) / 96.0, 3) or 1.0
+SC = 1.0  # resolved from the desktop only when opening the window
 W, PAD, GAP, SHADOW, RADIUS, CARD = 720, 18, 12, 18, 20, 14
 RANGES = [('3h', 3 * 3600), ('12h', 12 * 3600), ('24h', 24 * 3600),
           ('3d', 3 * 86400)]
@@ -113,7 +106,7 @@ def load(max_seconds):
 
         ts pct st mW dt dtotal dbusy [app:jiffies ...]
     """
-    cutoff = time.time() - max_seconds
+    cutoff = time.time() - max_seconds - 3600  # retain the boundary predecessor
     rows = []
     try:
         with open(LOG) as f:
@@ -130,15 +123,54 @@ def load(max_seconds):
                         name, _, j = field.rpartition(':')
                         if name:
                             apps[name] = apps.get(name, 0) + int(j)
-                    rows.append({
+                    row = {
                         'ts': ts, 'pct': int(p[1]), 'st': p[2],
                         'w': int(p[3]) / 1000.0, 'dt': int(p[4]),
-                        'total': int(p[5]), 'busy': int(p[6]), 'apps': apps})
+                        'total': int(p[5]), 'busy': int(p[6]), 'apps': apps}
+                    if (0 <= row['pct'] <= 100 and row['st'] in 'CDFU'
+                            and len(row['st']) == 1 and row['dt'] >= 0
+                            and row['w'] >= 0 and 0 <= row['busy'] <= row['total']
+                            and all(j >= 0 for j in apps.values())
+                            and (not rows or ts > rows[-1]['ts'])):
+                        rows.append(row)
                 except ValueError:
                     continue
     except OSError:
         return []
     return rows
+
+
+def connected(previous, row):
+    """Recognize recording gaps rather than assuming they are active use.
+
+    Three minutes is a conservative ceiling for the intended one-minute log.
+    A source transition's interval is also unknown, rather than all discharge.
+    """
+    return (0 < row['dt'] <= 180
+            and abs(row['ts'] - previous['ts'] - row['dt']) <= 2)
+
+
+def intervals(rows, start, end):
+    """Validated, clipped intervals; counters scale with the selected overlap.
+
+    Power is the gauge reading at the end of each interval, so integrated Wh
+    are sampled estimates. This does not interpolate across missing readings.
+    """
+    result = []
+    for previous, row in zip(rows, rows[1:]):
+        if not connected(previous, row) or row['st'] != previous['st']:
+            continue
+        if row['st'] == 'U' or (row['st'] == 'D' and row['w'] <= 0):
+            continue
+        left, right = max(start, previous['ts']), min(end, row['ts'])
+        if right <= left:
+            continue
+        fraction = (right - left) / row['dt']
+        result.append(dict(row, start=left, ts=right, dt=right - left,
+                           total=row['total'] * fraction,
+                           busy=row['busy'] * fraction,
+                           apps={name: j * fraction for name, j in row['apps'].items()}))
+    return result
 
 
 def battery_facts():
@@ -159,23 +191,30 @@ def fit(rows):
     """base watts and watts-per-busy-core, by least squares on the samples in
     view. Returns (base, k, n) or (None, None, n) when there is not enough to
     fit — which is a thing to say, not a thing to invent a number for."""
-    xs, ys = [], []
+    xs, ys, weights = [], [], []
     for r in rows:
         if r['st'] != 'D' or r['dt'] <= 0 or r['total'] <= 0 or r['w'] <= 0:
             continue
         xs.append(r['busy'] / CLK / r['dt'])          # busy cores
         ys.append(r['w'])
+        weights.append(r['dt'])
     n = len(xs)
-    if n < 20:
+    if n < 20 or sum(weights) < 1200:
         return None, None, n
-    mx, my = sum(xs) / n, sum(ys) / n
-    sxx = sum((x - mx) ** 2 for x in xs)
-    sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    weight = sum(weights)
+    mx = sum(x * w for x, w in zip(xs, weights)) / weight
+    my = sum(y * w for y, w in zip(ys, weights)) / weight
+    sxx = sum(w * (x - mx) ** 2 for x, w in zip(xs, weights))
+    sxy = sum(w * (x - mx) * (y - my) for x, y, w in zip(xs, ys, weights))
     if sxx < 1e-6:
         return None, None, n
     k = sxy / sxx
     base = my - k * mx
     if k <= 0 or base < 0:
+        return None, None, n
+    syy = sum(w * (y - my) ** 2 for y, w in zip(ys, weights))
+    # A positive slope alone does not make CPU a useful explanation of draw.
+    if syy <= 0 or sxy * sxy / (sxx * syy) < .25:
         return None, None, n
     return base, k, n
 
@@ -339,7 +378,7 @@ class ChargePane(Pane):
         # break there rather than draw a slope across four hours of sleep.
         segments, cur = [], []
         for r in rows:
-            if r['dt'] <= 0 and cur:
+            if cur and not connected(cur[-1], r):
                 segments.append(cur)
                 cur = []
             cur.append(r)
@@ -372,23 +411,36 @@ class ChargePane(Pane):
         rgba(cr, self.c['fg'], .10)
         cr.fill()
         start = None
-        for i, r in enumerate(rows):
+        source_rows = self.win.timeline_parts
+        for i, r in enumerate(source_rows):
             plugged = r['st'] in ('C', 'F')
-            if plugged and start is None:
-                start = r['ts']
-            elif not plugged and start is not None:
-                x0, x1 = self.x_of(start, w), self.x_of(rows[i - 1]['ts'], w)
+            if start is not None and (not plugged or r['start'] != source_rows[i - 1]['ts']):
+                x0, x1 = self.x_of(start, w), self.x_of(source_rows[i - 1]['ts'], w)
                 rrect(cr, x0, sy, max(2, x1 - x0), 5, 2.5)
                 rgba(cr, self.c['green'], .75)
                 cr.fill()
                 start = None
+            if plugged and start is None:
+                start = r['start']
         if start is not None:
-            x0, x1 = self.x_of(start, w), self.x_of(rows[-1]['ts'], w)
+            x0, x1 = self.x_of(start, w), self.x_of(source_rows[-1]['ts'], w)
             rrect(cr, x0, sy, max(2, x1 - x0), 5, 2.5)
             rgba(cr, self.c['green'], .75)
             cr.fill()
 
         self.ticks(cr, w, px, py, pw, ph)
+        selection = self.win.drag_range or self.win.selection
+        if selection:
+            x0, x1 = (self.x_of(t, w) for t in sorted(selection))
+            cr.rectangle(x0, py, max(1, x1 - x0), ph)
+            rgba(cr, self.c['blue'], .14)
+            cr.fill()
+            for x in (x0, x1):
+                cr.move_to(x, py)
+                cr.line_to(x, py + ph)
+            rgba(cr, self.c['blue'], .8)
+            cr.set_line_width(1.5)
+            cr.stroke()
         if self.cursor is not None:
             self.readout(cr, w, px, py, pw, ph)
 
@@ -443,6 +495,11 @@ class ChargePane(Pane):
             return True
         return False
 
+    def time_at(self, x):
+        px, _py, pw, _ph = self.plot(self.win.content_w)
+        fraction = max(0, min(1, (x - px) / pw))
+        return self.win.t0 + fraction * (self.win.t1 - self.win.t0)
+
     def leave(self):
         if self.cursor is not None:
             self.cursor = None
@@ -461,7 +518,9 @@ class AppsPane(Pane):
 
     def draw(self, cr, w):
         self.card(cr, w, self.h)
-        text(cr, 'Energy by application', 18, 12, 10.5, self.c['fg'], .9, 'bold')
+        cpu_only = self.win.base is None
+        text(cr, 'Recorded CPU by application' if cpu_only else 'Estimated energy by application',
+             18, 12, 10.5, self.c['fg'], .9, 'bold')
         text(cr, self.win.range_label, 0, 13, 9.5, self.c['fg'], .45,
              align='right', width=w - 18)
         rows = self.win.ranked
@@ -486,12 +545,15 @@ class AppsPane(Pane):
             cr.fill()
             text(cr, 'System floor' if floor else pretty(name), 18, y, 10,
                  self.c['fg'], .55 if floor else .92, width=name_w)
-            text(cr, wh(watt_hours), wh_end - 90, y, 10, self.c['fg'], .85,
+            text(cr, hhmm(watt_hours) if cpu_only else wh(watt_hours),
+                 wh_end - 90, y, 10, self.c['fg'], .85,
                  align='right', width=90, tnum=True)
-            share = 100.0 * watt_hours / max(1e-6, self.win.total_wh)
+            denominator = self.win.recorded_cpu if cpu_only else self.win.total_wh
+            share = 100.0 * watt_hours / max(1e-6, denominator)
             text(cr, f'{share:.0f}%', share_end - 54, y, 10, self.c['fg'], .45,
                  align='right', width=54, tnum=True)
-            text(cr, 'screen · radios · chipset' if floor else hhmm(cpu_seconds),
+            text(cr, ('of recorded app CPU' if cpu_only else
+                      'screen · radios · chipset' if floor else hhmm(cpu_seconds)),
                  time_end - 158, y, 10, self.c['fg'], .45,
                  align='right', width=158)
 
@@ -520,6 +582,11 @@ class StatsPane(Pane):
                  align='center', width=cw)
 
 
+def period(start, end):
+    return (time.strftime('%a %H:%M', time.localtime(start)) + '–'
+            + time.strftime('%H:%M', time.localtime(end)))
+
+
 # -------------------------------------------------------------------- window
 
 class Window:
@@ -528,6 +595,8 @@ class Window:
         self.colors = DARK if self.mode == 'dark' else LIGHT
         self.range_i = 1
         self.hit = None
+        self.selection = None
+        self.drag_range = None
         self.all_rows = load(RANGES[-1][1])
         self.facts = battery_facts()
         self.content_w = W - 2 * PAD
@@ -567,22 +636,29 @@ class Window:
 
     # ---- the numbers
 
-    HEAD, FOOT = 52, 30
+    HEAD, FOOT = 68, 30
 
     def relayout(self):
         self.height = (self.HEAD + sum(p.h for p in self.panes)
                        + GAP * len(self.panes) + self.FOOT + 2 * PAD)
+        y = self.HEAD + PAD
+        for pane in self.panes:
+            pane.y = y
+            y += pane.h + GAP
         self.area.set_size_request(round(W * SC), round(self.height * SC))
 
     def compute(self):
         span = RANGES[self.range_i][1]
         now = time.time()
-        self.rows = [r for r in self.all_rows if r['ts'] >= now - span]
+        self.rows = [r for r in self.all_rows if now - span <= r['ts'] <= now]
         self.t1 = int(now)
         self.t0 = int(now - span)
-        base, k, n = fit(self.rows)
+        self.timeline_parts = intervals(self.all_rows, self.t0, self.t1)
+        start, end = self.selection or (self.t0, self.t1)
+        selected = intervals(self.all_rows, start, end)
+        base, k, n = fit(selected)
         self.base, self.k, self.n_fit = base, k, n
-        total, apps, cpu, floor, seconds = energy(self.rows, base, k)
+        total, apps, cpu, floor, seconds = energy(selected, base, k)
         self.total_wh, self.floor_wh, self.on_battery = total, floor, seconds
         ranked = sorted(apps.items(), key=lambda kv: -kv[1])
         ranked = [(name, v, cpu.get(name, 0.0)) for name, v in ranked
@@ -590,15 +666,17 @@ class Window:
         if base is not None and floor > 0:
             ranked.append(('\x00floor', floor, 0.0))
             ranked.sort(key=lambda t: -t[1])
+        self.recorded_cpu = sum(cpu.values())
+        if base is None:
+            ranked = [(name, secs, secs) for name, secs in sorted(cpu.items(), key=lambda kv: -kv[1])[:8]]
         self.ranked = ranked
-        self.no_fit_reason = (
-            f'Not enough discharging samples to fit yet — {n} of the 20 this '
-            'needs. Run on battery for twenty minutes and it fills in.')
-        self.panes = [ChargePane(self), StatsPane(self),
-                      AppsPane(self, len(self.ranked))]
+        self.no_fit_reason = 'No application CPU was recorded in the selected discharge intervals.'
+        self.panes = [ChargePane(self), StatsPane(self), AppsPane(self, len(self.ranked))]
 
     @property
     def range_label(self):
+        if self.selection:
+            return period(*self.selection)
         return {'3h': 'over the last 3 hours', '12h': 'over the last 12 hours',
                 '24h': 'over the last 24 hours',
                 '3d': 'over the last 3 days'}[RANGES[self.range_i][0]]
@@ -608,7 +686,7 @@ class Window:
         if not self.rows:
             return ''
         drop = self.rows[0]['pct'] - self.rows[-1]['pct']
-        return (f"now {self.rows[-1]['pct']}%   "
+        return (f"last recorded {self.rows[-1]['pct']}%   "
                 + (f'down {drop}' if drop > 0 else f'up {-drop}')
                 + ' points')
 
@@ -617,11 +695,11 @@ class Window:
         f = self.facts
         avg = (self.total_wh * 3600 / self.on_battery) if self.on_battery else 0
         return [
-            ('Used on battery', wh(self.total_wh),
-             f'over {hhmm(self.on_battery)} unplugged'),
+            ('Estimated energy used', wh(self.total_wh),
+             f'over {hhmm(self.on_battery)} recorded'),
             ('Average draw', f'{avg:.1f} W' if avg else '—',
              (f'floor {self.base:.1f} W' if self.base
-              else 'not enough samples')),
+              else 'sampled battery power')),
             ('Battery health', f"{f['health']}%" if f['health'] else '—',
              f"{f['cycles']} cycles · {f['temp']:.0f} °C"),
         ]
@@ -629,8 +707,7 @@ class Window:
     @property
     def footnote(self):
         if self.base is None:
-            return ('Per-application watts need twenty discharging samples to '
-                    'fit against. Charge and time are measured regardless.')
+            return 'Drag graph to filter apps · R resets · 1–4 changes range · energy estimates are withheld when the CPU fit is weak.'
         return (f'Fitted on {self.n_fit} discharging samples: '
                 f'{self.base:.1f} W floor + {self.k:.1f} W per busy core. '
                 'CPU only — GPU, disk and radio time are not in it.')
@@ -658,6 +735,11 @@ class Window:
     def draw_header(self, cr):
         c = self.colors
         text(cr, 'Battery', PAD, PAD + 4, 15, c['fg'], .95, 'bold')
+        self.reset_rect = (132, PAD + 2, 120, 26)
+        if self.selection:
+            text(cr, 'Clear selection ↺', 140, PAD + 9, 9.5, c['blue'], .95)
+        text(cr, 'Drag across the graph to filter the application list.', PAD, 52, 9,
+             c['fg'], .5)
         # range segment, right of the title, left of the close button
         th, tw = 26, 168
         x0, ty = W - PAD - 34 - tw, PAD + 2
@@ -730,6 +812,10 @@ class Window:
     # ---- input
 
     def header_hit(self, x, y):
+        if self.selection:
+            rx, ry, rw, rh = self.reset_rect
+            if rx <= x <= rx + rw and ry <= y <= ry + rh:
+                return ('reset', 0)
         cx, cy, cw, ch = self.close_rect
         if cx <= x <= cx + cw and cy <= y <= cy + ch:
             return ('close', 0)
@@ -740,6 +826,10 @@ class Window:
 
     def on_motion(self, _w, e):
         x, y = e.x / SC, e.y / SC
+        if self.drag_range:
+            self.drag_range = (self.drag_range[0], self.panes[0].time_at(x - PAD))
+            self.area.queue_draw()
+            return True
         hit = self.header_hit(x, y) if y < self.HEAD else None
         redraw = hit != self.hit
         self.hit = hit
@@ -758,7 +848,15 @@ class Window:
         return True
 
     def on_press(self, _w, e):
+        if e.button != 1:
+            return False
         x, y = e.x / SC, e.y / SC
+        pane = self.panes[0]
+        px, py, pw, ph = pane.plot(self.content_w)
+        if PAD + px <= x <= PAD + px + pw and pane.y + py <= y <= pane.y + py + ph:
+            stamp = pane.time_at(x - PAD)
+            self.drag_range = (stamp, stamp)
+            return True
         self.pressed = self.header_hit(x, y) if y < self.HEAD else None
         if self.pressed is None and y < self.HEAD:
             # the header is the title bar this window does not have
@@ -767,40 +865,74 @@ class Window:
         return True
 
     def on_release(self, _w, e):
+        if e.button != 1:
+            return False
         x, y = e.x / SC, e.y / SC
+        if self.drag_range:
+            start, end = sorted((self.drag_range[0], self.panes[0].time_at(x - PAD)))
+            self.drag_range = None
+            # Tiny clicks keep the pointer readout; a selection needs a minute.
+            if end - start >= 60:
+                self.selection = (start, end)
+            self.refresh()
+            return True
         hit = self.header_hit(x, y) if y < self.HEAD else None
         if hit is not None and hit == getattr(self, 'pressed', None):
             kind, i = hit
             if kind == 'close':
                 Gtk.main_quit()
-            elif i != self.range_i:
+            elif kind == 'reset':
+                self.selection = None
+                self.refresh()
+            elif kind == 'range' and i != self.range_i:
                 self.range_i = i
-                self.compute()
-                self.relayout()
-                self.area.queue_draw()
+                self.selection = None
+                self.refresh()
         self.pressed = None
         return True
 
     def on_key(self, _w, e):
+        if e.keyval == Gdk.KEY_Escape and (self.selection or self.drag_range):
+            self.selection = self.drag_range = None
+            self.refresh()
+            return True
         if e.keyval in (Gdk.KEY_Escape, Gdk.KEY_q):
             Gtk.main_quit()
+            return True
+        if e.keyval == Gdk.KEY_r:
+            self.selection = None
+            self.drag_range = None
+            self.refresh()
             return True
         for i, (label, _s) in enumerate(RANGES):
             if e.keyval == Gdk.KEY_1 + i:
                 self.range_i = i
-                self.compute()
-                self.relayout()
-                self.area.queue_draw()
+                self.selection = self.drag_range = None
+                self.refresh()
                 return True
         return False
 
+    def refresh(self):
+        self.compute()
+        self.relayout()
+        self.area.queue_draw()
+
 
 def main():
+    global Gtk, Gdk, Pango, PangoCairo, cairo, SC
+    import gi
+    gi.require_version('Gtk', '3.0')
+    gi.require_version('PangoCairo', '1.0')
+    import cairo
+    from gi.repository import Gtk, Gdk, Pango, PangoCairo
+    if Gdk.Screen.get_default() is None:
+        raise SystemExit('No desktop display.')
+    SC = round((Gdk.Screen.get_default().get_resolution() or 96) / 96.0, 3) or 1.0
+    Gdk.set_program_class('mintbook-battery-history')
     Window()
     Gtk.main()
 
 
 if __name__ == '__main__':
-    Gdk.set_program_class('mintbook-battery-history')
     main()
     sys.exit(0)
