@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # Night Light. Auto is sunset to sunrise from ~/.config/redshift.conf.
+#
+# Off is the one state drawn unlit, and On is amber rather than the system
+# blue — the tile should look like what it does to the screen.
 APPLY="$HOME/.local/bin/night-apply"
 case "${1:-read}" in
   set) "$APPLY" "${2:-auto}" >/dev/null 2>&1; exit 0 ;;
@@ -7,13 +10,12 @@ esac
 mode=$(cat "$HOME/.config/mintbook/night.mode" 2>/dev/null || echo auto)
 sub=$(redshift -p -c "$HOME/.config/redshift.conf" 2>/dev/null \
         | awk -F': *' '/^Color temperature:/ { print $2; exit }')
-cat <<EOF
-kind = segment
-glyph = moon
+cat <<EOF2
+kind = cycle
 title = Night Light
 subtitle = ${sub:-Colour temperature}
 value = $mode
-option = auto|Auto
-option = on|On
-option = off|Off
-EOF
+option = auto|Auto|half
+option = on|On|moon|#ff9f0a
+option = off|Off|moon
+EOF2

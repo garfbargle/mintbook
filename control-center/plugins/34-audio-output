@@ -7,6 +7,12 @@
 # real streams as well, otherwise a browser that was already playing stays on
 # the old speakers until it is restarted.  The 4-channel EQ loopback has no
 # Pulse client (field three is "-") and must remain where it is.
+#
+# A `menu`, not a `segment`.  A segment holds four options and this list is
+# whatever is plugged in and paired, so it used to be capped at four and had
+# to hoist the current default to the front to stop a fifth device pushing the
+# active destination off the tile.  Both are gone: this prints every sink, in
+# the order pactl reports them, and the panel opens it as a dropdown.
 set -u
 
 list_sinks() {
@@ -38,8 +44,8 @@ move_clients() {
 case "${1:-read}" in
   set)
     sink="${2:-}"
-    # Do not let a stale button (for a disconnected Bluetooth device) replace
-    # a valid default with an arbitrary string.
+    # Do not let a stale row (a Bluetooth device that disconnected while the
+    # list was open) replace a valid default with an arbitrary string.
     if list_sinks | awk -F '\t' -v wanted="$sink" '$1 == wanted { found=1 } END { exit !found }'; then
       pactl set-default-sink "$sink" >/dev/null 2>&1 && move_clients "$sink"
     fi
@@ -47,43 +53,12 @@ case "${1:-read}" in
     ;;
 esac
 
+# `subtitle` is what the row reads when `value` matches no option, which is
+# the no-sinks case and nothing else.
 default=$(pactl get-default-sink 2>/dev/null || true)
-count=0
-options=''
-selected=''
-selected_name=''
-while IFS=$'\t' read -r name description; do
-  # A segment has room for four choices.  Keep the default in the list first
-  # so a fifth, less relevant device cannot make the active destination vanish.
-  [ "$name" = "$default" ] && continue
-  options+="$name"$'\t'"$description"$'\n'
-done < <(list_sinks)
-if [ -n "$default" ]; then
-  while IFS=$'\t' read -r name description; do
-    if [ "$name" = "$default" ]; then
-      selected="$name"
-      selected_name="$description"
-      break
-    fi
-  done < <(list_sinks)
-fi
-
-# Print the selected sink first, then the other destinations.  PipeWire has no
-# fixed cap on sinks, but this compact panel does; four is the segment widget's
-# documented maximum.
-if [ -n "$selected" ]; then
-  printf 'kind = segment\nglyph = speaker\ntitle = Output\nvalue = %s\nsubtitle = %s\nlive = 2\n' \
-    "$selected" "${selected_name:-$selected}"
-  printf 'option = %s|%s\n' "$selected" "${selected_name:-$selected}"
-else
-  printf 'kind = segment\nglyph = speaker\ntitle = Output\nvalue = \nsubtitle = No playback device\nlive = 2\n'
-fi
-
-max_other=4
-[ -n "$selected" ] && max_other=3
+printf 'kind = menu\nglyph = speaker\ntitle = Output\nvalue = %s\nsubtitle = No playback device\nlive = 2\n' \
+  "$default"
 while IFS=$'\t' read -r name description; do
   [ -n "$name" ] || continue
-  count=$((count + 1))
-  [ "$count" -le "$max_other" ] || break
   printf 'option = %s|%s\n' "$name" "$description"
-done <<< "$options"
+done < <(list_sinks)

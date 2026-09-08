@@ -56,6 +56,23 @@ click a temperature.
 > `bluetoothctl` so the popup's switch and the tile can never disagree. See
 > [desktop.md](desktop.md#bluetooth-menu-binbt-menu).
 
+> **The three three-state switches became three buttons on 2026-09-07.**
+> Appearance, Night Light and Power were `segment` tiles: a full-width row
+> each, with every option spelled out and one of them lit. Three rows, 194px,
+> to say three words. They are `cycle` tiles now — a third of the width each,
+> one row for all three, an icon that changes with the state and a tap that
+> advances it. Right-click walks back, which is what makes a three-state
+> cycle bearable. Measured with `xwininfo`, the panel window went
+> **678×1074 → 680×850**: 224px shorter, a fifth of it, on the same nine
+> tiles. The two pixels of width are the 12-column grid rounding differently.
+>
+> **Output became a dropdown on the same day.** It was a `segment`, and a
+> segment holds four options, so it was capped at four sinks and had to hoist
+> the current default to the front of the list — otherwise a fifth paired
+> device could push the destination you were listening to off the tile. Both
+> hacks are gone with the cap: `34-audio-output` prints every sink now, in
+> pactl's own order.
+
 CPU and temperature had tiles for about an hour and then lost them. They were
 the same numbers the bar already shows, one click further away — the panel is
 where you go to *change* something. Both plugins are still in the directory as
@@ -118,17 +135,17 @@ panel.
 
 | key | for | meaning |
 |---|---|---|
-| `kind` | all | `toggle`, `segment`, `slider` or `meter`. Required. |
+| `kind` | all | `toggle`, `cycle`, `menu`, `segment`, `slider` or `meter`. Required. |
 | `title` | all | the label. Required. |
 | `subtitle` | all | the smaller line: state, not instructions |
 | `glyph` | all | one of the built-in icons, below |
 | `value` | all | `on`/`off`, an option key, or 0–100 |
-| `option` | segment | `key\|Label`, repeated — 2 to 4 of them |
+| `option` | segment, cycle, menu | `key\|Label\|glyph\|#accent`, repeated. Everything after the key is optional; only `cycle` reads the last two. A `segment` holds 2–4, a `cycle` 2–4, a `menu` as many as there are. |
 | `detail` | toggle, meter | a command for the `›` — opens it and closes the panel |
 | `live` | all | seconds between re-reads **while the panel is open** |
 | `graph` | meter | comma-separated 0–100, drawn as a faded sparkline |
 | `span` | all | columns out of 4; the default depends on the kind |
-| `accent` | toggle | `#rrggbb` for the lit state, instead of the system blue |
+| `accent` | toggle, cycle | `#rrggbb` for the lit state, instead of the system blue. A `cycle` option's own fourth field beats it. |
 | `skip` | all | `on` — no hardware, no tile. Say nothing rather than show a dead switch. |
 
 A line starting with `{` is parsed as JSON instead, for values that need
@@ -138,19 +155,48 @@ newlines or characters `key = value` would mangle.
 
 | kind | looks like | `set` receives | default span |
 |---|---|---|---|
-| `toggle` | a card with a filled icon, macOS-style | `on` or `off` | 2 |
-| `segment` | a labelled row with 2–4 linked buttons | the option key | 4 |
-| `slider` | a thick pill you drag or scroll | `0`–`100` | 4 |
-| `meter` | a reading, optionally over a sparkline | never called | 2 |
+| `toggle` | a card with a filled icon, macOS-style | `on` or `off` | 6 |
+| `cycle` | a third-width card you tap to advance | the option key | 4 |
+| `menu` | a row naming its value, which opens a list | the option key | 12 |
+| `segment` | a labelled row with 2–4 linked buttons | the option key | 12 |
+| `slider` | a thick pill you drag or scroll | `0`–`100` | 12 |
+| `meter` | a reading, optionally over a sparkline | never called | 6 |
 
 `70-updates` is the installed example of `meter`, and `80-cpu.disabled` /
 `85-temp.disabled` in the same directory are what one looks like with a
 `graph` under it.
 
+**`cycle`** is the compact form of `segment`, and the trade it makes is that
+you cannot see the options without tapping through them. Three of them fit a
+row. The icon is the state — an option's third field names its glyph, its
+fourth an accent for the lit disc — and the state is drawn unlit when its key
+is one of `off`, `false`, `no`, `0`, `none`, `disabled`. `auto`, `light` and
+`balanced` are none of those and none of them are *on*, which is why the rule
+is a list of offs rather than the `TRUE` list the `toggle` uses. Left-click
+advances, right-click goes back, and the `subtitle` becomes the tooltip: it is
+for the one thing the icon cannot say, like which way `auto` has resolved.
+
+**`menu`** is for a list whose length is not up to you. It draws one row with
+the current option's label on the right, and opens the rest over the panel.
+Nothing is capped.
+
+**Nothing installed uses `segment` any more** — the three tiles that did are
+`cycle` now, and Output is a `menu`. The code is still there, the same way
+`80-cpu.disabled` is: it is the right widget for a two-choice switch that
+should show both choices, and it is four lines of a plugin to ask for one.
+
 ### Glyphs
 
 `wifi`, `bluetooth`, `moon`, `sun`, `speaker`, `display`, `cpu`,
-`thermometer`, `bolt`, `gear`, `box`, `dot`.
+`thermometer`, `bolt`, `gear`, `box`, `half`, `leaf`, `gauge`, `check`,
+`chevron`, `dot`.
+
+`half` is a disc with one side filled — the shape for a setting that is
+following something else rather than being held at a value, which is what
+`auto` means on both Appearance and Night Light. `leaf` and `gauge` are the
+two ends of the Power cycle; `gauge` is a needle past three quarters rather
+than a flame, because this chip throttles rather than burns and the tile
+should not promise otherwise. `check` and `chevron` are the dropdown's own.
 
 They are cairo paths in a unit box, not image files, so they are crisp at any
 size and take the panel's own colour in both appearances. Adding one is a
@@ -174,13 +220,25 @@ function of about six lines in `bin/control-center` and a line in `GLYPHS`.
 
 ### Audio outputs
 
-The **Output** segment lists available playback devices, including connected
-Bluetooth speakers. Selecting one makes it the default PipeWire/PulseAudio sink
-and moves already-playing apps to it, so it takes effect immediately rather
-than only for the next app you start. The **Sound** slider and the hardware
-volume keys then control that selected destination. The panel refreshes those
-two tiles while open, so a speaker that connects or disconnects appears or
+The **Output** row names the current playback destination and opens the rest
+as a list — every sink, including connected Bluetooth speakers, in the order
+pactl reports them. Selecting one makes it the default PipeWire/PulseAudio
+sink *and* moves already-playing apps to it, so it takes effect immediately
+rather than only for the next app you start. The **Sound** slider and the
+hardware volume keys then control that destination. The panel refreshes both
+tiles while open, so a speaker that connects or disconnects appears or
 vanishes without reopening it.
+
+`MacBook_Speaker_Raw` is filtered out of the list: it is the input to the
+4-channel EQ filter, and sending an app there bypasses the tuned speaker path.
+`set` also checks that the sink it was handed still exists before making it
+the default, so a device that disconnected while the list was open cannot
+replace a working destination with a dead name.
+
+> The list is snapshotted when the dropdown opens, not re-read from the tile
+> underneath it. The tile asks to be `live = 2`, and a list that reordered or
+> shrank under an open menu would hand the click to a different device than
+> the one being pointed at.
 
 ---
 
@@ -198,8 +256,19 @@ with its icon clipped against its own fill is not a GTK widget.
   off in alpha — there is no blur pass anywhere on this machine, by choice.
 - **Light and dark** are the same appearance mode as the bar, read from
   `~/.config/mintbook/appearance.applied`.
-- **Layout** is a 4-column grid. Tiles are packed left to right and wrap when
-  the next one does not fit, so ordering the files orders the panel.
+- **Layout** is a 12-column grid. Tiles are packed left to right and wrap when
+  the next one does not fit, so ordering the files orders the panel. It was
+  four columns until `cycle` arrived, and a third of four columns is not a
+  column. Spanning *n* columns is *n* × `COLW` plus the *n*−1 gaps it
+  swallows, so 6-of-12 is exactly the width 2-of-4 was: every tile that
+  existed before the grid changed is the same size after it.
+- **The dropdown is an overlay, not a second window.** A `Gtk.Menu` needs a
+  grab the panel is already holding, and another override-redirect window
+  would need its own placement, its own shadow and its own dismissal. It is
+  one `DrawingArea` in a `Gtk.Overlay`, covering the panel, hidden until it is
+  asked for, treating a click anywhere outside its own rectangle as a
+  dismissal. It opens with the live row *on top of* the tile rather than below
+  it, the way a macOS pop-up button does.
 - **Scaling.** XFCE only does integer window scaling, so this display runs
   `WindowScalingFactor=1` with `Xft/DPI` at 168 (see [display.md](display.md)).
   Everything in the source is in 1x units and the cairo context is scaled once
@@ -247,6 +316,20 @@ tiles measured 287 ms on the same machine and seven measure 304. That is the
 point of the overlap: the reads finish inside the import, so the import is the
 floor and the plugin count barely shows. Run-to-run variance from load is
 larger than the difference.
+
+> Those seven are the tile set as it was on 2026-09-06. It is nine now
+> — Output and Sound are separate tiles — and `34-audio-output` asks to be
+> `live = 2`, so the line below about nothing asking to be live is about that
+> day, not this one.
+>
+> **The 2026-09-07 tile rewrite was not timed against this.** `cycle` and
+> `menu` draw less than the three segments and the segment they replaced, and
+> the same nine plugins run either way, so there is no reason to expect a
+> change — but the machine was busy enough while they were being written that
+> the same panel measured 570–670 ms to read where this table says 304, and a
+> number taken under that load would not be comparable to the one above it.
+> The win being claimed is 224 pixels of height, which `xwininfo` measures the
+> same on a busy machine as an idle one.
 
 Nothing installed asks to be `live` any more, so an open panel now costs
 nothing until you touch it. A closed one costs nothing at all — which is the
@@ -409,6 +492,12 @@ per click, and it is being paid deliberately.
   silently: the shortcut sits in xfconf looking correct and never fires. The
   installer also deletes each property before writing it, so a re-run is always
   a change.
+- **A widget that has never been shown has never been allocated.** The
+  dropdown clamps itself inside the panel, and it asked its own
+  `get_allocated_height()` for the bound. A `Gtk.Overlay` child created with
+  `set_no_show_all(True)` reports 1×1 until the first time it is mapped, so
+  the clamp pinned every first open to the top of the panel and only the
+  second one landed on the tile. It asks the toplevel window instead.
 - **genmon reads the click command's stdout.** Anything a plugin script leaves
   running with an open stdout keeps the panel waiting.
 - **The pointer has to be read before the GTK import, and synchronously.**

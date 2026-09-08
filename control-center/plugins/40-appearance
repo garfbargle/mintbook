@@ -1,19 +1,23 @@
 #!/usr/bin/env bash
 # System chrome. Auto follows Redshift's period, so the bar turns at the same
 # sunset boundary as Night Light. See bin/appearance-mode.
+#
+# A cycle rather than a segment: three words on screen at all times cost a
+# full row, and the icon says which of them is live. The subtitle is the
+# tooltip, and it is the one thing the icon cannot say — which way `auto` has
+# actually resolved right now.
 APPLY="$HOME/.local/bin/appearance-mode"
 case "${1:-read}" in
   set) "$APPLY" "${2:-auto}" >/dev/null 2>&1; exit 0 ;;
 esac
 mode=$(cat "$HOME/.config/mintbook/appearance.mode" 2>/dev/null || echo auto)
 now=$(cat "$HOME/.config/mintbook/appearance.applied" 2>/dev/null || echo light)
-cat <<EOF
-kind = segment
-glyph = display
+cat <<EOF2
+kind = cycle
 title = Appearance
 subtitle = Now ${now^}
 value = $mode
-option = auto|Auto
-option = light|Light
-option = dark|Dark
-EOF
+option = auto|Auto|half
+option = light|Light|sun
+option = dark|Dark|moon
+EOF2

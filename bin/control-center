@@ -95,11 +95,18 @@ PIDFILE = os.path.expanduser('~/.cache/mintbook/control-center.pid')
 # pixel-sized thing has to be scaled by hand (see docs/display.md). The cairo
 # context is scaled by SC once, and the rest of this file can stay in 1x.
 SC = round((Gdk.Screen.get_default().get_resolution() or 96) / 96.0, 3) or 1.0
-WIDTH, COLS, PAD, GAP, SHADOW = 356, 4, 14, 10, 16
+# Twelve columns rather than four, because a `cycle` tile is a third of the
+# width and a third of four columns is not a column. Spanning n columns is
+# n*COLW plus the n-1 gaps it swallows, so 6-of-12 is exactly the width
+# 2-of-4 was: every tile that existed before the grid changed is the same
+# size after it.
+WIDTH, COLS, PAD, GAP, SHADOW = 356, 12, 14, 10, 16
 RADIUS, TILE_RADIUS = 18, 12
 COLW = (WIDTH - 2 * PAD - (COLS - 1) * GAP) / COLS
-ROWH = {'toggle': 66, 'segment': 58, 'slider': 58, 'meter': 66}
-SPAN = {'toggle': 2, 'segment': 4, 'slider': 4, 'meter': 2}
+ROWH = {'toggle': 66, 'segment': 58, 'slider': 58, 'meter': 66,
+        'cycle': 78, 'menu': 48}
+SPAN = {'toggle': 6, 'segment': 12, 'slider': 12, 'meter': 6,
+        'cycle': 4, 'menu': 12}
 
 # The popup glass. Canonical values live in config/theme/mintbook-glass.ini
 # under [PopupLight] / [PopupDark], and are hardcoded here the way
@@ -114,6 +121,7 @@ LIGHT = {
     'track': (65, 68, 74, .13), 'fill': (255, 255, 255, .95),
     'on_fill': (45, 48, 54), 'accent': (0, 122, 255),
     'seg': (65, 68, 74, .10), 'seg_on': (255, 255, 255, .95),
+    'menu': (250, 250, 252, .99),
 }
 DARK = {
     'top': (104, 109, 119, .975), 'bottom': (74, 78, 86, .968),
@@ -123,12 +131,16 @@ DARK = {
     'track': (255, 255, 255, .16), 'fill': (255, 255, 255, .92),
     'on_fill': (48, 51, 58), 'accent': (10, 132, 255),
     'seg': (0, 0, 0, .20), 'seg_on': (255, 255, 255, .28),
+    'menu': (96, 101, 111, .99),
 }
 
 
 # ---------------------------------------------------------------- plugin I/O
 
 TRUE = ('on', 'true', 'yes', '1', 'active', 'enabled')
+# Which `cycle` states draw unlit. Not simply "not TRUE": `auto`, `light` and
+# `balanced` are none of them on, and all three are a setting doing something.
+OFF = ('off', 'false', 'no', '0', 'none', 'disabled')
 
 
 def parse(text):
@@ -150,8 +162,11 @@ def parse(text):
         key, _, val = line.partition('=')
         key, val = key.strip(), val.strip()
         if key == 'option':
-            label, _, sub = val.partition('|')
-            spec.setdefault('options', []).append([label.strip(), (sub or label).strip()])
+            # key|Label|glyph|#accent — everything after the key is optional,
+            # and only `cycle` reads the last two.
+            f = [p.strip() for p in val.split('|')] + ['', '', '']
+            spec.setdefault('options', []).append(
+                [f[0], f[1] or f[0], f[2], f[3]])
         elif key == 'graph':
             spec['graph'] = [float(v) for v in val.replace(',', ' ').split() if v]
         else:
@@ -384,6 +399,76 @@ def _box(cr, s):
     cr.stroke()
 
 
+def _half(cr, s):
+    """Auto. A disc with one half filled — the shape macOS gives a setting
+    that is following something else rather than being held at a value."""
+    cr.set_line_width(.09 * s)
+    cr.arc(.5 * s, .5 * s, .38 * s, 0, 2 * math.pi)
+    cr.stroke()
+    cr.move_to(.5 * s, .12 * s)
+    cr.arc(.5 * s, .5 * s, .38 * s, -math.pi / 2, math.pi / 2)
+    cr.close_path()
+    cr.fill()
+
+
+def _leaf(cr, s):
+    """Power saver. Stroked rather than filled: a solid lens at 18px is a
+    blob, and the midrib is what makes it read as a leaf — and a midrib can
+    only be a second stroke, because a glyph is one colour."""
+    cr.save()
+    cr.translate(.5 * s, .5 * s)
+    cr.rotate(-math.pi / 4)
+    cr.set_line_width(.085 * s)
+    cr.set_line_join(cairo_round_join())
+    cr.set_line_cap(cairo_round())
+    cr.move_to(0, -.42 * s)
+    cr.curve_to(.32 * s, -.22 * s, .32 * s, .22 * s, 0, .42 * s)
+    cr.curve_to(-.32 * s, .22 * s, -.32 * s, -.22 * s, 0, -.42 * s)
+    cr.close_path()
+    cr.stroke()
+    cr.move_to(0, .42 * s)
+    cr.line_to(0, -.10 * s)
+    cr.stroke()
+    cr.restore()
+
+
+def _gauge(cr, s):
+    """Sustained. A needle past three quarters, not a flame: this chip
+    throttles rather than burns, and the tile should not promise otherwise."""
+    cr.set_line_width(.10 * s)
+    cr.set_line_cap(cairo_round())
+    cr.new_sub_path()
+    cr.arc(.5 * s, .62 * s, .36 * s, math.pi * 1.05, math.pi * 1.95)
+    cr.stroke()
+    cr.move_to(.5 * s, .62 * s)
+    cr.line_to(.75 * s, .37 * s)
+    cr.stroke()
+    cr.arc(.5 * s, .62 * s, .07 * s, 0, 2 * math.pi)
+    cr.fill()
+
+
+def _check(cr, s):
+    cr.set_line_width(.13 * s)
+    cr.set_line_cap(cairo_round())
+    cr.set_line_join(cairo_round_join())
+    cr.move_to(.14 * s, .52 * s)
+    cr.line_to(.39 * s, .76 * s)
+    cr.line_to(.86 * s, .22 * s)
+    cr.stroke()
+
+
+def _chevron(cr, s):
+    """The v on a dropdown. Drawn downward; the tile rotates it if it ever
+    needs to point another way."""
+    cr.set_line_width(.13 * s)
+    cr.set_line_cap(cairo_round())
+    cr.set_line_join(cairo_round_join())
+    cr.move_to(.18 * s, .38 * s)
+    cr.line_to(.50 * s, .68 * s)
+    cr.line_to(.82 * s, .38 * s)
+    cr.stroke()
+
+
 def _dot(cr, s):
     cr.arc(.5 * s, .5 * s, .30 * s, 0, 2 * math.pi)
     cr.fill()
@@ -399,7 +484,8 @@ cairo_winding = lambda: _cairo.FILL_RULE_WINDING
 GLYPHS = {'wifi': _wifi, 'bluetooth': _bluetooth, 'moon': _moon, 'sun': _sun,
           'speaker': _speaker, 'display': _display, 'cpu': _cpu,
           'thermometer': _thermometer, 'bolt': _bolt, 'gear': _gear,
-          'box': _box, 'dot': _dot}
+          'box': _box, 'half': _half, 'leaf': _leaf, 'gauge': _gauge,
+          'check': _check, 'chevron': _chevron, 'dot': _dot}
 
 
 def glyph(cr, name, x, y, size, color, alpha=1.0):
@@ -461,7 +547,8 @@ class Tile(Gtk.DrawingArea):
         self.connect('motion-notify-event', self.on_motion)
         self.connect('scroll-event', self.on_scroll)
         self.connect('leave-notify-event', self.on_leave)
-        if spec.get('subtitle') and spec['kind'] in ('segment', 'slider', 'meter'):
+        if spec.get('subtitle') and spec['kind'] in ('segment', 'slider',
+                                                     'meter', 'cycle'):
             self.set_tooltip_text(spec['subtitle'])
 
     # ---- state helpers
@@ -480,9 +567,23 @@ class Tile(Gtk.DrawingArea):
             return 0.0
 
     def options(self):
-        opts = self.spec.get('options') or []
-        return [(o[0], o[1] if len(o) > 1 else o[0]) if isinstance(o, (list, tuple))
-                else (str(o), str(o)) for o in opts]
+        """(key, label, glyph, accent) — the last two blank unless the plugin
+        gave them, and only `cycle` looks at them."""
+        out = []
+        for o in self.spec.get('options') or []:
+            if not isinstance(o, (list, tuple)):
+                o = [str(o)]
+            o = list(o) + ['', '', '']
+            out.append((str(o[0]), str(o[1] or o[0]), str(o[2]), str(o[3])))
+        return out
+
+    def current(self):
+        """The index of the option the plugin says is live, or -1."""
+        cur = str(self.spec.get('value', ''))
+        for i, o in enumerate(self.options()):
+            if o[0] == cur:
+                return i
+        return -1
 
     def update(self, spec):
         spec['path'], spec['name'] = self.spec['path'], self.spec['name']
@@ -530,7 +631,7 @@ class Tile(Gtk.DrawingArea):
         cr.save()
         rrect(cr, x, y, d, d, d / 2)
         if on:
-            rgba(cr, self.spec_accent())
+            rgba(cr, self.accent())
         else:
             rgba(cr, self.c['track'])
         cr.fill()
@@ -565,7 +666,7 @@ class Tile(Gtk.DrawingArea):
         cur = str(self.spec.get('value', ''))
         sw = tw / len(opts)
         self.seg_rects = []
-        for i, (key, label) in enumerate(opts):
+        for i, (key, label, _g, _a) in enumerate(opts):
             sx = x0 + i * sw
             self.seg_rects.append((sx, sw, key))
             if key == cur:
@@ -579,6 +680,53 @@ class Tile(Gtk.DrawingArea):
             text(cr, label, sx, ty + th / 2 - 9, 9.5, self.c['fg'],
                  .95 if key == cur else .6, 'bold' if key == cur else 'normal',
                  align='center', width=sw)
+
+    def draw_cycle(self, cr, w, h):
+        """A third-width card you tap to advance. The three settings this
+        replaced were full-width segments showing every option at once —
+        three rows and 194px to say three words. The state is the icon; the
+        options are one tap away each, and right-click walks back."""
+        opts = self.options()
+        i = self.current()
+        if i >= 0:
+            key, label, gname, acc = opts[i]
+        else:
+            key, label, gname, acc = '', str(self.spec.get('value', '')), '', ''
+        # Lit unless the state is an off. A tile that is always lit says
+        # nothing; a tile that is never lit cannot show Night Light burning.
+        lit = bool(key) and key.lower() not in OFF
+        self._card(cr, w, h)
+        d = 32
+        x, y = (w - d) / 2, 10
+        rrect(cr, x, y, d, d, d / 2)
+        rgba(cr, self.accent(acc) if lit else self.c['track'])
+        cr.fill()
+        glyph(cr, gname or self.spec.get('glyph', 'dot'),
+              x + d * .22, y + d * .22, d * .56,
+              (255, 255, 255) if lit else self.c['fg'], 1 if lit else .8)
+        text(cr, self.spec.get('title', ''), 4, y + d + 6, 10, self.c['fg'],
+             .95, 'bold', align='center', width=w - 8)
+        text(cr, label, 4, y + d + 20, 9, self.c['fg'], .5,
+             align='center', width=w - 8)
+
+    def draw_menu(self, cr, w, h):
+        """A row that names its current value and opens a list. A segment can
+        hold four options; the number of playback sinks is whatever is plugged
+        in and paired, so it cannot be a segment."""
+        self._card(cr, w, h)
+        gx, gs = 14, 20
+        glyph(cr, self.spec.get('glyph', 'dot'), gx, (h - gs) / 2, gs,
+              self.c['fg'], .85)
+        tx, label_w = gx + gs + 9, 74
+        text(cr, self.spec.get('title', ''), tx, h / 2 - 7, 10.5,
+             self.c['fg'], .95, 'bold', width=label_w)
+        i = self.current()
+        cur = self.options()[i][1] if i >= 0 else self.spec.get('subtitle', '')
+        vx = tx + label_w + 8
+        text(cr, cur, vx, h / 2 - 6.5, 9.5, self.c['fg'], .55,
+             align='right', width=max(24, w - 27 - vx))
+        glyph(cr, 'chevron', w - 22, h / 2 - 5, 10, self.c['fg'],
+              .55 if (self.hover or self.panel.menu_for is self) else .3)
 
     def draw_slider(self, cr, w, h):
         v = self.drag_value if self.drag_value is not None else self.number()
@@ -630,10 +778,13 @@ class Tile(Gtk.DrawingArea):
             text(cr, self.spec['subtitle'], x, h - 25, 9.5, self.c['fg'], .45,
                  align='right', width=max(24, w - 13 - x))
 
-    def spec_accent(self):
-        a = self.spec.get('accent')
+    def accent(self, hexval=None):
+        a = hexval or self.spec.get('accent')
         if a and a.startswith('#') and len(a) == 7:
-            return (int(a[1:3], 16), int(a[3:5], 16), int(a[5:7], 16))
+            try:
+                return (int(a[1:3], 16), int(a[3:5], 16), int(a[5:7], 16))
+            except ValueError:
+                pass
         return self.c['accent']
 
     # ---- input
@@ -670,6 +821,8 @@ class Tile(Gtk.DrawingArea):
     def on_press(self, _w, e):
         if e.button == 3 and self.spec.get('detail'):
             return self.run_detail()
+        if e.button == 3 and self.spec['kind'] == 'cycle':
+            return self.step(-1)      # three states, so walking back matters
         self.pressing = True
         if self.spec['kind'] == 'slider':
             self.drag_value = self._slider_value(e.x / SC)
@@ -679,6 +832,8 @@ class Tile(Gtk.DrawingArea):
 
     def on_release(self, _w, e):
         self.pressing = False
+        if e.button != 1:
+            return True
         kind = self.spec['kind']
         hit = self._hit(e.x / SC, e.y / SC)
         if hit == 'detail':
@@ -696,6 +851,23 @@ class Tile(Gtk.DrawingArea):
         elif kind == 'slider':
             self.drag_value = self._slider_value(e.x / SC)
             self.apply_slider(True)
+        elif kind == 'cycle':
+            self.step(1)
+        elif kind == 'menu':
+            self.panel.open_menu(self)
+        return True
+
+    def step(self, d):
+        opts = self.options()
+        if not opts:
+            return True
+        i = self.current()
+        key = opts[(i + d) % len(opts)][0] if i >= 0 else opts[0][0]
+        # Optimistic: the icon and the word change on the tap, and the re-read
+        # that follows the `set` replaces them with whatever actually happened.
+        self.spec['value'] = key
+        self.queue_draw()
+        self.panel.set_value(self, key)
         return True
 
     def on_scroll(self, _w, e):
@@ -739,6 +911,160 @@ class Tile(Gtk.DrawingArea):
         return True
 
 
+# ------------------------------------------------------------------ dropdown
+
+class MenuLayer(Gtk.DrawingArea):
+    """The list a `menu` tile opens, drawn over the whole panel.
+
+    An overlay rather than a second window: a Gtk.Menu needs a grab the panel
+    already holds, and a second override-redirect window would need its own
+    placement, its own shadow and its own dismissal. This is one DrawingArea
+    that covers the panel, is hidden until it is asked for, and treats a click
+    anywhere outside its own rectangle as a dismissal.
+    """
+    ROW, PADY, RADIUS = 30, 6, 12
+
+    def __init__(self, panel):
+        super().__init__()
+        self.panel = panel
+        self.tile = None
+        self.opts = []
+        self.cur = self.hit = -1
+        self.rect = (0, 0, 0, 0)
+        self.set_no_show_all(True)      # panel.show_all() must not reveal it
+        self.set_halign(Gtk.Align.FILL)
+        self.set_valign(Gtk.Align.FILL)
+        self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK
+                        | Gdk.EventMask.BUTTON_RELEASE_MASK
+                        | Gdk.EventMask.POINTER_MOTION_MASK
+                        | Gdk.EventMask.ENTER_NOTIFY_MASK
+                        | Gdk.EventMask.LEAVE_NOTIFY_MASK)
+        self.connect('draw', self.on_draw)
+        self.connect('button-press-event', self.on_press)
+        self.connect('button-release-event', self.on_release)
+        self.connect('motion-notify-event', self.on_motion)
+        # The layer maps under a pointer that has not moved, so the row it
+        # opened on top of has to light from the crossing event; there may be
+        # no motion event until the user moves off it.
+        self.connect('enter-notify-event', self.on_motion)
+
+    # ---- geometry
+
+    def _origin(self, tile):
+        """The tile's top-left in this layer's own drawing coordinates."""
+        a = tile.get_allocation()
+        r = tile.translate_coordinates(self, 0, 0)
+        if isinstance(r, (list, tuple)):
+            if len(r) == 3 and r[0]:
+                return r[1], r[2], a.width, a.height
+            if len(r) == 2:
+                return r[0], r[1], a.width, a.height
+        return a.x, a.y, a.width, a.height
+
+    def open(self, tile):
+        # The options are snapshotted, not re-read from the tile: the audio
+        # plugin is `live`, and a list that reorders under an open menu would
+        # hand the click to a different device than the one pointed at.
+        self.tile, self.opts = tile, tile.options()
+        self.cur, self.hit = tile.current(), -1
+        if not self.opts:
+            return
+        tx, ty, tw, th = self._origin(tile)
+        tx, ty, tw, th = tx / SC, ty / SC, tw / SC, th / SC
+        h = len(self.opts) * self.ROW + 2 * self.PADY
+        # The live row sits over the tile, the way a macOS pop-up button opens
+        # on its own value rather than below itself.
+        y = ty + (th - self.ROW) / 2 - self.PADY - max(0, self.cur) * self.ROW
+        top = SHADOW + 6
+        # The window's height, not this widget's: a layer that has never been
+        # shown has never been allocated either, and reports 1x1 — which
+        # clamped every first open to the top of the panel.
+        bottom = self.panel.win.get_allocated_height() / SC - SHADOW - 6 - h
+        y = max(top, min(y, max(top, bottom)))
+        self.rect = (tx, y, tw, h)
+        self.show()
+        self.queue_draw()
+
+    def close(self):
+        was, self.tile, self.opts = self.tile, None, []
+        self.hide()
+        # The tile draws its chevron brighter while its list is up, so it has
+        # to be told when the list went away without going through the panel.
+        self.panel.menu_for = None
+        if was is not None:
+            was.queue_draw()
+
+    def _row_at(self, x, y):
+        rx, ry, rw, rh = self.rect
+        if not (rx <= x <= rx + rw and ry <= y <= ry + rh):
+            return -1
+        i = int((y - ry - self.PADY) // self.ROW)
+        return i if 0 <= i < len(self.opts) else -1
+
+    # ---- drawing
+
+    def on_draw(self, _w, cr):
+        if not self.tile:
+            return False
+        cr.set_antialias(_cairo.ANTIALIAS_BEST)
+        cr.scale(SC, SC)
+        c = self.panel.colors
+        x, y, w, h = self.rect
+        for i in range(12, 0, -1):
+            rrect(cr, x - i, y - i + 2, w + 2 * i, h + 2 * i, self.RADIUS + i)
+            cr.set_line_width(1.4)
+            cr.set_source_rgba(0, 0, 0, .06 * (1 - i / 12) ** 2)
+            cr.stroke()
+        rrect(cr, x, y, w, h, self.RADIUS)
+        rgba(cr, c['menu'])
+        cr.fill_preserve()
+        rgba(cr, c['rim'], .5)
+        cr.set_line_width(1)
+        cr.stroke()
+        for i, o in enumerate(self.opts):
+            ry = y + self.PADY + i * self.ROW
+            on = i == self.hit
+            if on:
+                rrect(cr, x + 5, ry + 1, w - 10, self.ROW - 2, 7)
+                rgba(cr, c['accent'])
+                cr.fill()
+            if i == self.cur:
+                glyph(cr, 'check', x + 12, ry + self.ROW / 2 - 5, 10,
+                      (255, 255, 255) if on else c['fg'], .95)
+            text(cr, o[1], x + 30, ry + self.ROW / 2 - 8, 10,
+                 (255, 255, 255) if on else c['fg'], .95,
+                 'bold' if i == self.cur else 'normal', width=w - 42)
+        return False
+
+    # ---- input
+
+    def on_motion(self, _w, e):
+        hit = self._row_at(e.x / SC, e.y / SC)
+        if hit != self.hit:
+            self.hit = hit
+            self.queue_draw()
+        return True
+
+    def on_press(self, _w, e):
+        if self._row_at(e.x / SC, e.y / SC) < 0:
+            self.close()
+        return True
+
+    def on_release(self, _w, e):
+        if e.button != 1:
+            return True
+        i = self._row_at(e.x / SC, e.y / SC)
+        tile = self.tile
+        if i >= 0 and tile is not None:
+            key = self.opts[i][0]
+            self.close()
+            if key != str(tile.spec.get('value', '')):
+                tile.spec['value'] = key
+                tile.queue_draw()
+                self.panel.set_value(tile, key)
+        return True
+
+
 # --------------------------------------------------------------------- panel
 
 class Panel:
@@ -748,6 +1074,7 @@ class Panel:
         self.tiles = []
         self.pool = ThreadPoolExecutor(max_workers=4)
         self.closing = False
+        self.menu_for = None
 
         self.win = win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
         win.set_decorated(False)
@@ -769,7 +1096,12 @@ class Panel:
         for setter in (outer.set_margin_top, outer.set_margin_bottom,
                        outer.set_margin_start, outer.set_margin_end):
             setter(round((SHADOW + PAD) * SC))
-        win.add(outer)
+        overlay = Gtk.Overlay()
+        overlay.add(outer)
+        self.menu = MenuLayer(self)
+        overlay.add_overlay(self.menu)
+        overlay.set_overlay_pass_through(self.menu, False)
+        win.add(overlay)
 
         row, used = None, COLS
         for spec in specs:
@@ -880,11 +1212,29 @@ class Panel:
         self.win.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
         self.win.connect('button-press-event', on_press)
 
+    def open_menu(self, tile):
+        if self.menu_for is tile and self.menu.get_visible():
+            self.menu.close()          # a second click on the row shuts it
+        else:
+            self.menu.open(tile)
+        self.menu_for = tile if self.menu.get_visible() else None
+        tile.queue_draw()
+
     def on_key(self, _w, e):
         if e.keyval in (Gdk.KEY_Escape, Gdk.KEY_q):
+            # Escape dismisses the dropdown before it dismisses the panel.
+            if self.menu.get_visible():
+                self.menu.close()
+                self.menu_for = None
+                self.queue_tiles()
+                return True
             self.close()
             return True
         return False
+
+    def queue_tiles(self):
+        for tile in self.tiles:
+            tile.queue_draw()
 
     def close(self):
         if self.closing:
