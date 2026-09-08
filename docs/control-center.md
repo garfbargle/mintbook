@@ -141,7 +141,7 @@ panel.
 | `glyph` | all | one of the built-in icons, below |
 | `value` | all | `on`/`off`, an option key, or 0–100 |
 | `option` | segment, cycle, menu | `key\|Label\|glyph\|#accent`, repeated. Everything after the key is optional; only `cycle` reads the last two. A `segment` holds 2–4, a `cycle` 2–4, a `menu` as many as there are. |
-| `detail` | toggle, meter | a command for the `›` — opens it and closes the panel |
+| `detail` | toggle, meter | a command for the `›` — opens it and closes the panel. See [Behind the chevron](#behind-the-chevron). |
 | `live` | all | seconds between re-reads **while the panel is open** |
 | `graph` | meter | comma-separated 0–100, drawn as a faded sparkline |
 | `span` | all | columns out of 4; the default depends on the kind |
@@ -217,6 +217,44 @@ function of about six lines in `bin/control-center` and a line in `GLYPHS`.
   Power tile appears to change on its own: [`bin/turbo-budget`](../bin/turbo-budget)
   moves the profile between `power-saver` and `balanced` as it grants and
   revokes bursts, and the tile shows whichever is live at that moment.
+
+### Behind the chevron
+
+A tile with a `detail` shows a `›`, and the command behind it opens in place of
+the panel: the panel closes, and the thing it opened takes its spot.
+
+Wi-Fi and Bluetooth used to open `nm-connection-editor` and `blueman-manager` —
+windows, and windows about saved profiles rather than about the network you are
+on or the speaker you want back. They open
+[`bin/wifi-menu`](../bin/wifi-menu) and [`bin/bt-menu`](../bin/bt-menu) now: the
+same popups the bar icons open, the networks in range and the devices paired,
+each with its own `Settings…` footer for the things a popup should not try to
+be. Both plugins fall back to the old window when the popup is not installed,
+which is what keeps `wifi-install --revert` and `bt-panel-install --revert` a
+single `rm`.
+
+Two things had to change for that to feel like one panel rather than two.
+
+**The zone is 40 px wide, and you can see it.** The chevron itself is five
+pixels of hairline in a tile 159 wide, and the strip that counted as clicking
+it was 26 — narrow enough that aiming for *open Wi-Fi* landed on *turn Wi-Fi
+off* often enough to be the first thing anyone says about this panel. The strip
+is 40 now, and while the pointer is inside it a faint rounded wash is painted
+behind the chevron, under the label rather than over it. A `meter` has nothing
+to set, so the whole tile is the door and the chevron only says so; a `toggle`
+has a switch to protect, so only the strip is. A right-click anywhere on either
+opens the detail, as it always did.
+
+**The popup inherits the panel's anchor.** These popups hang off the bar icon
+that opened them, which they find by reading the pointer at startup. Reached
+from a chevron the pointer is down on a tile instead, and the popup would open
+halfway down the screen. So the panel passes `MINTBOOK_ANCHOR=x,y` — the point
+it was itself opened at — in the detail command's environment, and
+`wifi-menu`, `bt-menu` and `updates-menu` prefer it to the pointer and skip
+their own `xdotool` call. Same right edge, same top, measured: panel at
+`1170,590` closing, popup at `1186,590` opening, both ending at x 1850.
+Anything else behind a chevron ignores the variable and opens where it always
+did.
 
 ### Audio outputs
 

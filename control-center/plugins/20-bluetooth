@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
 # Bluetooth. Same adapter blueman uses; blueman-applet stays the pairing agent.
+#
+# The chevron opens bin/bt-menu, the popup the bar icon opens — the paired
+# devices and what is connected — rather than blueman-manager, which is a
+# window. Its footer still has Bluetooth Settings… for the pairing wizard, the
+# per-profile audio routing and the file transfer. Falls back to blueman when
+# the menu is not installed, the same way bin/panel-bt does.
+MENU="$HOME/.local/bin/bt-menu"
+[ -x "$MENU" ] || MENU=blueman-manager
+
 case "${1:-read}" in
   set) case "$2" in on|true|1) bluetoothctl power on ;; *) bluetoothctl power off ;; esac \
          >/dev/null 2>&1; exit 0 ;;
@@ -35,5 +44,5 @@ glyph = bluetooth
 title = Bluetooth
 value = $on
 subtitle = $sub
-detail = blueman-manager
+detail = $MENU
 EOF

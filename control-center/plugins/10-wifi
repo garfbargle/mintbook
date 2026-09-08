@@ -1,5 +1,17 @@
 #!/usr/bin/env bash
-# Wi-Fi. Toggles the radio; the chevron opens the connection editor.
+# Wi-Fi. Toggles the radio; the chevron opens our own Wi-Fi popup.
+#
+# It used to open nm-connection-editor, which is a window — a window with a
+# list of saved profiles, which is not what someone clicking a chevron next to
+# "Wi-Fi" is after. bin/wifi-menu is the popup the bar icon opens: the
+# networks in range, the one you are on, and a password field. It still has
+# Network Settings… in its own footer for the profile editing a popup should
+# not try to be. Falling back to the editor when the menu is not installed is
+# the same fallback bin/panel-wifi makes, and is what keeps
+# `wifi-install --revert` a single `rm`.
+MENU="$HOME/.local/bin/wifi-menu"
+[ -x "$MENU" ] || MENU=nm-connection-editor
+
 case "${1:-read}" in
   set) case "$2" in on|true|1) nmcli radio wifi on ;; *) nmcli radio wifi off ;; esac
        exit 0 ;;
@@ -18,5 +30,5 @@ glyph = wifi
 title = Wi-Fi
 value = $([ "$radio" = enabled ] && echo on || echo off)
 subtitle = $sub
-detail = nm-connection-editor
+detail = $MENU
 EOF

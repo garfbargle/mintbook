@@ -107,6 +107,11 @@ ROWH = {'toggle': 66, 'segment': 58, 'slider': 58, 'meter': 66,
         'cycle': 78, 'menu': 48}
 SPAN = {'toggle': 6, 'segment': 12, 'slider': 12, 'meter': 6,
         'cycle': 4, 'menu': 12}
+# The chevron is five pixels of hairline; this is the strip of tile that
+# counts as clicking it. A 6-column toggle is 159 wide, so 40 gives a quarter
+# of it to the door and leaves the rest to the switch — the old 26 was narrow
+# enough that aiming for one reliably got the other. See _detail_zone.
+DETAIL_W = 40
 
 # The popup glass. Canonical values live in config/theme/mintbook-glass.ini
 # under [PopupLight] / [PopupDark], and are hardcoded here the way
@@ -611,6 +616,22 @@ class Tile(Gtk.DrawingArea):
         cr.set_line_width(1)
         cr.stroke()
 
+    def _detail_zone(self, cr, w, h):
+        """The wash behind the chevron, painted under the label rather than
+        over it.
+
+        Drawn only while the pointer is in the zone, and only where the tile
+        has something else the click could have meant. Until it was here the
+        chevron was five pixels of hairline and the zone was forty, so the
+        line between turning Wi-Fi off and opening Wi-Fi was invisible: you
+        clicked and found out which one you had asked for.
+        """
+        if self.hit != 'detail':
+            return
+        rrect(cr, w - DETAIL_W + 4, 5, DETAIL_W - 9, h - 10, 9)
+        rgba(cr, self.c['fg'], .07)
+        cr.fill()
+
     def _detail_chevron(self, cr, w, h):
         if not self.spec.get('detail'):
             return
@@ -626,6 +647,7 @@ class Tile(Gtk.DrawingArea):
     def draw_toggle(self, cr, w, h):
         on = self.on_value()
         self._card(cr, w, h)
+        self._detail_zone(cr, w, h)
         d = 34
         x, y = 13, (h - d) / 2
         cr.save()
@@ -773,10 +795,13 @@ class Tile(Gtk.DrawingArea):
                        self.c['fg'], .95, 'bold')
         if self.spec.get('subtitle'):
             # Right-aligned in whatever the reading left over, and ellipsized
-            # there — a top-process line is as long as the process name.
+            # there — a top-process line is as long as the process name. The
+            # chevron, where there is one, takes its 14 off the end first.
             x = 13 + vw + 8
+            room = w - 13 - x - (14 if self.spec.get('detail') else 0)
             text(cr, self.spec['subtitle'], x, h - 25, 9.5, self.c['fg'], .45,
-                 align='right', width=max(24, w - 13 - x))
+                 align='right', width=max(24, room))
+        self._detail_chevron(cr, w, h)
 
     def accent(self, hexval=None):
         a = hexval or self.spec.get('accent')
@@ -790,9 +815,13 @@ class Tile(Gtk.DrawingArea):
     # ---- input
 
     def _hit(self, x, y):
-        if self.spec.get('detail') and x > self.width() - 26 \
-                and self.spec['kind'] in ('toggle', 'meter'):
-            return 'detail'
+        if self.spec.get('detail'):
+            # A meter is a reading with nothing to set, so the whole tile is
+            # the door. A toggle has a switch to protect, so only the strip.
+            if self.spec['kind'] == 'meter':
+                return 'detail'
+            if self.spec['kind'] == 'toggle' and x > self.width() - DETAIL_W:
+                return 'detail'
         if self.spec['kind'] == 'segment':
             for i, (sx, sw, _k) in enumerate(getattr(self, 'seg_rects', [])):
                 if sx <= x <= sx + sw:
@@ -903,9 +932,22 @@ class Tile(Gtk.DrawingArea):
         return False
 
     def run_detail(self):
+        """Open the tile's own panel, and stand it where this one stood.
+
+        The popups behind the chevron — wifi-menu, bt-menu, updates-menu — hang
+        off the bar icon that opened them, which they find by reading the
+        pointer. Reached from here the pointer is down on a tile instead, and
+        the popup would open halfway down the screen. So hand over the anchor
+        this panel was opened with: same right edge, same top, and the sub-panel
+        lands exactly where the panel it replaced was standing. Anything else
+        behind a chevron ignores the variable and opens where it always did.
+        """
         cmd = self.spec.get('detail')
         if cmd:
-            subprocess.Popen(cmd, shell=True, start_new_session=True,
+            env = dict(os.environ)
+            if self.panel.anchor is not None:
+                env['MINTBOOK_ANCHOR'] = '%d,%d' % self.panel.anchor
+            subprocess.Popen(cmd, shell=True, start_new_session=True, env=env,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.panel.close()
         return True
@@ -1075,6 +1117,7 @@ class Panel:
         self.pool = ThreadPoolExecutor(max_workers=4)
         self.closing = False
         self.menu_for = None
+        self.anchor = None       # where the bar icon was; see Tile.run_detail
 
         self.win = win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
         win.set_decorated(False)
@@ -1156,6 +1199,7 @@ class Panel:
         return False
 
     def place(self, px, py):
+        self.anchor = (int(px), int(py))
         win = self.win
         win.realize()
         gdk_win = win.get_window()

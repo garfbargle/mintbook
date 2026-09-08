@@ -98,6 +98,12 @@ os.environ.setdefault('GTK_THEME', 'Adwaita')
 # Where the pointer is now, which is where the icon was clicked: this popup
 # hangs off that icon, and clicking it is the only way to get here.
 #
+# Unless MINTBOOK_ANCHOR says otherwise. The Control Center chevron opens this
+# popup in place of itself, and by then the pointer is somewhere down that
+# panel's own tile list rather than up on the bar — so it hands over the
+# anchor it was opened with, and this popup lands exactly where the panel it
+# replaced was standing. It also skips the xdotool call below.
+#
 # Read synchronously, and deliberately *not* hidden behind the GTK import the
 # way the readings above are. Hiding it is what broke it. Spawned as a Popen
 # the child is descheduled behind this process's own ~500 ms of CPU-bound
@@ -105,13 +111,18 @@ os.environ.setdefault('GTK_THEME', 'Adwaita')
 # sampled the pointer after the import rather than before it and returned the
 # same late position the Gdk read did. Clicking the icon and moving the mouse
 # away put the popup where the mouse had got to. Costs ~12 ms, paid in full.
+PTR_XY = None
 try:
-    _ptr = subprocess.run(['xdotool', 'getmouselocation', '--shell'],
-                          capture_output=True, text=True, timeout=3).stdout
-    _ptr = dict(p.split('=', 1) for p in _ptr.split() if '=' in p)
-    PTR_XY = (int(_ptr['X']), int(_ptr['Y']))
-except Exception:
-    PTR_XY = None
+    _ax, _ay = os.environ['MINTBOOK_ANCHOR'].split(',')
+    PTR_XY = (int(_ax), int(_ay))
+except (KeyError, ValueError):
+    try:
+        _ptr = subprocess.run(['xdotool', 'getmouselocation', '--shell'],
+                              capture_output=True, text=True, timeout=3).stdout
+        _ptr = dict(p.split('=', 1) for p in _ptr.split() if '=' in p)
+        PTR_XY = (int(_ptr['X']), int(_ptr['Y']))
+    except Exception:
+        pass
 
 import gi                                                          # noqa: E402
 gi.require_version('Gtk', '3.0')
@@ -1281,7 +1292,9 @@ def single_instance():
 
 
 def pointer_xy():
-    """Where the pointer was at startup, not where it is now — see PTR_XY.
+    """The anchor this popup hangs off: MINTBOOK_ANCHOR if the Control
+    Center handed one over, else where the pointer was at startup — not where
+    it is now. See PTR_XY.
 
     Falls back to asking Gdk, which is the old behaviour, drift and all, and is
     where this lands if xdotool is not installed.
