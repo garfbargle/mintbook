@@ -43,7 +43,10 @@ NEVER='^(systemd|init|kthreadd|dbus-daemon|dbus-broker|pipewire|wireplumber|puls
 managed() {
   local cg
   { read -r cg < "/proc/$1/cgroup"; } 2>/dev/null || return 1
-  case "${cg##*/}" in *.service) return 0 ;; esac
+  # Any component, not just the leaf: systemd-udevd sits in
+  # `system.slice/systemd-udevd.service/udev`, and testing only the last
+  # segment called the udev daemon an orphan.
+  case "$cg" in *.service|*.service/*) return 0 ;; esac
   return 1
 }
 
@@ -70,6 +73,18 @@ cmdline_of() {
   c=${c#"${c%%[![:space:]]*}"}; c=${c%"${c##*[![:space:]]}"}
   [ -n "$c" ] || c="[$(cat "/proc/$1/comm" 2>/dev/null)]"
   printf '%s' "$c"
+}
+
+# Filled on the first candidate, not at startup: a machine with nothing to
+# report should not fork wmctrl every five minutes.
+WINDOWS=''
+has_window() {
+  if [ -z "$WINDOWS" ]; then
+    command -v wmctrl >/dev/null 2>&1 || { WINDOWS=' '; return 1; }
+    WINDOWS=" $(wmctrl -lp 2>/dev/null | awk '{print $3}' | tr '\n' ' ') "
+  fi
+  case "$WINDOWS" in *" $1 "*) return 0 ;; esac
+  return 1
 }
 
 ignored() {
@@ -149,7 +164,9 @@ while read -r pid ppid tty cpu age comm; do
   fi
 
   if [ "$mode" = check ]; then
-    managed "$pid" && why='systemd unit' || why=''
+    why=''
+    managed "$pid" && why='systemd unit'
+    has_window "$pid" && why="${why:+$why, }window"
     printf '%-8s %4s%%  age %-8s %s\n' "$pid" \
       "$([ "$pct" -lt 0 ] && echo '?' || echo "$pct")" "${age}s" \
       "${why:+[$why] }$(cmdline_of "$pid" | cut -c1-64)"
@@ -158,6 +175,10 @@ while read -r pid ppid tty cpu age comm; do
   [ "$pct" -ge "$MINCPU" ] || continue
   [ "$pct" -gt "$best_pct" ] || continue
   managed "$pid" && continue                          # systemd owns it
+  # Inside the loop, not after it: applied only to the winner, one windowed
+  # process would take the nomination and then silence the pass, hiding a
+  # genuine runaway sitting behind it.
+  has_window "$pid" && continue
   cmd=$(cmdline_of "$pid")
   ignored "$cmd" && continue
   best_pid=$pid; best_pct=$pct; best_cmd=$cmd; best_age=$age
@@ -180,14 +201,6 @@ fi
 # question rather than a silently suppressed one.
 best_start=$(starttime_of "$best_pid") || exit 0
 grep -qxF "$best_pid:$best_start" "$SEEN" 2>/dev/null && exit 0
-
-# The window check forks, so it runs once, for a candidate that has already
-# passed everything else. Something you can see is not something you forgot.
-if command -v wmctrl >/dev/null 2>&1; then
-  case " $(wmctrl -lp 2>/dev/null | awk '{print $3}' | tr '\n' ' ') " in
-    *" $best_pid "*) exit 0 ;;
-  esac
-fi
 
 # ------------------------------------------------------------ the question
 
