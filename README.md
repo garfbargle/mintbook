@@ -19,11 +19,11 @@ No Apple logo. No blur. A 52px glass bar, a dock, and Cmd+Space.
 <p align="center">
   <img src="docs/images/files.jpg" alt="Files" width="48%">
   &nbsp;
-  <img src="docs/images/spotlight.jpg" alt="Spotlight" width="48%">
+  <img src="docs/images/spotlight.jpg" alt="Spotlight system actions" width="48%">
 </p>
 
 The bar keeps what you read — CPU, temperature, Bluetooth, Wi-Fi, battery, the clock.
-Everything you *set* is one click away, in a Control Center that is nine small
+Everything you *set* is one click away, in a Control Center that is eleven small
 executables in a directory. Adding a tile is a twelve-line file.
 
 <p align="center">
@@ -57,7 +57,7 @@ The wiring: [desktop](docs/desktop.md) · [control center](docs/control-center.m
 ## Daily shortcuts
 
 Cmd+Space searches applications and system actions: appearance, Bluetooth,
-battery history, system health, updates, and timed Keep Awake. Cmd+Left/Right
+battery history, system health, updates, sleep checks, and timed Keep Awake. Cmd+Left/Right
 places the current window in either half of its monitor; Cmd+Down restores it.
 Screenshots offer **Copy** and **Open** in their notification.
 
