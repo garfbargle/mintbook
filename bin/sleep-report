@@ -1,0 +1,462 @@
+#!/usr/bin/env python3
+"""Measure one suspend/resume cycle, then exit.
+
+`sleep-report arm` starts this script as a transient user service. Linux freezes
+the watcher with the rest of userspace during S3. CLOCK_BOOTTIME includes that
+time while CLOCK_MONOTONIC does not, so their difference gives the sleep length
+without polling the journal or running anything during sleep.
+"""
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+
+STATE_DIR = Path(os.environ.get(
+    'MINTBOOK_SLEEP_STATE',
+    Path.home() / '.local/state/mintbook/sleep-report'))
+ARMED = STATE_DIR / 'armed.json'
+LATEST = STATE_DIR / 'latest.json'
+HISTORY = STATE_DIR / 'history.jsonl'
+UNIT = 'mintbook-sleep-report.service'
+MAX_ARMED = 36 * 3600
+SETTLE = 12
+
+
+def read(path, default=''):
+    try:
+        return Path(path).read_text().strip() or default
+    except OSError:
+        return default
+
+
+def number(path, scale=1.0):
+    try:
+        return int(read(path)) / scale
+    except ValueError:
+        return None
+
+
+def run(argv, timeout=5):
+    try:
+        result = subprocess.run(argv, text=True, capture_output=True,
+                                timeout=timeout, check=False)
+        return result.stdout.strip() if result.returncode == 0 else ''
+    except (OSError, subprocess.TimeoutExpired):
+        return ''
+
+
+def atomic_json(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + '.tmp')
+    temporary.write_text(json.dumps(value, indent=2) + '\n')
+    os.replace(temporary, path)
+
+
+def boot_id():
+    return read('/proc/sys/kernel/random/boot_id', 'unknown')
+
+
+def battery():
+    base = Path('/sys/class/power_supply/BAT0')
+    status = read(base / 'status', 'Unknown')
+    percent = number(base / 'capacity')
+    temperature = number(base / 'temp', 10)
+    # energy_now is best. This battery reports charge, so use the fixed design
+    # voltage rather than voltage_now: voltage sag must not look like lost Wh.
+    watt_hours = number(base / 'energy_now', 1_000_000)
+    if watt_hours is None:
+        charge = number(base / 'charge_now')
+        voltage = number(base / 'voltage_min_design')
+        if charge is not None and voltage is not None:
+            watt_hours = charge * voltage / 1_000_000_000_000
+    return {'status': status, 'percent': percent, 'wh': watt_hours,
+            'temperature_c': temperature}
+
+
+def input_devices():
+    devices = read('/proc/bus/input/devices')
+    return {'keyboard': 'Name="Apple SPI Keyboard"' in devices,
+            'touchpad': 'Name="Apple SPI Touchpad"' in devices}
+
+
+def wifi_state():
+    output = run(['nmcli', '-t', '-f', 'TYPE,STATE', 'device', 'status'])
+    states = [line.split(':', 1)[1] for line in output.splitlines()
+              if line.startswith('wifi:') and ':' in line]
+    if 'connected' in states:
+        return 'connected'
+    return states[0] if states else 'unavailable'
+
+
+def bluetooth_state():
+    adapter = Path('/sys/class/bluetooth/hci0')
+    if not adapter.exists():
+        return 'unavailable'
+    powered = run(['bluetoothctl', 'show'], timeout=3)
+    if 'Powered: yes' in powered:
+        return 'powered'
+    if 'Powered: no' in powered:
+        return 'off'
+    return 'present'
+
+
+def audio_sink():
+    return run(['pactl', 'get-default-sink'], timeout=3) or 'unavailable'
+
+
+def snapshot(include_services=True):
+    value = {'timestamp': time.time(), 'battery': battery(),
+             'input': input_devices()}
+    if include_services:
+        value.update(wifi=wifi_state(), bluetooth=bluetooth_state(),
+                     audio_sink=audio_sink())
+    return value
+
+
+def observe_recovery(seconds=SETTLE):
+    """Record when desktop services first become usable, and their final state."""
+    started = time.monotonic()
+    first = {'wifi': None, 'audio': None}
+    current = {'wifi': 'unavailable', 'audio_sink': 'unavailable'}
+    while True:
+        elapsed = time.monotonic() - started
+        current['wifi'] = wifi_state()
+        current['audio_sink'] = audio_sink()
+        if current['wifi'] == 'connected' and first['wifi'] is None:
+            first['wifi'] = round(elapsed, 2)
+        if current['audio_sink'] != 'unavailable' and first['audio'] is None:
+            first['audio'] = round(elapsed, 2)
+        if elapsed >= seconds:
+            break
+        time.sleep(min(1, seconds - elapsed))
+    current.update(input=input_devices(), bluetooth=bluetooth_state(), first=first)
+    return current
+
+
+def journal(start, end):
+    output = run(['journalctl', '-b', '--no-pager', '-o', 'json',
+                  '--since', f'@{max(0, start - 5):.3f}',
+                  '--until', f'@{end + 2:.3f}'], timeout=12)
+    rows = []
+    for line in output.splitlines():
+        try:
+            item = json.loads(line)
+            message = str(item.get('MESSAGE', ''))
+            timestamp = int(item.get('__REALTIME_TIMESTAMP', 0)) / 1_000_000
+            priority = int(item.get('PRIORITY', 7))
+        except (ValueError, TypeError, json.JSONDecodeError):
+            continue
+        lowered = message.lower()
+        relevant = (priority <= 3 or any(word in lowered for word in (
+            'suspend entry', 'suspend exit', 'waking up from system sleep',
+            'low-level resume', 'applespi', 'spi transfer timed out',
+            'failed to transfer one message', 'rebind ok', 'rebind failed')))
+        if relevant:
+            rows.append({'timestamp': timestamp, 'priority': priority,
+                         'identifier': item.get('SYSLOG_IDENTIFIER', ''),
+                         'message': message})
+    return rows
+
+
+def battery_change(before, after, sleep_seconds):
+    result = {'measurable': False, 'percent_points': None,
+              'wh': None, 'average_watts': None, 'reason': ''}
+    if before.get('status') != 'Discharging' or after.get('status') != 'Discharging':
+        result['reason'] = (f"power source changed or was not on battery "
+                            f"({before.get('status')} → {after.get('status')})")
+        return result
+    if before.get('wh') is None or after.get('wh') is None:
+        result['reason'] = 'battery energy counter unavailable'
+        return result
+    drop = before['wh'] - after['wh']
+    if drop < -0.05:
+        result['reason'] = 'battery gauge rose during the interval'
+        return result
+    drop = max(0, drop)
+    result.update(measurable=True, wh=round(drop, 3),
+                  average_watts=round(drop * 3600 / max(1, sleep_seconds), 2))
+    if before.get('percent') is not None and after.get('percent') is not None:
+        result['percent_points'] = before['percent'] - after['percent']
+    return result
+
+
+def analyze(before, after_battery, recovery, sleep_seconds, resume_at, rows):
+    messages = [row['message'] for row in rows]
+    timeouts = sum('SPI transfer timed out' in message for message in messages)
+    rebind = next((message for message in reversed(messages)
+                   if 'rebind ' in message.lower()), '')
+    wake = next((row['timestamp'] for row in rows
+                 if 'Waking up from system sleep' in row['message']), None)
+    suspend_exit = next((row['timestamp'] for row in rows
+                         if 'PM: suspend exit' in row['message']), None)
+    kernel_resume = (round(suspend_exit - wake, 3)
+                     if wake is not None and suspend_exit is not None
+                     and suspend_exit >= wake else None)
+    after = {'timestamp': resume_at, 'battery': after_battery,
+             'input': recovery['input'], 'wifi': recovery['wifi'],
+             'bluetooth': recovery['bluetooth'],
+             'audio_sink': recovery['audio_sink']}
+    concerns = []
+    if not recovery['input']['keyboard'] or not recovery['input']['touchpad']:
+        concerns.append('built-in input is missing after resume')
+    if timeouts:
+        concerns.append(f'{timeouts} Apple SPI transfer timeout(s) after wake')
+    if 'rebind failed' in rebind.lower():
+        concerns.append('the applespi rebind hook reported failure')
+    if before.get('wifi') == 'connected' and recovery['wifi'] != 'connected':
+        concerns.append('Wi-Fi was connected before sleep and did not reconnect')
+    if before.get('audio_sink') not in (None, 'unavailable') and recovery['audio_sink'] == 'unavailable':
+        concerns.append('PipeWire did not expose a default audio sink')
+    notes = []
+    if not any('suspend entry' in message for message in messages):
+        notes.append('journal has no suspend-entry marker for this interval')
+    if not rebind:
+        notes.append('journal has no applespi rebind result')
+    drain = battery_change(before['battery'], after_battery, sleep_seconds)
+    if not drain['measurable']:
+        notes.append('battery drain not measured: ' + drain['reason'])
+    return {
+        'version': 1, 'verdict': 'fail' if concerns else ('note' if notes else 'pass'),
+        'boot_id': boot_id(),
+        'armed_at': before.get('armed_at', before['timestamp']),
+        'suspend_at': resume_at - sleep_seconds, 'resume_at': resume_at,
+        'sleep_seconds': round(sleep_seconds, 3),
+        'kernel_resume_seconds': kernel_resume,
+        'before': before, 'after': after, 'battery_drain': drain,
+        'recovery_seconds': recovery['first'], 'spi_timeouts': timeouts,
+        'rebind': rebind or None, 'concerns': concerns, 'notes': notes,
+        'journal': rows[-30:],
+    }
+
+
+def save_report(report):
+    atomic_json(LATEST, report)
+    HISTORY.parent.mkdir(parents=True, exist_ok=True)
+    with HISTORY.open('a') as output:
+        output.write(json.dumps(report, separators=(',', ':')) + '\n')
+
+
+def duration(seconds):
+    seconds = int(round(seconds))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f'{hours}h {minutes:02d}m'
+    if minutes:
+        return f'{minutes}m {secs:02d}s'
+    return f'{secs}s'
+
+
+def when(timestamp):
+    return time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(timestamp))
+
+
+def format_report(report):
+    verdict = {'pass': 'PASS', 'note': 'PASS WITH NOTES', 'fail': 'FAIL'}[report['verdict']]
+    before, after = report['before'], report['after']
+    slept = duration(report['sleep_seconds'])
+    interval = f"{when(report['suspend_at'])} → {when(report['resume_at'])}"
+    lines = [f"Sleep check — {verdict}",
+             f"  slept ............ {slept}  ({interval})"]
+    drain = report['battery_drain']
+    if drain['measurable']:
+        pct = (f", {drain['percent_points']} percentage point(s)"
+               if drain['percent_points'] is not None else '')
+        lines.append(f"  battery .......... {drain['wh']:.2f} Wh{pct} · "
+                     f"{drain['average_watts']:.2f} W average")
+    else:
+        lines.append('  battery .......... not measured · ' + drain['reason'])
+    kernel = (f"{report['kernel_resume_seconds']:.2f}s kernel wake"
+              if report['kernel_resume_seconds'] is not None else 'journal timing unavailable')
+    lines.append(f"  resume ........... {kernel}")
+    inputs = after['input']
+    lines.append('  built-in input ... ' + ('keyboard + trackpad present'
+                                               if inputs['keyboard'] and inputs['touchpad']
+                                               else 'MISSING'))
+    rebind = report['rebind'] or 'no rebind result'
+    lines.append(f"  applespi ......... {report['spi_timeouts']} timeout(s) · {rebind}")
+    wifi_delay = report['recovery_seconds'].get('wifi')
+    lines.append(f"  Wi-Fi ............ {after['wifi']}" +
+                 (f' after {wifi_delay:.1f}s' if wifi_delay is not None else ''))
+    lines.append(f"  Bluetooth ........ {after['bluetooth']}")
+    lines.append(f"  audio ............ {after['audio_sink']}")
+    for concern in report['concerns']:
+        lines.append('  FAIL: ' + concern)
+    for note in report['notes']:
+        lines.append('  note: ' + note)
+    return '\n'.join(lines)
+
+
+def load_json(path):
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def notify(title, body, urgency='normal'):
+    run(['notify-send', '-u', urgency, title, body], timeout=4)
+
+
+def unit_active():
+    return subprocess.run(['systemctl', '--user', 'is-active', '--quiet', UNIT],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                          check=False).returncode == 0
+
+
+def arm():
+    if unit_active():
+        state = load_json(ARMED) or {}
+        message = ('A sleep check is already armed' +
+                   (f" since {when(state['armed_at'])}." if state.get('armed_at') else '.'))
+        print(message)
+        notify('Sleep check already armed', 'Close the lid or suspend normally.')
+        return 0
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    preliminary = {'status': 'starting', 'armed_at': time.time(),
+                   'boot_id': boot_id()}
+    atomic_json(ARMED, preliminary)
+    command = ['systemd-run', '--user', '--quiet', '--collect',
+               f'--unit={UNIT.removesuffix(".service")}',
+               '--property=Type=exec', str(Path(__file__).resolve()), '--watch']
+    result = subprocess.run(command, text=True, capture_output=True, check=False)
+    if result.returncode:
+        ARMED.unlink(missing_ok=True)
+        print(result.stderr.strip() or 'Could not start the sleep watcher.', file=sys.stderr)
+        return 1
+    time.sleep(.2)
+    if not unit_active():
+        ARMED.unlink(missing_ok=True)
+        print('The sleep watcher exited while starting. Check its user journal.', file=sys.stderr)
+        return 1
+    print('Sleep check armed. Close the lid or suspend normally; the result appears after wake.')
+    print('It expires after 36 hours. Cancel: sleep-report cancel')
+    notify('Sleep check armed', 'Close the lid or suspend normally. The result will appear after wake.')
+    return 0
+
+
+def watch():
+    before = snapshot()
+    before['armed_at'] = before['timestamp']
+    state = {'status': 'armed', 'armed_at': before['timestamp'],
+             'boot_id': boot_id(), 'before': before}
+    atomic_json(ARMED, state)
+    previous_offset = time.clock_gettime(time.CLOCK_BOOTTIME) - time.monotonic()
+    deadline = time.monotonic() + MAX_ARMED
+    while time.monotonic() < deadline:
+        time.sleep(1)
+        offset = time.clock_gettime(time.CLOCK_BOOTTIME) - time.monotonic()
+        asleep = offset - previous_offset
+        if asleep >= 5:
+            resume_at = time.time()
+            after_battery = battery()
+            recovery = observe_recovery()
+            rows = journal(resume_at - asleep, time.time())
+            report = analyze(before, after_battery, recovery, asleep, resume_at, rows)
+            save_report(report)
+            ARMED.unlink(missing_ok=True)
+            notify('Sleep check ' + report['verdict'].upper(),
+                   format_report(report).splitlines()[1] + '\n' +
+                   ('Everything recovered.' if report['verdict'] == 'pass'
+                    else '; '.join(report['concerns'] or report['notes'])),
+                   'critical' if report['verdict'] == 'fail' else 'normal')
+            return 0
+        previous_offset = offset
+        # Keep the battery reading within one second of the eventual suspend.
+        before['timestamp'] = time.time()
+        before['battery'] = battery()
+    state.update(status='expired', expired_at=time.time())
+    atomic_json(ARMED, state)
+    notify('Sleep check expired', 'No suspend was detected within 36 hours.')
+    return 0
+
+
+def status():
+    state = load_json(ARMED)
+    if unit_active() and state:
+        print(f"Sleep check armed for {duration(time.time() - state['armed_at'])}.")
+        print('Close the lid or suspend normally. Cancel: sleep-report cancel')
+        return 0
+    if state and state.get('status') == 'expired':
+        print('The last armed check expired without observing a suspend.')
+    elif state and state.get('status') == 'armed':
+        print('The armed watcher is no longer running; the session may have rebooted.')
+    report = load_json(LATEST)
+    if report:
+        print(format_report(report))
+        return 0
+    print('No completed sleep check. Arm one with: sleep-report arm')
+    return 0
+
+
+def cancel():
+    subprocess.run(['systemctl', '--user', 'stop', UNIT], check=False,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    ARMED.unlink(missing_ok=True)
+    print('Sleep check cancelled. No background watcher remains.')
+    return 0
+
+
+def history():
+    reports = []
+    try:
+        for line in HISTORY.read_text().splitlines():
+            try:
+                reports.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    except OSError:
+        pass
+    if not reports:
+        print('No completed sleep checks.')
+        return 0
+    print(f"{'WHEN':16} {'RESULT':15} {'ASLEEP':9} {'DRAIN':10} {'INPUT':7} {'SPI':3}")
+    for report in reports[-20:]:
+        drain = report.get('battery_drain', {})
+        watts = (f"{drain['average_watts']:.2f} W"
+                 if drain.get('measurable') else '—')
+        inputs = report.get('after', {}).get('input', {})
+        alive = 'ok' if inputs.get('keyboard') and inputs.get('touchpad') else 'FAIL'
+        print(f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(report['resume_at'])):16} "
+              f"{report['verdict']:15} {duration(report['sleep_seconds']):9} "
+              f"{watts:10} {alive:7} {report.get('spi_timeouts', '?')}")
+    return 0
+
+
+def main():
+    command = sys.argv[1:] or ['status']
+    if command == ['arm']:
+        return arm()
+    if command == ['--watch']:
+        return watch()
+    if command == ['cancel']:
+        return cancel()
+    if command in (['status'], ['latest']):
+        return status()
+    if command == ['history']:
+        return history()
+    if command == ['json']:
+        report = load_json(LATEST)
+        if not report:
+            print('No completed sleep check.', file=sys.stderr)
+            return 1
+        print(json.dumps(report, indent=2))
+        return 0
+    if command == ['notify']:
+        report = load_json(LATEST)
+        if not report:
+            notify('Sleep check', 'No completed sleep check. Run sleep-report arm first.')
+            return 0
+        notify('Sleep check ' + report['verdict'].upper(),
+               format_report(report),
+               'critical' if report['verdict'] == 'fail' else 'normal')
+        return 0
+    print('usage: sleep-report [arm|status|latest|history|json|notify|cancel]', file=sys.stderr)
+    return 2
+
+
+if __name__ == '__main__':
+    sys.exit(main())

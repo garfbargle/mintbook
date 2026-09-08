@@ -11,6 +11,8 @@ ACTIONS = {
     'wifi': ('Choose Wi-Fi network', 'network-wireless', 'internet connect network', ['wifi-menu']),
     'bluetooth': ('Connect headphones or Bluetooth device', 'bluetooth', 'speaker audio pairing', ['bt-menu']),
     'battery': ('Show battery history', 'battery', 'energy charge usage power', ['battery-history']),
+    'sleep-arm': ('Arm a sleep check', 'system-suspend', 'lid suspend resume battery drain input', ['sleep-report', 'arm']),
+    'sleep-result': ('Show last sleep result', 'dialog-information', 'lid suspend resume report history', ['sleep-report', 'notify']),
     'health': ('Check system health', 'dialog-information', 'doctor diagnostics repair', ['mintbook-health']),
     'updates': ('Open Software Update', 'system-software-update', 'apt flatpak packages', ['updates-menu']),
     'light': ('Use light appearance', 'weather-clear', 'theme pearl day', ['appearance-mode', 'light']),

@@ -6,7 +6,7 @@ problems:
 | | |
 |---|---|
 | Dead at boot | **Fixed.** `dw_dmac_pci` is blacklisted, so SPI always uses PIO. |
-| Dead after sleep | **Working in daily use, per user report on 2026-09-07.** The resume hook rebinds applespi. Controlled cycle and overnight-drain measurements remain outstanding. |
+| Dead after sleep | **Working in daily use, per user report on 2026-09-07.** The resume hook rebinds applespi. `bin/sleep-report` now records the next controlled cycle; the first result remains outstanding. |
 | Palm / typing | **Quirk installed.** Disable-while-typing was a no-op until the keyboard was marked internal. **Log out once** for Xorg to reload it. |
 
 `bin/input-check` reports all three. `sudo bin/input-install` copies the quirk, the
@@ -238,6 +238,57 @@ second or two while it re-probes:
 ```bash
 sudo /usr/local/sbin/mintbook-applespi-rebind
 ```
+
+### The sleep black box
+
+[`bin/sleep-report`](../bin/sleep-report) turns the next normal lid close into a
+measured cycle. It does **not** suspend the machine itself:
+
+```bash
+sleep-report arm       # then close the lid or suspend normally
+sleep-report status    # armed state, or the latest result
+sleep-report history   # the last 20 cycles
+sleep-report json      # complete latest record, including relevant journal rows
+sleep-report cancel    # disarm without sleeping
+```
+
+Cmd+Space also offers **Arm a sleep check** and **Show last sleep result**. The
+watcher is a transient user service. It exists only after `arm`, exits after one
+resume, and expires after 36 hours. No permanent timer, system hook, root change
+or extra sampling daemon is installed.
+
+Linux freezes the watcher with the rest of userspace during S3.
+`CLOCK_BOOTTIME` includes suspended time and `CLOCK_MONOTONIC` does not, so the
+increase in their difference is the measured sleep duration. While armed, the
+watcher refreshes the battery counter once a second; this puts the pre-sleep
+reading within roughly one second of suspend without writing every reading to
+disk. After wake it waits 12 seconds for the existing applespi hook and desktop
+services to settle, then records:
+
+- elapsed sleep time and estimated Wh / percentage-point loss;
+- average sleep watts when both ends were discharging;
+- kernel wake timing from the wake and `PM: suspend exit` journal markers;
+- built-in keyboard and trackpad presence, SPI timeouts and the rebind result;
+- Wi-Fi reconnection, Bluetooth adapter state and the default PipeWire sink;
+- priority-3 journal errors and relevant suspend/applespi messages in the cycle.
+
+Battery Wh uses `energy_now` when available. This MacBook exposes charge, so the
+fallback is `charge_now × voltage_min_design`; using the fixed design voltage
+prevents ordinary voltage sag from looking like energy loss. A charger state
+change or rising gauge is reported as unmeasurable rather than negative drain.
+One cycle is evidence about recovery, but overnight drain needs several cycles.
+
+Records live under `~/.local/state/mintbook/sleep-report/`: `latest.json` and an
+append-only `history.jsonl`. `armed.json` exists only while armed (or after an
+expiry). `daily-install --revert` removes the command but deliberately retains
+the measurements.
+
+Validation on 2026-09-08 covered clean and failed resume fixtures, charger
+transitions, a rising battery gauge, journal filtering, kernel timing and report
+formatting. The complete 33-test suite passes. On the live machine, arm, status,
+cancel and re-arm were exercised without suspending it; the transient process
+used 9.9 MB and 0.027 CPU-seconds over a ten-second armed sample. The first real
+cycle is intentionally left to the next normal lid close.
 
 ### If the rebind does not work
 

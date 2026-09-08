@@ -217,6 +217,22 @@ if grep -qF 'Name="Apple SPI Touchpad"' /proc/bus/input/devices 2>/dev/null; the
 else
   bad "touchpad present" "no Apple SPI Touchpad — input is dead"
 fi
+SLEEP_REPORT="$HOME/.local/bin/sleep-report"
+if [ -x "$SLEEP_REPORT" ]; then
+  if systemctl --user is-active mintbook-sleep-report.service >/dev/null 2>&1; then
+    ok "controlled sleep check" "armed — close the lid or suspend normally"
+  else
+    SOUT=$("$SLEEP_REPORT" latest 2>/dev/null)
+    SFIRST=$(printf '%s\n' "$SOUT" | head -1)
+    SDETAIL=$(printf '%s\n' "$SOUT" | sed -n '2p;3p' | tr '\n' ' ')
+    case "$SFIRST" in
+      *'— PASS')            ok   "controlled sleep check" "$SDETAIL" ;;
+      *'— PASS WITH NOTES') warn "controlled sleep check" "$SDETAIL" ;;
+      *'— FAIL')            bad  "controlled sleep check" "$SDETAIL" ;;
+      *)                    warn "controlled sleep check" "none recorded — run sleep-report arm" ;;
+    esac
+  fi
+fi
 if [ -e /sys/class/leds/spi::kbd_backlight ]; then ok "keyboard backlight" "spi::kbd_backlight"; else warn "keyboard backlight" "led node missing"; fi
 
 section "Desktop"

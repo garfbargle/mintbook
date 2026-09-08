@@ -10,13 +10,19 @@ backup files are retained in `~/.local/state/mintbook/daily-before-*`.
 ## Spotlight actions
 
 Cmd+Space combines rofi's application mode with a curated script mode. Search
-for `dark`, `Bluetooth`, `battery history`, `health`, `updates` or `keep awake`.
+for `dark`, `Bluetooth`, `battery history`, `health`, `updates`, `keep awake` or
+`sleep check`.
 The app grid's first-keystroke handoff seeds the same combined search.
 
 `bin/spotlight-actions` supplies labels, keywords and fixed IDs. Selection launches
 only the corresponding fixed argv list, detached from rofi's pipes. Custom text
 never becomes a command. Unavailable backends do not appear. Existing application
 search remains available if the actions helper is missing.
+
+**Arm a sleep check** starts one transient watcher and then returns. It never
+suspends the machine. **Show last sleep result** puts the completed recovery and
+battery result in a notification. Details and terminal commands are in
+[input.md](input.md#the-sleep-black-box).
 
 ## Keep Awake
 

@@ -16,7 +16,7 @@ BIN = HOME / '.local/bin'
 UNIT_DIR = HOME / '.config/systemd/user'
 SCRIPTS = ('spotlight', 'spotlight-actions', 'keep-awake', 'screenshot', 'screenshot-notify',
            'window-place', 'mintbook-health', 'doctor', 'control-center', 'wifi-menu', 'bt-menu',
-           'battery-menu', 'battery-history', 'updates-menu', 'mintbook_keys.py')
+           'battery-menu', 'battery-history', 'sleep-report', 'updates-menu', 'mintbook_keys.py')
 PLUGINS = ('65-awake', '75-health')
 UNIT = 'mintbook-health.timer'
 KEYS = {'<Super>Left': 'left', '<Super>Right': 'right', '<Super>Down': 'restore'}
@@ -37,7 +37,28 @@ def targets():
 
 def snapshot():
     if SAVED.exists():
-        return json.loads(SAVED.read_text())
+        data = json.loads(SAVED.read_text())
+        # A rerun can install scripts introduced after the original snapshot.
+        # Add their pre-install state now so --revert still removes/restores
+        # everything, while retaining every older backup unchanged.
+        known = {entry['path'] for entry in data['files']}
+        added = [(source, dest) for source, dest in targets()
+                 if str(dest) not in known]
+        if not added:
+            return data
+        backup = (HOME / '.local/state/mintbook' /
+                  ('daily-added-' + time.strftime('%Y%m%d-%H%M%S') + '-'
+                   + str(time.time_ns() % 1000000000)))
+        backup.mkdir(parents=True)
+        for i, (_source, dest) in enumerate(added):
+            entry = dict(path=str(dest), backup=None)
+            if dest.exists() or dest.is_symlink():
+                copy = backup / str(i)
+                shutil.copy2(dest, copy, follow_symlinks=False)
+                entry['backup'] = str(copy)
+            data['files'].append(entry)
+        SAVED.write_text(json.dumps(data, indent=2))
+        return data
     backup = HOME / '.local/state/mintbook' / ('daily-before-' + time.strftime('%Y%m%d-%H%M%S') + '-' + str(time.time_ns() % 1000000000))
     backup.mkdir(parents=True)
     data = dict(files=[], keys={}, timer=run('systemctl', '--user', 'is-enabled', UNIT, check=False).returncode == 0)

@@ -76,8 +76,10 @@ Speakers, camera, and Bluetooth want kernel **7.0**. **6.14** is the fallback if
 
 Sleep has been working in daily use over the last few days, reported on
 2026-09-07. The resume hook rebinds `applespi`, which previously left the keyboard
-and trackpad dead after S3. A controlled cycle/battery test is still outstanding;
-see [input](docs/input.md).
+and trackpad dead after S3. `bin/sleep-report arm` measures the next normal sleep:
+battery loss, resume timing, input recovery, Wi-Fi, Bluetooth, audio and the
+relevant journal. It never suspends the machine itself. The first controlled
+result is still outstanding; see [input](docs/input.md#the-sleep-black-box).
 
 `bin/hw-report` is live. Read-only. No sudo.
 

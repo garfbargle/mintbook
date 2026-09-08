@@ -90,6 +90,32 @@ class DailyTests(unittest.TestCase):
             awake.STATE.write_text(json.dumps(state))
             self.assertEqual(awake.status(), 0)
 
+    def test_installer_extends_old_snapshot_for_new_files(self):
+        installer = load('daily-install')
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            saved = base / '.config/mintbook/daily-install.json'
+            saved.parent.mkdir(parents=True)
+            saved.write_text(json.dumps(dict(files=[], keys={}, timer=False)))
+            destination = base / '.local/bin/new-script'
+            destination.parent.mkdir(parents=True)
+            destination.write_text('user version')
+            with (patch.object(installer, 'HOME', base),
+                  patch.object(installer, 'SAVED', saved),
+                  patch.object(installer, 'KEYS', {}),
+                  patch.object(installer, 'targets', return_value=[(base / 'source', destination)])):
+                data = installer.snapshot()
+            self.assertEqual(len(data['files']), 1)
+            backup = Path(data['files'][0]['backup'])
+            self.assertEqual(backup.read_text(), 'user version')
+            # A second rerun keeps the first extension backup.
+            with (patch.object(installer, 'HOME', base),
+                  patch.object(installer, 'SAVED', saved),
+                  patch.object(installer, 'KEYS', {}),
+                  patch.object(installer, 'targets', return_value=[(base / 'source', destination)])):
+                again = installer.snapshot()
+            self.assertEqual(again['files'], data['files'])
+
     def test_writes_coalesce_until_previous_finishes(self):
         Panel = panel_class()
         panel = Panel.__new__(Panel)
