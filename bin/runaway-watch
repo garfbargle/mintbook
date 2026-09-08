@@ -1,0 +1,244 @@
+#!/usr/bin/env bash
+# runaway-watch — notice a process that was left running, and offer to end it.
+#
+# On 2026-09-07 a `python3 -` from an exited background task sat at 99% of a
+# core for three and a half hours. Nothing said so. The chassis is fanless, so
+# the only symptoms were the temperature reading and a machine that felt slow;
+# the panel-open timings taken that afternoon read 570-670 ms against a
+# documented 304 because of it.
+#
+# This is deliberately not a "high CPU" watcher. High CPU is usually correct —
+# it is a compile, an encode, a browser doing what you asked, and a notifier
+# that interrupts those is a notifier you turn off. What is never correct is a
+# process whose *parent is gone*, that has no terminal to print to, no window
+# to appear in, and has been burning a core since before you forgot about it.
+# That shape is the whole heuristic. See docs/feel.md for what it will miss.
+#
+#   runaway-watch --check     print every candidate and where it stands.
+#                             Changes nothing, sends nothing.
+#   runaway-watch             one pass; ask if something crosses the bar.
+#   runaway-watch --ignore N  never ask about pid N's command again.
+#
+# It never ends anything on its own. The notification asks, and the answer is
+# a click.
+set -uo pipefail
+
+CACHE="$HOME/.cache/mintbook"
+STATE="$CACHE/runaway.state"        # last sample: pid elapsed cpuseconds
+SEEN="$CACHE/runaway.seen"          # pid:starttime already asked about once
+IGNORE="$HOME/.config/mintbook/runaway.ignore"
+
+MINAGE=${MINAGE:-600}       # seconds alive before a process can be nominated
+MINCPU=${MINCPU:-80}        # % of one core, over the gap since the last pass
+MAXSKEW=${MAXSKEW:-8}       # seconds of drift allowed before a state row is
+                            # assumed to belong to a different, recycled pid
+
+# Never nominate these whatever they are doing: session plumbing that is
+# legitimately parentless on some setups, and this script itself.
+NEVER='^(systemd|init|kthreadd|dbus-daemon|dbus-broker|pipewire|wireplumber|pulseaudio|Xorg|xfwm4|xfsettingsd|xfdesktop|xfce4-panel|lightdm|gnome-keyring-d|ssh-agent|runaway-watch)$'
+
+# A process systemd supervises is somebody's job by definition. A login
+# session's own processes sit in a *.scope and are fair game; a unit sits in a
+# *.service and is not.
+managed() {
+  local cg
+  { read -r cg < "/proc/$1/cgroup"; } 2>/dev/null || return 1
+  case "${cg##*/}" in *.service) return 0 ;; esac
+  return 1
+}
+
+# Field 22 of /proc/PID/stat, read past the last ") " because comm is
+# parenthesised and may contain spaces. Only ever called for a candidate, so
+# the scan does not pay for it.
+starttime_of() {
+  local line rest
+  # The braces matter: a *redirection* that fails is reported by the shell
+  # itself, so `read ... 2>/dev/null` does not silence a vanished process.
+  { read -r line < "/proc/$1/stat"; } 2>/dev/null || return 1
+  rest=${line##*') '}
+  set -f; set -- $rest; set +f
+  [ $# -ge 20 ] || return 1
+  printf '%s' "${20}"
+}
+
+cmdline_of() {
+  # NULs to spaces, then runs of whitespace to one: `python3 -c` holds its
+  # whole script in a single argument, newlines included, and neither a table
+  # row nor a notification body survives that.
+  local c
+  c=$(tr '\0\n\t' '   ' < "/proc/$1/cmdline" 2>/dev/null | tr -s ' ')
+  c=${c#"${c%%[![:space:]]*}"}; c=${c%"${c##*[![:space:]]}"}
+  [ -n "$c" ] || c="[$(cat "/proc/$1/comm" 2>/dev/null)]"
+  printf '%s' "$c"
+}
+
+ignored() {
+  [ -r "$IGNORE" ] || return 1
+  local pat
+  while IFS= read -r pat; do
+    [ -n "$pat" ] || continue
+    case "$pat" in '#'*) continue ;; esac
+    case "$1" in *"$pat"*) return 0 ;; esac
+  done < "$IGNORE"
+  return 1
+}
+
+# ---------------------------------------------------------------- the scan
+
+mode=run
+case "${1:-}" in
+  --check) mode=check ;;
+  --ignore)
+    pid=${2:-}
+    [ -n "$pid" ] && [ -r "/proc/$pid/cmdline" ] || { echo "usage: $0 --ignore PID" >&2; exit 2; }
+    mkdir -p "$(dirname "$IGNORE")"
+    { cmdline_of "$pid"; echo; } >> "$IGNORE"
+    echo "added to $IGNORE"; exit 0 ;;
+  -h|--help) sed -n '2,23p' "$0" | sed 's/^# \?//'; exit 0 ;;
+  "") ;;
+  *) echo "usage: $0 [--check|--ignore PID]" >&2; exit 2 ;;
+esac
+
+mkdir -p "$CACHE"
+now=${EPOCHSECONDS:-$(date +%s)}
+
+# One `ps`, not 286 opens of /proc/PID/stat. The first version of this read
+# every stat file with the `read` builtin, forking nothing, and still cost
+# 0.9 s of CPU a pass — most of it the herestring bash uses to split a line
+# into fields, which is a temp file each time. ps does the same walk in C for
+# one fork and about 25 ms. Neither number is worth 0.75% of a core to a
+# machine whose panel jobs were removed for costing 0.10%.
+#
+# `times` is cumulative CPU seconds and `etimes` elapsed seconds, which is all
+# the arithmetic below needs. cgroup and cmdline are read per candidate.
+declare -A prev_cpu=() prev_age=()
+prev_at=0
+if [ -r "$STATE" ]; then
+  while read -r a b c; do
+    if [ "$a" = "#" ]; then prev_at=$b
+    else prev_cpu["$a"]=$c; prev_age["$a"]=$b; fi
+  done < "$STATE"
+fi
+gap=$(( now - prev_at ))
+[ "$prev_at" -gt 0 ] && [ "$gap" -gt 0 ] || gap=0
+
+# One candidate per pass — the hottest. A notifier that opens a list is a
+# notifier you stop reading.
+best_pid=''; best_pct=0; best_cmd=''; best_age=0
+exec 3> "$STATE.tmp"
+printf '# %s\n' "$now" >&3
+while read -r pid ppid tty cpu age comm; do
+  [ -n "${comm:-}" ] || continue
+  printf '%s %s %s\n' "$pid" "$age" "$cpu" >&3
+
+  # --- the bar, cheapest test first
+  [ "$ppid" = 1 ] || continue                         # its parent is still there
+  [ "$tty" = '?' ] || continue                        # you can see it print
+  [[ $comm =~ $NEVER ]] && continue
+  [ "$age" -ge "$MINAGE" ] || continue
+
+  was=${prev_cpu[$pid]:-}
+  wasage=${prev_age[$pid]:-}
+  pct=-1
+  if [ -n "$was" ] && [ "$gap" -gt 0 ]; then
+    # A pid can be recycled between passes. If this process has not aged by
+    # about the length of the gap, the row in the state file was somebody
+    # else's and its CPU total means nothing here.
+    drift=$(( age - wasage - gap )); [ "$drift" -lt 0 ] && drift=$(( -drift ))
+    [ "$drift" -le "$MAXSKEW" ] && pct=$(( (cpu - was) * 100 / gap ))
+  fi
+
+  if [ "$mode" = check ]; then
+    managed "$pid" && why='systemd unit' || why=''
+    printf '%-8s %4s%%  age %-8s %s\n' "$pid" \
+      "$([ "$pct" -lt 0 ] && echo '?' || echo "$pct")" "${age}s" \
+      "${why:+[$why] }$(cmdline_of "$pid" | cut -c1-64)"
+  fi
+
+  [ "$pct" -ge "$MINCPU" ] || continue
+  [ "$pct" -gt "$best_pct" ] || continue
+  managed "$pid" && continue                          # systemd owns it
+  cmd=$(cmdline_of "$pid")
+  ignored "$cmd" && continue
+  best_pid=$pid; best_pct=$pct; best_cmd=$cmd; best_age=$age
+done < <(ps -eo pid=,ppid=,tty=,times=,etimes=,comm=)
+exec 3>&-
+mv -f "$STATE.tmp" "$STATE"
+
+if [ "$mode" = check ]; then
+  echo
+  echo "bar: ppid 1, no tty, not a systemd unit, no window, age >= ${MINAGE}s, >= ${MINCPU}% of a core over the last ${gap}s"
+  [ "$gap" -le 0 ] && echo "no usable previous sample — run it twice to get a rate"
+  echo "would nominate: ${best_pid:-nothing}"
+  exit 0
+fi
+
+[ -n "$best_pid" ] || exit 0
+
+# starttime pins the pid against reuse between here and the click, which can
+# be hours away. It is also the seen-list key, so a recycled pid is a new
+# question rather than a silently suppressed one.
+best_start=$(starttime_of "$best_pid") || exit 0
+grep -qxF "$best_pid:$best_start" "$SEEN" 2>/dev/null && exit 0
+
+# The window check forks, so it runs once, for a candidate that has already
+# passed everything else. Something you can see is not something you forgot.
+if command -v wmctrl >/dev/null 2>&1; then
+  case " $(wmctrl -lp 2>/dev/null | awk '{print $3}' | tr '\n' ' ') " in
+    *" $best_pid "*) exit 0 ;;
+  esac
+fi
+
+# ------------------------------------------------------------ the question
+
+# Recorded before the notification goes up, not after: this blocks until the
+# notification is answered, and one that is never answered must not come back
+# on the next pass.
+echo "$best_pid:$best_start" >> "$SEEN"
+# It only ever grows by one line per question asked, but it is a cache file
+# and nothing else trims it.
+if [ "$(wc -l < "$SEEN" 2>/dev/null || echo 0)" -gt 200 ]; then
+  tail -100 "$SEEN" > "$SEEN.tmp" && mv -f "$SEEN.tmp" "$SEEN"
+fi
+
+short=${best_cmd:0:60}
+[ "${#best_cmd}" -gt 60 ] && short="$short…"
+h=$(( best_age / 3600 )); m=$(( (best_age % 3600) / 60 ))
+[ "$h" -gt 0 ] && age_text="${h}h ${m}m" || age_text="${m}m"
+
+# The daemon advertises body-markup, so the command line — which is arbitrary
+# text, and routinely contains a redirect — has to be escaped or a `<` eats
+# the rest of the notification.
+esc() { local t=${1//&/&amp;}; t=${t//</&lt;}; printf '%s' "${t//>/&gt;}"; }
+
+# Critical, so it waits for an answer instead of expiring after ten seconds.
+# It is a question, and a question that vanishes before it is read is worse
+# than no question.
+answer=$(notify-send -u critical -i utilities-system-monitor \
+  --action=kill=End\ it --action=ignore=Never\ ask\ again \
+  "A process was left running" \
+  "$(esc "$short")
+${best_pct}% of a core for ${age_text}. Its parent is gone, and it has no window and no terminal." \
+  2>/dev/null)
+
+case "$answer" in
+  kill)
+    # starttime again, because the click can be hours after the question.
+    if [ "$(starttime_of "$best_pid" 2>/dev/null)" = "$best_start" ]; then
+      kill -TERM "$best_pid" 2>/dev/null
+      sleep 2
+      if [ "$(starttime_of "$best_pid" 2>/dev/null)" = "$best_start" ]; then
+        notify-send -u normal "Still running" \
+          "pid $best_pid ignored SIGTERM. \`kill -9 $best_pid\` to insist."
+      else
+        notify-send -u low "Ended" "$short"
+      fi
+    else
+      notify-send -u low "Already gone" "$short"
+    fi ;;
+  ignore)
+    mkdir -p "$(dirname "$IGNORE")"
+    printf '%s\n' "$best_cmd" >> "$IGNORE"
+    notify-send -u low "Will not ask again" "$short" ;;
+esac
+exit 0

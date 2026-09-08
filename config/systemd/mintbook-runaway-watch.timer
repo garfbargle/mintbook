@@ -1,0 +1,18 @@
+# Every five minutes, starting ten after login. The thing this looks for has
+# by definition been running for at least MINAGE (ten minutes) already, so
+# noticing it five minutes later costs nothing — and a longer gap is a better
+# CPU measurement, not a worse one, because the rate is averaged over it.
+#
+# One pass is ~0.09 s of CPU, so this is ~0.03% of a core. AccuracySec is
+# loose so systemd can coalesce it with the other timers instead of waking the
+# machine on its own.
+[Unit]
+Description=Look for a process that was left running
+
+[Timer]
+OnStartupSec=10min
+OnUnitActiveSec=5min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

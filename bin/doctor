@@ -463,6 +463,20 @@ if [ -n "$TRIM" ]; then
 else
   ok "trimmable services" "all masked"
 fi
+# The runaway watcher, and what it currently sees. A candidate here is not a
+# fault: `runaway-watch --check` lists processes matching the *shape* it looks
+# for, and on a healthy machine several do — redshift among them — all of them
+# idle. Only one that is also burning a core gets a notification.
+if systemctl --user is-enabled mintbook-runaway-watch.timer >/dev/null 2>&1; then
+  RW=$("$ROOT/bin/runaway-watch" --check 2>/dev/null | sed -n 's/^would nominate: //p')
+  if [ -n "${RW:-}" ] && [ "$RW" != nothing ]; then
+    warn "runaway watch" "pid $RW is burning a core with no parent — $ROOT/bin/runaway-watch --check"
+  else
+    ok "runaway watch" "five-minute timer, nothing to report"
+  fi
+else
+  warn "runaway watch" "not installed — $ROOT/bin/runaway-install"
+fi
 JD=$(journalctl --disk-usage 2>/dev/null | grep -o '[0-9.]*[MG]' | head -1)
 check "journal cap" "/etc/systemd/journald.conf.d/mintbook.conf ($JD)" have /etc/systemd/journald.conf.d/mintbook.conf
 FREE=$(df --output=pcent / | tail -1 | tr -dc 0-9)

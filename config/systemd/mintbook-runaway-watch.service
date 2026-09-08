@@ -1,0 +1,15 @@
+# One pass of bin/runaway-watch. It ends nothing on its own: at most it puts
+# up a notification with an "End it" button, and that button is the user's.
+#
+# TimeoutStartSec=infinity because notify-send with --action blocks until the
+# notification is answered, and the question is deliberately urgency=critical
+# so it does not expire unread. A unit that is still waiting for an answer
+# also stops the timer starting a second one, which is the lock this wants.
+[Unit]
+Description=Look for a process that was left running
+After=graphical-session.target
+
+[Service]
+Type=oneshot
+TimeoutStartSec=infinity
+ExecStart=%h/.local/bin/runaway-watch
