@@ -7,10 +7,15 @@ import subprocess
 import sys
 
 # The pointer, read before the GTK import rather than after it: this menu hangs
-# off the icon that was clicked, and the import is ~590 ms, which is long enough
-# to click and move the mouse on before the old code sampled. See pointer_xy().
-try: PTR_PROC = subprocess.Popen(['xdotool', 'getmouselocation', '--shell'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-except OSError: PTR_PROC = None
+# off the icon that was clicked, and the import is ~590 ms, long enough to click
+# and move the mouse on before the old code sampled. Synchronous on purpose —
+# as a Popen the child loses the CPU to this process's own import and samples
+# too late, which is the bug it was meant to fix. See bin/control-center.
+try:
+    _p = subprocess.run(['xdotool', 'getmouselocation', '--shell'], capture_output=True, text=True, timeout=3).stdout
+    _p = dict(q.split('=', 1) for q in _p.split() if '=' in q)
+    PTR_XY = (int(_p['X']), int(_p['Y']))
+except Exception: PTR_XY = None
 
 import gi
 gi.require_version('Gtk', '3.0')
@@ -23,11 +28,7 @@ LOCK = os.path.join(os.environ.get('XDG_RUNTIME_DIR', f'/run/user/{os.getuid()}'
 
 def pointer_xy(display):
     """Where the pointer was at startup; Gdk now if xdotool is missing."""
-    if PTR_PROC is not None:
-        try:
-            d = dict(p.split('=', 1) for p in (PTR_PROC.communicate(timeout=3)[0] or '').split() if '=' in p)
-            return int(d['X']), int(d['Y'])
-        except Exception: pass
+    if PTR_XY is not None: return PTR_XY
     _s, x, y = display.get_default_seat().get_pointer().get_position()
     return int(x), int(y)
 

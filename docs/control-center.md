@@ -411,6 +411,19 @@ per click, and it is being paid deliberately.
   a change.
 - **genmon reads the click command's stdout.** Anything a plugin script leaves
   running with an open stdout keeps the panel waiting.
+- **The pointer has to be read before the GTK import, and synchronously.**
+  Every popup anchors itself to the pointer, and the pointer is the icon —
+  clicking the icon is the only way to open one. Reading it after the import
+  read it ~590 ms late, so you could aim, click, move on, and watch the popup
+  open wherever the mouse had got to. Moving that read into a `Popen` at the
+  top, the way the `busctl` readings are hidden inside the import, does **not**
+  fix it: the child is descheduled behind this process's own CPU-bound import
+  — two cores, and one of them is the import — so xdotool sampled *after* it
+  and returned the same late position. Its own output is the proof; clicking
+  at x=2100 and moving to 700 gave `X=700\nY=900`. `subprocess.run` at the top
+  instead, ~12 ms, not hidden behind anything. The `busctl` reads only have to
+  *finish* before use, which is why hiding those works; this one has to
+  *sample* early, which is a stronger thing to ask.
 
 ---
 

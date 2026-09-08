@@ -16,18 +16,23 @@ import sys
 import tempfile
 import time
 
-# The pointer, read now rather than after the GTK import. This popup hangs off
-# the icon that was clicked, and clicking that icon is the only way to open it,
-# so the pointer at startup *is* the icon. Reading it on the far side of the
-# import read it ~590 ms later instead — long enough to aim, click, move the
-# mouse on, and watch the popup open somewhere else. Costs nothing in wall
-# time: xdotool answers inside the import, like the readings around it.
+# Where the pointer is now, which is where the icon was clicked: this popup
+# hangs off that icon, and clicking it is the only way to get here.
+#
+# Read synchronously, and deliberately *not* hidden behind the GTK import the
+# way the readings above are. Hiding it is what broke it. Spawned as a Popen
+# the child is descheduled behind this process's own ~500 ms of CPU-bound
+# import — on two cores there is nowhere else for it to run — so xdotool
+# sampled the pointer after the import rather than before it, and returned the
+# same late position the Gdk read did: click the icon, move the mouse away, and
+# the popup opened where the mouse had got to. Costs ~12 ms, paid in full.
 try:
-    PTR_PROC = subprocess.Popen(['xdotool', 'getmouselocation', '--shell'],
-                                stdout=subprocess.PIPE,
-                                stderr=subprocess.DEVNULL, text=True)
-except OSError:
-    PTR_PROC = None
+    _ptr = subprocess.run(['xdotool', 'getmouselocation', '--shell'],
+                          capture_output=True, text=True, timeout=3).stdout
+    _ptr = dict(p.split('=', 1) for p in _ptr.split() if '=' in p)
+    PTR_XY = (int(_ptr['X']), int(_ptr['Y']))
+except Exception:
+    PTR_XY = None
 
 import gi
 gi.require_version('Gtk', '3.0')
@@ -71,18 +76,13 @@ def write_pid():
 
 
 def pointer_xy():
-    """Where the pointer was when this process started, not where it is now.
+    """Where the pointer was at startup, not where it is now — see PTR_XY.
 
-    Falls back to asking Gdk, which is the old behaviour — drift and all — and
-    is where this lands if xdotool is not installed.
+    Falls back to asking Gdk, which is the old behaviour, drift and all, and is
+    where this lands if xdotool is not installed.
     """
-    if PTR_PROC is not None:
-        try:
-            out = PTR_PROC.communicate(timeout=3)[0] or ''
-            d = dict(p.split('=', 1) for p in out.split() if '=' in p)
-            return int(d['X']), int(d['Y'])
-        except Exception:
-            pass
+    if PTR_XY is not None:
+        return PTR_XY
     _s, x, y = (Gdk.Display.get_default().get_default_seat()
                 .get_pointer().get_position())
     return int(x), int(y)
