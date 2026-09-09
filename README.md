@@ -17,20 +17,31 @@ Quiet by design. Familiar at first glance. Built for the hardware underneath.
   Linux Mint 22.3 · XFCE · kernel 7.0
 </p>
 
-## It feels like it belongs.
+## Start with Overview.
 
 Mintbook turns the 12-inch MacBook into a focused Linux machine—without turning
 Linux into a macOS costume. No Apple logo. No blur. Just a crisp glass bar, a
 dock, and the controls you reach for every day.
 
+Click the search icon at the far right of the bar—or press **Cmd+Space**.
+Overview finds applications and system actions together, in one fast surface.
+
 <p align="center">
   <img src="docs/images/files.jpg" alt="Files on the mintbook desktop" width="48%">
   &nbsp;
-  <img src="docs/images/spotlight.jpg" alt="Application and system search" width="48%">
+  <img src="docs/images/spotlight.jpg" alt="Mintbook Overview search" width="48%">
 </p>
 
-**Cmd+Space** finds apps and system actions. **Cmd+Left/Right** places windows.
-**Cmd+Shift+3** takes a screenshot. The familiar gestures are simply there.
+**Show All Applications** opens a full-screen grid built for the display. Start
+typing and your first keystroke flows straight into Overview. No second search.
+No starting over.
+
+<p align="center">
+  <img src="docs/images/app-grid.png" alt="Show All Applications on Mintbook" width="880">
+</p>
+
+**Cmd+Left/Right** places windows. **Cmd+Shift+3** takes a screenshot. The
+familiar gestures are simply there.
 
 ## Everything you need. Nothing you don't.
 
@@ -93,9 +104,11 @@ Before any system-level change:
 sudo timeshift --create --comments "before <change>"
 ```
 
-Installers print their own undo instructions. Daily conveniences can be added or
-removed with `bin/daily-install` and `bin/daily-install --revert`. The original
-XFCE desktop can always be restored with `bin/revert-mac-theme`.
+Installers print their own undo instructions. `bin/overview-install` adds the
+Overview bar icon and shortcut; its `--revert` removes the icon while preserving
+the established shortcut. Daily conveniences can be added or removed with
+`bin/daily-install` and `bin/daily-install --revert`. The original XFCE desktop
+can always be restored with `bin/revert-mac-theme`.
 
 Nothing here asks you to trust a tweak you cannot inspect—or keep a change you
 cannot undo.
