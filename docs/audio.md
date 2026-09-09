@@ -492,15 +492,78 @@ CS4208 on card 0. Internal speakers genuinely work — the codec never needed
 healing on these s2idle cycles (`coef 0x1f` was not latched), which is the other
 half of why a permanently red unit is misleading here.
 
-#### Not yet fixed
+#### The fix: take audio away from the greeter, 2026-09-09
 
-`/usr/local/bin/mb81-resume-recover` is root-owned, outside this repo, and
-replaced by the upstream `install.sh`. Nothing has been changed yet — see the
-open question in the commit that added this section.
+The third-party script is left untouched. Instead the greeter is denied the
+sound server it never needed, which makes the script's step 1 sufficient as
+written — after the mask, the only PipeWire on the machine is the desktop
+user's, and that is the one the script already stops.
 
-Do **not** clear it with `systemctl reset-failed mb81-resume-recover.service`.
-That turns doctor green without the service working, and the next resume fails
-again.
+Masking is per-user: a unit symlinked to `/dev/null` in the user's own
+`~/.config/systemd/user` outranks the `--global` enablement in
+`/etc/systemd/user`. LightDM's home is `/var/lib/lightdm`.
+
+```bash
+sudo install -d -o lightdm -g lightdm -m 755 /var/lib/lightdm/.config/systemd/user
+for u in pipewire.socket pipewire-pulse.socket pipewire.service \
+         pipewire-pulse.service wireplumber.service filter-chain.service; do
+  sudo ln -sfn /dev/null "/var/lib/lightdm/.config/systemd/user/$u"
+done
+```
+
+`/var/lib/lightdm` is mode 0750, so verifying needs root:
+`sudo ls -l /var/lib/lightdm/.config/systemd/user/`.
+
+**Tested** by starting LightDM's user manager on its own — no greeter, no VT
+switch, so it exercises the unit pull-in without touching the display:
+
+```bash
+sudo systemctl start user@113.service && sleep 3
+pgrep -u lightdm -a -f 'pipewire|wireplumber'    # (none)
+sudo fuser -v /dev/snd/*                          # only cobo's pipewire/wireplumber/alsactl
+cat /sys/module/snd_hda_intel/refcnt              # 3 — all cobo's
+sudo systemctl stop user@113.service
+```
+
+The journal is the clean before/after. A greeter appearance before the mask:
+
+```
+12:48:50 systemd[493820]: Listening on pipewire.socket
+12:48:50 systemd[493820]: Started pipewire.service
+12:48:50 systemd[493820]: Started wireplumber.service
+12:48:50 systemd[493820]: Started pipewire-pulse.service
+```
+
+The same manager starting after it (13:27:55–13:27:58) logs none of those lines.
+
+**Undo:**
+
+```bash
+sudo rm -rf /var/lib/lightdm/.config/systemd/user
+```
+
+That directory holds nothing but these six masks — it did not exist before.
+
+#### Limits
+
+- **The login screen loses audio.** slick-greeter offers a screen reader at the
+  password prompt; that has no sound now. This machine does not use it. Anyone
+  who does should revert the mask and fix the script instead.
+- **Not verified against a real resume.** The end-to-end proof is
+  `mb81-resume-recover` succeeding on the next natural suspend. CONTRIBUTING
+  warns against suspending to smoke-test, so this was left for the next ordinary
+  cycle rather than forced. Until then the unit stays failed from 2026-09-09
+  08:15 and doctor stays red — do not paper over that with `reset-failed`.
+- **The script's own flaws are untouched**, because it is root-owned, outside
+  this repo, and replaced wholesale by the upstream `install.sh`:
+  - `2>/dev/null` on every `rmmod`/`modprobe -r` still discards the one line
+    that would name the holder.
+  - A failed run still unbinds `00:03.0` and exits without rebinding, so HDMI
+    audio stays dead until reboot.
+  - `awk '$1>=1000{print $2; exit}'` still handles exactly one user, so any
+    second logged-in session would reintroduce this.
+
+  If upstream is ever patched, the greeter mask can be dropped.
 
 ---
 
