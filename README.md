@@ -9,7 +9,7 @@ Quiet by design. Familiar at first glance. Built for the hardware underneath.
 </div>
 
 <p align="center">
-  <img src="docs/images/desktop.jpg" alt="The mintbook desktop" width="880">
+  <img src="docs/images/spotlight.jpg" alt="Overview open on the mintbook desktop" width="880">
 </p>
 
 <p align="center">
@@ -17,19 +17,31 @@ Quiet by design. Familiar at first glance. Built for the hardware underneath.
   Linux Mint 22.3 · XFCE · kernel 7.0
 </p>
 
+This is one machine, documented: the desktop work and the hardware fixes that
+make a 2015 MacBook worth carrying in 2026. It is a reference rather than a
+distribution—there is no one-command install, and the measurements are the
+point at least as much as the theme. Take what is useful.
+
 ## It feels like it belongs.
 
 Mintbook turns the 12-inch MacBook into a focused Linux machine—without turning
 Linux into a macOS costume. No Apple logo. No blur. Just a crisp glass bar, a
 dock, and the controls you reach for every day.
 
+<p align="center">
+  <img src="docs/images/desktop.jpg" alt="The mintbook desktop at rest" width="48%">
+  &nbsp;
+  <img src="docs/images/files.jpg" alt="Files on the mintbook desktop" width="48%">
+</p>
+
 Click the search icon at the far right of the bar—or press **Cmd+Space**.
-Overview finds applications and system actions together, in one fast surface.
+Overview finds applications and system actions together, in one fast surface,
+and follows the appearance you are in.
 
 <p align="center">
-  <img src="docs/images/files.jpg" alt="Files on the mintbook desktop" width="48%">
+  <img src="docs/images/spotlight-light.jpg" alt="Overview in the light appearance" width="48%">
   &nbsp;
-  <img src="docs/images/spotlight.jpg" alt="Mintbook Overview search" width="48%">
+  <img src="docs/images/spotlight-dark.jpg" alt="Overview in the dark appearance" width="48%">
 </p>
 
 **Show All Applications** opens a full-screen grid built for the display. Start
@@ -76,10 +88,27 @@ particular MacBook worth using again.
 - Battery mode stays cool; external power unlocks short bursts of performance.
 - Suspend uses the mode that reliably brings the keyboard and trackpad back.
 - Firefox hardware-decodes H.264 for smooth, efficient video.
-- `bin/doctor` checks the fragile pieces after every kernel change.
+
+Three results from that work, each measured on this machine rather than reasoned
+about:
+
+| | before | after | |
+|---|---:|---:|---|
+| Raw `getpid` syscall | 720 ns | **127 ns** | CPU mitigations off—a security trade with a number attached, not a free win |
+| The status bar | 20.4% | **5.6%** | of one core. The most expensive software on the machine was the thing drawing six glyphs |
+| `panel-power` | 357 ms | **33 ms** | it was starting a Python interpreter in order to fork a second one |
 
 Every tuning decision is measured, documented, and reversible. The surprises
 are recorded too—including the popular tweaks that made no difference.
+
+`bin/doctor` re-checks every fragile piece, read-only and without sudo. A kernel
+or Mint update is exactly what quietly removes one of them, so it is worth
+running after every one. This is a real run, excerpted—the counts are the whole
+machine:
+
+<p align="center">
+  <img src="docs/images/doctor.svg" alt="bin/doctor output across the kernel, graphics, audio, camera and Bluetooth sections, ending 82 ok, 2 warn, 1 FAIL" width="880">
+</p>
 
 [See the measurements](docs/performance.md) · [See how fast it feels](docs/feel.md) · [See hardware status](docs/hardware.md)
 
