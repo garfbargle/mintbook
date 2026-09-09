@@ -17,7 +17,7 @@ Quiet by design. Familiar at first glance. Built for the hardware underneath.
   Linux Mint 22.3 · XFCE · kernel 7.0
 </p>
 
-## Start with Overview.
+## It feels like it belongs.
 
 Mintbook turns the 12-inch MacBook into a focused Linux machine—without turning
 Linux into a macOS costume. No Apple logo. No blur. Just a crisp glass bar, a
