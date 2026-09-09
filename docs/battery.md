@@ -40,6 +40,12 @@ way Wi-Fi's is, because it has 101 states and a fill width is one integer.
 Coordinates are in half-pixels — the `viewBox` is twice the `width`/`height`
 attributes — so integer arithmetic, all bash has, still lands on half a pixel.
 
+The percentage is **usable state of charge**: `charge_now / charge_full`, with
+the driver's `Full` state shown as 100%. This matters on this Mac because its
+raw sysfs `capacity` behaves like charge against `charge_full_design`; using it
+directly made an 83%-health battery appear to stop charging around 81–82%.
+`capacity` remains a fallback for batteries that do not expose charge counters.
+
 **The bolt is punched out of the charge while charging**: negative space over
 the fill and positive space past it, two masks and no conditionals in the
 paint, so it is visible at 4% and at 96%.
@@ -179,7 +185,7 @@ ts pct st mW dt dtotal dbusy [app:jiffies ...]
 | field | is |
 |---|---|
 | `ts` | unix seconds |
-| `pct` | charge, 0–100 |
+| `pct` | usable charge, 0–100 (`charge_now / charge_full`) |
 | `st` | `C` charging, `D` discharging, `F` full/plugged, `U` unknown |
 | `mW` | measured power, `current × voltage` |
 | `dt` | seconds since the previous sample. **0** on the first line and whenever the gap is over an hour — a suspend is a gap, not a sample — and a 0 is skipped by the fit rather than treated as an instant |
@@ -210,6 +216,10 @@ took 7 967 of them.
 
 The log **survives `battery-install --revert`**; deleting it is a separate
 decision and the script says so.
+
+The 2026-09-09 switch from the Mac's design-relative raw percentage to usable
+percentage deliberately starts a new graph segment (`dt=0`). Older retained
+segments keep their recorded values; the history never rewrites measurements.
 
 ### The wear log
 

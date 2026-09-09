@@ -26,6 +26,8 @@ import time
 HOME = os.path.expanduser('~')
 LOG = os.environ.get('MINTBOOK_BAT_LOG', f'{HOME}/.cache/mintbook/battery/history')
 APPLIED = f'{HOME}/.config/mintbook/appearance.applied'
+POWER_SUPPLY_ROOT = os.environ.get(
+    'MINTBOOK_POWER_SUPPLY_ROOT', '/sys/class/power_supply')
 CLK = os.sysconf('SC_CLK_TCK')
 
 SC = 1.0  # resolved from the desktop only when opening the window
@@ -174,17 +176,22 @@ def intervals(rows, start, end):
 
 
 def battery_facts():
-    b = '/sys/class/power_supply/BAT0'
+    b = POWER_SUPPLY_ROOT + '/BAT0'
     def n(name, d=0):
         try:
             return int(read_file(f'{b}/{name}', str(d)))
         except ValueError:
             return d
-    design = n('charge_full_design')
-    return {'pct': n('capacity'), 'status': read_file(f'{b}/status', 'Unknown'),
-            'health': (n('charge_full') * 100 // design) if design else 0,
+    design, full, now = n('charge_full_design'), n('charge_full'), n('charge_now')
+    status = read_file(f'{b}/status', 'Unknown')
+    pct = ((now * 100 + full // 2) // full
+           if full > 0 and now >= 0 else n('capacity'))
+    if status == 'Full':
+        pct = 100
+    return {'pct': max(0, min(100, pct)), 'status': status,
+            'health': (full * 100 // design) if design else 0,
             'cycles': n('cycle_count'), 'temp': n('temp') / 10.0,
-            'wh': n('charge_full') * n('voltage_min_design') / 1e12}
+            'wh': full * n('voltage_min_design') / 1e12}
 
 
 def fit(rows):

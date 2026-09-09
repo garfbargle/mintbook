@@ -25,6 +25,47 @@ def measured(rows, start, end):
 
 
 class BatteryHistoryTests(unittest.TestCase):
+    def test_live_percentage_uses_present_full_capacity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bat = Path(directory) / 'BAT0'
+            bat.mkdir()
+            values = {
+                'status': 'Discharging', 'capacity': '62',
+                'charge_now': '3285000', 'charge_full': '4382000',
+                'charge_full_design': '5297000', 'cycle_count': '158',
+                'temp': '372', 'voltage_min_design': '7600000',
+            }
+            for name, value in values.items():
+                (bat / name).write_text(value)
+            with patch.object(battery, 'POWER_SUPPLY_ROOT', directory):
+                facts = battery.battery_facts()
+        self.assertEqual(facts['pct'], 75)
+        self.assertEqual(facts['health'], 82)
+
+    def test_full_state_is_one_hundred_percent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bat = Path(directory) / 'BAT0'
+            bat.mkdir()
+            values = {
+                'status': 'Full', 'capacity': '81', 'charge_now': '4300000',
+                'charge_full': '4382000', 'charge_full_design': '5297000',
+            }
+            for name, value in values.items():
+                (bat / name).write_text(value)
+            with patch.object(battery, 'POWER_SUPPLY_ROOT', directory):
+                facts = battery.battery_facts()
+        self.assertEqual(facts['pct'], 100)
+
+    def test_raw_capacity_is_fallback_without_charge_counters(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bat = Path(directory) / 'BAT0'
+            bat.mkdir()
+            (bat / 'status').write_text('Discharging')
+            (bat / 'capacity').write_text('47')
+            with patch.object(battery, 'POWER_SUPPLY_ROOT', directory):
+                facts = battery.battery_facts()
+        self.assertEqual(facts['pct'], 47)
+
     def test_constant_power_integrates_to_known_energy(self):
         rows = [row(t, 6) for t in range(0, 3601, 60)]
         parts, total, cpu, seconds = measured(rows, 0, 3600)

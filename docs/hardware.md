@@ -60,9 +60,11 @@ Good for a machine of this age. Read it with:
 upower -i /org/freedesktop/UPower/devices/battery_BAT0
 ```
 
-> `/sys/class/power_supply/BAT0/capacity` is the **charge** percentage;
-> `upower`'s `capacity:` field is **health**. They are different numbers and are easy
-> to confuse.
+> UPower's `percentage:` is the charge relative to the battery's **present usable
+> capacity**; its `capacity:` field is battery health relative to the original
+> design. On this Mac, the kernel's raw `/sys/class/power_supply/BAT0/capacity`
+> behaves like charge relative to the original design capacity, so mintbook
+> normalizes `charge_now / charge_full` for its user-facing percentage.
 
 **Discharge** (earlier 2026-09-01): around **10–14 W** (~2.5 h at ~77% charge).
 **Charge** (same evening, ~52%): `energy-rate` 7–19 W (spikes ~16–19 W). Charging

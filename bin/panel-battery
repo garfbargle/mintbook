@@ -59,13 +59,24 @@ printf '<click>%s</click>\n<iconclick>%s</iconclick>\n' "$MENU" "$MENU"
 rd() { local v=''; [ -r "$2" ] && read -r v < "$2"; printf -v "$1" '%s' "${v:-$3}"; }
 
 rd status "$B/status" Unknown
-rd pct "$B/capacity" 0
+rd reported_pct "$B/capacity" 0
 rd now "$B/charge_now" 0
 rd full "$B/charge_full" 0
 rd design "$B/charge_full_design" 0
 rd cur "$B/current_avg" 0; [ "$cur" = 0 ] && rd cur "$B/current_now" 0
 rd volt "$B/voltage_now" 0
 rd online "/sys/class/power_supply/$AC/online" 1
+
+# This Mac's ACPI battery reports capacity against charge_full_design, so an
+# aged pack stops around its health percentage even when status says Full.
+# A user-facing state of charge is charge_now against the pack's present
+# charge_full. Keep capacity only as the fallback for batteries that do not
+# expose those counters, and make the driver's authoritative Full state 100.
+pct=$reported_pct
+if [ "$full" -gt 0 ] && [ "$now" -ge 0 ] 2>/dev/null; then
+  pct=$(( (now * 100 + full / 2) / full ))
+fi
+[ "$status" = Full ] && pct=100
 [ "$pct" -gt 100 ] 2>/dev/null && pct=100
 [ "$pct" -lt 0 ] 2>/dev/null && pct=0
 
@@ -130,10 +141,14 @@ case "$COLOR" in
 esac
 
 # Only rewrite the file when what it would draw has changed.
-sig="$pct/$st/$fill/$fg/$SHOW_PERCENT"
+sig="v2:$pct/$st/$fill/$fg/$SHOW_PERCENT"
 osig='' otick=0 oprev=0
 [ -r "$STATE" ] && read -r osig otick oprev < "$STATE"
 otick=${otick:-0} oprev=${oprev:-0}
+# v2 changes the logged percentage from design-relative to usable-relative.
+# Make the first new sample a graph break rather than drawing a fake 20-point
+# charge jump from a legacy sample to a normalized one.
+case "$osig" in v2:*) ;; *) oprev=0 ;; esac
 
 # A rounded rectangle as an SVG path, in half-pixel units — `rr x y w h r`.
 # Two of them under fill-rule=evenodd is an outline of exactly the thickness

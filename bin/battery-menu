@@ -72,6 +72,8 @@ PIDFILE = f'{HOME}/.cache/mintbook/battery-menu.pid'
 PLUGIN = f'{HOME}/.local/share/mintbook/control-center/plugins/60-power'
 WANT = '/run/mintbook-power/want'
 HISTORY = f'{HOME}/.local/bin/battery-history'
+POWER_SUPPLY_ROOT = os.environ.get(
+    'MINTBOOK_POWER_SUPPLY_ROOT', '/sys/class/power_supply')
 
 SC = round((Gdk.Screen.get_default().get_resolution() or 96) / 96.0, 3) or 1.0
 WIDTH, PAD, GAP, SHADOW, RADIUS, CARD = 320, 14, 10, 16, 18, 12
@@ -168,7 +170,7 @@ def set_conf(key, value):
 
 def battery():
     cfg = conf()
-    b = '/sys/class/power_supply/' + cfg.get('BAT', 'BAT0')
+    b = POWER_SUPPLY_ROOT + '/' + cfg.get('BAT', 'BAT0')
 
     def n(name, default=0):
         try:
@@ -176,12 +178,16 @@ def battery():
         except ValueError:
             return default
     status = read_file(f'{b}/status', 'Unknown')
-    online = read_file('/sys/class/power_supply/'
+    online = read_file(POWER_SUPPLY_ROOT + '/'
                        + cfg.get('AC', 'ADP1') + '/online', '1')
     cur = n('current_avg') or n('current_now')
     st = {'Charging': 'C', 'Full': 'F', 'Discharging': 'D'}.get(
         status, 'F' if online == '1' else 'U')
     now, full = n('charge_now'), n('charge_full')
+    pct = ((now * 100 + full // 2) // full
+           if full > 0 and now >= 0 else n('capacity'))
+    if status == 'Full':
+        pct = 100
     mins = -1
     if cur > 0:
         if st == 'D':
@@ -189,7 +195,7 @@ def battery():
         elif st == 'C':
             mins = (full - now) * 60 // cur
     return {
-        'pct': max(0, min(100, n('capacity'))), 'st': st, 'cfg': cfg,
+        'pct': max(0, min(100, pct)), 'st': st, 'cfg': cfg,
         'watts': cur * n('voltage_now') / 1e12, 'mins': mins if mins < 6000 else -1,
         'health': (full * 100 // n('charge_full_design', 1)) if n('charge_full_design') else 0,
         'cycles': n('cycle_count'), 'temp': n('temp') / 10.0,
