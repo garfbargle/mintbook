@@ -31,6 +31,7 @@ which is why nothing polls it:
     bin/panel-system      the same file, for its compact status badge
     bin/updates-menu       reads it on open, then re-runs this in a thread
     mintbook-updates-check.timer   runs it 5 min after login and every 6 h
+    mintbook-updates-check.path    runs it when the APT cache is rebuilt
 
 Two files come out, in ~/.cache/mintbook:
 

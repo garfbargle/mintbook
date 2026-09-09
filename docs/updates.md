@@ -27,7 +27,7 @@ and all of its settings remain installed and available on demand.
 
 ---
 
-## The four pieces
+## The five pieces
 
 | | what it is | what it costs |
 |---|---|---|
@@ -35,6 +35,7 @@ and all of its settings remain installed and available on demand.
 | [`bin/panel-system`](../bin/panel-system) | the System icon and status badge; reads the caches | a few milliseconds, every 30 s |
 | [`bin/updates-menu`](../bin/updates-menu) | the glass popup | 300 ms to open |
 | `mintbook-updates-check.timer` | runs the check 5 min after login, then every 6 h | |
+| `mintbook-updates-check.path` | runs it again whenever the APT cache is rebuilt | |
 
 The whole design is that ratio. Working out what apt has waiting means loading
 the package cache and running a dist-upgrade resolution, which is two and a
@@ -48,9 +49,10 @@ reads
 ~/.cache/mintbook/updates.json      the list, for the popup
 ```
 
-and draws a conclusion. A timer keeps those two honest, the popup re-runs the
-check every time it opens, and `bin/doctor` is what tells you if the timer has
-stopped — see [Staleness](#staleness).
+and draws a conclusion. A timer keeps those two honest, a path unit re-runs
+the check the moment somebody else refreshes the package lists, the popup
+re-runs it every time it opens, and `bin/doctor` is what tells you if the
+timer has stopped — see [Staleness](#staleness).
 
 `updates.state` is `key = value` lines so tiny status readers need no package
 imports. Both files are written with a rename, so
@@ -262,6 +264,40 @@ apt answer and a three-day-old flatpak answer sitting in the same file, and
 the bar's tooltip appends `· flatpaks 3d ago` once the two are more than a day
 apart. That is the whole reason the carry-forward exists.
 
+### Noticing a refresh somebody else did
+
+The timer is a floor, not the whole story. Between two of its runs the package
+lists can be refreshed by something that is not us at all — `apt-daily.timer`
+twice a day, the Update Manager if you open it, the popup's own refresh
+button, a plain `apt update` — and the new fact then sits on disk, unread,
+until our next six-hourly turn.
+
+That is not theoretical. On 9 Sep 2026 at 15:40 `mint-refresh-cache` picked up a new 1password and the
+Update Manager said so on the spot; our last check was 14:24 and the next was
+due at 20:26, so the System badge went on showing nothing until it was
+refreshed by hand at 17:29. Four hours behind a fact that was already on
+screen.
+
+`mintbook-updates-check.path` closes it. `/var/cache/apt/pkgcache.bin` is
+rewritten every time the lists are rebuilt, so watching that one file is the
+same as hearing about every refresh on the machine, whoever did it, and the
+badge follows within one genmon tick. It costs nothing when nothing happens —
+an inotify watch systemd already holds the file descriptor for.
+
+What it does **not** fix, because it cannot:
+
+- **A refresh while you are logged out.** The watch lives as long as your
+  session does. The timer's `OnStartupSec=5min` is what covers the gap.
+- **Flatpak.** Nothing on this disk changes when flathub gains a new version,
+  so there is nothing to watch. The six-hour timer is still the only thing
+  that asks, which is exactly why that half is timestamped separately.
+- **An install done outside the popup.** dpkg's status file is deliberately
+  not watched — it changes once per package, and a count recomputed between
+  two halves of one dpkg run is not a count worth reading — so after
+  `apt install` in a terminal the bar can be one install stale until the next
+  cache rebuild or the next timer run. The popup re-checks on its own after a
+  transaction, so the common path is already covered.
+
 ---
 
 ## What this does not do
@@ -314,7 +350,8 @@ behind it. The check is spawned on the first line of the file, *before*
 bin/updates-install --revert
 ```
 
-Takes a legacy plugin-20 off the bar, disables the timer, and removes the three
+Takes a legacy plugin-20 off the bar, disables the timer and the cache watch,
+and removes the three
 scripts and legacy icons. It also restores the Mint Update Manager
 autostart state that existed before installation. `plugin-20` stays registered
 but unused; the cached list in `~/.cache/mintbook/updates.json` is left alone.

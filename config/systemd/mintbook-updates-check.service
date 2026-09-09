@@ -2,7 +2,8 @@
 # waiting to ~/.cache/mintbook/updates.state, which is the only thing the bar
 # indicator ever looks at. No root, no network, no writes outside $HOME — the
 # package lists are refreshed by the popup's own button, or by whatever else
-# on this machine refreshes them. See docs/updates.md.
+# on this machine refreshes them — mintbook-updates-check.path is how this
+# hears about it when they do. See docs/updates.md.
 [Unit]
 Description=mintbook update check — what apt has waiting
 

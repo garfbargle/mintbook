@@ -36,8 +36,9 @@ write_ids() {
 }
 
 if [ "${1:-}" = --revert ]; then
-  echo "==> timer"
+  echo "==> timer and cache watch"
   systemctl --user disable --now mintbook-updates-check.timer 2>/dev/null || true
+  systemctl --user disable --now mintbook-updates-check.path 2>/dev/null || true
 
   echo "==> Mint Update Manager autostart"
   if [ -e "$MINTUPDATE_SAVED" ]; then
@@ -153,12 +154,16 @@ write_ids "${out[@]}"
 nohup xfce4-panel >/dev/null 2>&1 &
 sleep 1
 
-echo "==> timer"
+echo "==> timer and cache watch"
 install -dm755 "$UNITS"
 install -m644 "$ROOT/config/systemd/mintbook-updates-check.service" "$UNITS/"
 install -m644 "$ROOT/config/systemd/mintbook-updates-check.timer" "$UNITS/"
+# The timer is the floor; the path unit is what keeps the badge from sitting
+# hours behind a refresh that has already happened. See the unit's own header.
+install -m644 "$ROOT/config/systemd/mintbook-updates-check.path" "$UNITS/"
 systemctl --user daemon-reload
 systemctl --user enable --now mintbook-updates-check.timer
+systemctl --user enable --now mintbook-updates-check.path
 
 echo "==> first check"
 "$BIN/updates-check" || true
