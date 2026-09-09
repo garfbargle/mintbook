@@ -26,10 +26,10 @@ Two things it does that the Wi-Fi menu does not:
     grab so a click outside dismisses it; the polkit agent needs the keyboard
     to ask for a password, and a grabbed seat would have left that dialog
     unable to take a single keystroke. The grab is dropped when a transaction
-    starts and taken again when it ends, so the popup stays put for the length
-    of an install — which is also what you want, since the progress is here.
+    starts and taken again when it ends. A click on the bar can hide the window
+    while it works; reopening shows the same process and live progress.
 
-What it does not do: flatpaks. See docs/updates.md.
+Both apt and Flatpak transactions are covered; see docs/updates.md.
 """
 import json
 import math
@@ -62,6 +62,51 @@ def read_file(path, default=''):
             return f.read().strip() or default
     except OSError:
         return default
+
+
+TOGGLE_PENDING = False
+
+
+def remember_toggle(*_args):
+    """Catch a very early second click while the primary is importing GTK."""
+    global TOGGLE_PENDING
+    TOGGLE_PENDING = True
+
+
+signal.signal(signal.SIGUSR1, remember_toggle)
+
+
+def claim_instance():
+    """Claim the pidfile, or ask the existing popup to toggle visibility.
+
+    This happens before the automatic update check and the GTK import. A click
+    that merely reopens a hidden, working popup must not start a second cache
+    check alongside the package transaction.
+    """
+    os.makedirs(os.path.dirname(PIDFILE), exist_ok=True)
+    try:
+        pid = int(read_file(PIDFILE, '0'))
+    except ValueError:
+        pid = 0
+    if pid and pid != os.getpid():
+        try:
+            with open(f'/proc/{pid}/cmdline', 'rb') as f:
+                ours = b'updates-menu' in f.read()
+        except OSError:
+            ours = False
+        if ours:
+            try:
+                os.kill(pid, signal.SIGUSR1)
+                return False
+            except OSError:
+                pass
+    with open(PIDFILE, 'w') as f:
+        f.write(str(os.getpid()))
+    return True
+
+
+if not claim_instance():
+    sys.exit(0)
 
 
 def read_cache():
@@ -862,17 +907,20 @@ class FooterRow(Row):
 
     def draw(self, cr, w):
         self.card(cr, w, self.h)
-        if self.hit is not None:
+        active = not self.panel.busy
+        if active and self.hit is not None:
             self.lit(cr, w, 0, self.h)
         text(cr, 'Update Manager…', 15, self.h / 2 - 8, 10.5,
-             self.c['fg'], .92)
+             self.c['fg'], .92 if active else .4)
         chevron(cr, w - 19, self.h / 2, self.c['fg'],
-                .55 if self.hit else .3)
+                (.55 if self.hit else .3) if active else .16)
 
     def test(self, x, y):
-        return 'manager'
+        return None if self.panel.busy else 'manager'
 
     def release(self, x, y):
+        if self.panel.busy:
+            return
         subprocess.Popen([MANAGER], start_new_session=True,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.panel.close()
@@ -886,6 +934,7 @@ class Menu:
         self.colors = DARK if self.mode == 'dark' else LIGHT
         self.cfg = conf()
         self.closing = False
+        self.hidden = False
         self.press_row = None
         self.phase = 0
 
@@ -1605,7 +1654,8 @@ class Menu:
         self.progress = None
         self.status = self.detail = ''
         self.notice = (colour, message)
-        self.grab(True)
+        if not self.hidden:
+            self.grab(True)
         self.rebuild()
 
     def nudge_panel(self):
@@ -1662,6 +1712,7 @@ class Menu:
         # stream; a terminal does not.
         Gtk.Widget.set_opacity(win, 0.0)
         win.present()
+        self.hidden = False
         self.grab(True)
         self.t0 = time.monotonic()
 
@@ -1734,32 +1785,30 @@ class Menu:
             pass
         Gtk.main_quit()
 
+    def toggle(self):
+        """A bar click dismisses an idle popup, but only hides active work.
 
-def single_instance():
-    """A second click on the bar icon closes the open menu, like macOS."""
-    os.makedirs(os.path.dirname(PIDFILE), exist_ok=True)
-    try:
-        pid = int(read_file(PIDFILE, '0'))
-    except ValueError:
-        pid = 0
-    # A stale pidfile must not make the bar icon unclickable, and the pid in it
-    # may since have been recycled by something else entirely — so check what
-    # is actually running under it before signalling anything.
-    if pid and pid != os.getpid():
-        try:
-            with open(f'/proc/{pid}/cmdline', 'rb') as f:
-                ours = b'updates-menu' in f.read()
-        except OSError:
-            ours = False
-        if ours:
-            try:
-                os.kill(pid, signal.SIGTERM)
-                return False        # it was up; this click was the dismiss
-            except OSError:
-                pass
-    with open(PIDFILE, 'w') as f:
-        f.write(str(os.getpid()))
-    return True
+        Keeping this process alive preserves aptkit's progress callbacks and
+        is required for Flatpak.Transaction, which runs in one of our threads.
+        A second click shows this same window and its current progress again.
+        """
+        if self.win.get_visible():
+            if not self.busy:
+                self.close()
+                return False
+            self.grab(False)
+            self.win.hide()
+            self.hidden = True
+            return False
+
+        self.hidden = False
+        self.win.show_all()
+        self.reposition()
+        self.win.present()
+        if not self.busy:
+            self.grab(True)
+        self.area.queue_draw()
+        return False
 
 
 def pointer_xy():
@@ -1778,13 +1827,14 @@ def pointer_xy():
 
 
 def main():
-    if not single_instance():
-        if CHECK_P is not None:
-            CHECK_P.wait()          # it is already running; let it finish
-        return
     px, py = pointer_xy()
     menu = Menu()
-    signal.signal(signal.SIGTERM, lambda *_a: menu.close())
+    signal.signal(signal.SIGUSR1,
+                  lambda *_a: GLib.idle_add(menu.toggle))
+    signal.signal(signal.SIGTERM,
+                  lambda *_a: GLib.idle_add(menu.close))
+    if TOGGLE_PENDING:
+        GLib.idle_add(menu.toggle)
     menu.win.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
     menu.win.connect(
         'button-press-event',

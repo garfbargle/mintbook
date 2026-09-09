@@ -191,8 +191,10 @@ the failure back over D-Bus and draws them in its own row.
 
 Two consequences worth knowing:
 
-- **The transaction outlives the popup.** It runs in aptkit's daemon. Killing
-  `updates-menu` mid-install does not stop the install.
+- **The apt transaction outlives the popup window.** It runs in aptkit's
+  daemon, while the popup process stays alive to retain progress and to run a
+  queued Flatpak phase. Clicking the bar icon during an install hides the
+  window; clicking it again reopens the same process at the same progress.
 - **Refreshing the lists costs no password.** `org.aptkit.update-cache` is
   `allow_active=yes`. Installing is `auth_admin_keep`, so that one asks — once,
   and then not again for a few minutes.
@@ -205,8 +207,9 @@ redirect window holding the seat leaves that dialog unable to take a single
 keystroke.
 
 So the grab is dropped the moment a transaction starts and taken again when it
-ends. While an install runs, clicking outside does nothing and the popup stays
-where it is — which is also where the progress bar is.
+ends. While an install runs, clicking outside does nothing. Clicking the bar
+icon deliberately hides the popup without ending its process or transaction;
+clicking again restores the live progress view.
 
 ### What it asks before it installs
 
