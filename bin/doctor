@@ -483,7 +483,7 @@ fi
 
 section "Housekeeping"
 if systemctl --failed --no-legend --no-pager 2>/dev/null | grep -q .; then
-  bad "failed units" "$(systemctl --failed --no-legend --no-pager | awk '{print $1}' | tr '\n' ' ')"
+  bad "failed units" "$(systemctl --failed --no-legend --no-pager | awk '{print ($1 == "●" ? $2 : $1)}' | tr '\n' ' ')"
 else
   ok "failed units" "none"
 fi
