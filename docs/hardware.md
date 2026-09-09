@@ -1028,8 +1028,8 @@ health. **Run it after every kernel update.**
 
 `doctor --tsv` prints the same run as `status<TAB>label<TAB>detail` lines, with a
 `section<TAB>name<TAB>` line before each group. That is what
-[`bin/mintbook-health`](../bin/mintbook-health) — the System Health window and the
-Control Center tile — reads; see docs/daily.md.
+[`bin/mintbook-health`](../bin/mintbook-health) — the Doctor detail window behind
+the System tray counts — reads; see docs/daily.md.
 
 > Do not put `set -o pipefail` in it. `grep -q` exits on first match, the writer gets
 > SIGPIPE, and the pipeline reports 141 — which reads as a hardware failure. That is

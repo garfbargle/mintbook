@@ -1,4 +1,4 @@
-# Software updates — the icon that is only there when it needs to be
+# Software updates — compact status in the System menu
 
 <p align="center">
   <img src="images/updates.jpg" alt="the Software Update popup" width="620">
@@ -10,11 +10,13 @@ it has to say in a tooltip. macOS puts the same information in two places
 instead: a badge that appears when there is something to do, and a pane you
 open to do it.
 
-This is that split.
+This is that split. On the current desktop, the always-present System icon
+carries a tiny badge only when an update needs attention; the System sheet is
+the stable door into the existing update popup.
 
 ```
-bin/updates-install            # plugin-20 on the bar, and the timer
-bin/updates-install --revert   # both off; nothing installed is removed
+bin/updates-install            # popup, cache and timer; System shows the state
+bin/updates-install --revert   # remove them; nothing installed is removed
 ```
 
 Mint's Update Manager is still one click away in the popup's footer — it is
@@ -30,7 +32,7 @@ and all of its settings remain installed and available on demand.
 | | what it is | what it costs |
 |---|---|---|
 | [`bin/updates-check`](../bin/updates-check) | reads the APT cache, asks flathub, writes two files | **2.5 s of CPU + ~2.5 s of network** |
-| [`bin/panel-updates`](../bin/panel-updates) | the bar icon; reads one of those files | **6 ms**, every 5 min |
+| [`bin/panel-system`](../bin/panel-system) | the System icon and status badge; reads the caches | a few milliseconds, every 30 s |
 | [`bin/updates-menu`](../bin/updates-menu) | the glass popup | 300 ms to open |
 | `mintbook-updates-check.timer` | runs the check 5 min after login, then every 6 h | |
 
@@ -50,9 +52,8 @@ and draws a conclusion. A timer keeps those two honest, the popup re-runs the
 check every time it opens, and `bin/doctor` is what tells you if the timer has
 stopped — see [Staleness](#staleness).
 
-`updates.state` is `key = value` lines because both of its readers are bash:
-the genmon script and the Control Center tile. It is the same format the
-Control Center plugins already speak. Both files are written with a rename, so
+`updates.state` is `key = value` lines so tiny status readers need no package
+imports. Both files are written with a rename, so
 a popup reading while the check writes never sees half a file.
 
 ### It does not decide what an update is
@@ -108,29 +109,17 @@ their ref name, because that is what `flatpak update` calls them.
 
 ---
 
-## The icon is not always there
+## The badge is not always there
 
-When nothing is waiting, `bin/panel-updates` prints a **transparent** icon and
-the indicator disappears. That is the same rule the Control Center plugins
-follow — *say nothing rather than show a dead switch* — and it is why the bar
-is quiet almost all of the time.
-
-Transparent, rather than nothing at all, because genmon has no way of being
-told to draw nothing — see the gotcha at the bottom. It cost one shipped bug.
-
-It sits **to the left of the CPU sparkline**, and that position is the whole
-reason it can afford to come and go. The bar is packed against the right edge,
-so an item added at the left end of the group grows the group leftward and
-nothing already on it moves. Anywhere further right, every appearance and
-disappearance of this icon would have shuffled the clock.
-
-Two states:
+The System icon stays in one place. Its badge is absent when there is nothing
+to do, so the bar remains quiet and nothing shifts when updates appear.
 
 | | when |
 |---|---|
-| `updates-none.svg`, one transparent pixel | nothing is waiting |
-| the plain arrow | ordinary package updates |
-| the arrow with a dot beside it | there is a **security** or **kernel** update in there |
+| no badge | nothing is waiting |
+| blue dot | ordinary package updates |
+| amber dot | there is a **security** update in there |
+| red dot | the update check failed (or Doctor found a real failure) |
 
 Nothing shouts about a translation package. A bar that raises its voice for
 everything is a bar you stop reading.
@@ -138,12 +127,9 @@ everything is a bar you stop reading.
 The tooltip carries the rest: the count, the total download, the breakdown and
 when the answer was last checked.
 
-### So where is the door when the icon is gone?
-
-The Control Center, after Power: an **Updates** tile that is always present,
-reads the same state file, and opens the popup from its `›`. That tile is
-`control-center/plugins/70-updates`, twelve lines of bash, and it is the reason
-hiding the bar icon is not a trap.
+Open the System icon and click the Updates row. It reads the same state file and
+opens the existing popup; there is no duplicate Control Center tile or separate
+bar indicator.
 
 ---
 
@@ -328,8 +314,8 @@ behind it. The check is spawned on the first line of the file, *before*
 bin/updates-install --revert
 ```
 
-Takes plugin-20 off the bar, disables the timer, and removes the three scripts,
-the Control Center tile and the icons. It also restores the Mint Update Manager
+Takes a legacy plugin-20 off the bar, disables the timer, and removes the three
+scripts and legacy icons. It also restores the Mint Update Manager
 autostart state that existed before installation. `plugin-20` stays registered
 but unused; the cached list in `~/.cache/mintbook/updates.json` is left alone.
 Nothing installed by apt is touched, and `mintupdate` still opens the window it

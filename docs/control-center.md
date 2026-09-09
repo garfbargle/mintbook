@@ -1,4 +1,4 @@
-# Control Center — the panel behind the bar icon
+# Control Center and System — the two focused bar menus
 
 > 2026-09-07: keyboard navigation and daily conveniences are documented in
 > [daily.md](daily.md). Earlier measurements below retain their original scope.
@@ -11,7 +11,8 @@ The top bar had nine indicators on it. Four of them are readings you glance
 at; the rest were switches that happened to be sitting in the open. This is
 where the switches went.
 
-Click the two-pill icon between the battery and the clock.
+Click the two-pill icon for controls. The laptop icon beside it opens System:
+Doctor, updates, storage, machine information, Keep Awake, and session actions.
 
 ```
 bin/control-install          # put it on the bar
@@ -34,9 +35,9 @@ bin/control-install --revert # put the old indicators back
 | Wi-Fi | macOS keeps it out, and a dead network is worth seeing without a click |
 | Bluetooth | *since 2026-09-07* — same: "is the speaker connected" is a reading |
 | battery | same |
-| **Control Center** | everything else |
+| **Control Center** | hardware and appearance controls |
+| **System** | health, updates, storage, identity and session actions |
 | clock | |
-| software updates | *only when there is one* — see [updates.md](updates.md) |
 
 | behind the click | was |
 |---|---|
@@ -49,6 +50,19 @@ bin/control-install --revert # put the old indicators back
 
 The rule the split follows: **a reading stays, a switch moves.** You do not
 click a temperature.
+
+Doctor, Updates and Keep Awake used to be Control Center tiles. They are not
+hardware controls, and the first two are mostly things to read. They now share
+the System sheet instead. It shows disk space and system identity without
+another click, keeps the Doctor summary to three counts, and opens the existing
+detailed Health or Updates view only when asked. Lock, Sleep, Hibernate, Log
+Out, Restart and Shut Down form one footer; actions that end the session ask
+for a compact inline confirmation.
+
+The System icon is normally just a laptop outline. A small blue badge means
+updates are waiting, amber means one is a security update, and red means either
+Doctor has a real failure or the update check failed. Doctor notes do not badge
+the icon: a note is not a fault.
 
 > **Bluetooth went behind the click on 2026-09-06 and came back on the bar on
 > 2026-09-07** — under the rule, not around it. The tile was a switch and moved;
@@ -165,9 +179,8 @@ newlines or characters `key = value` would mangle.
 | `slider` | a thick pill you drag or scroll | `0`–`100` | 12 |
 | `meter` | a reading, optionally over a sparkline | never called | 6 |
 
-`70-updates` is the installed example of `meter`, and `80-cpu.disabled` /
-`85-temp.disabled` in the same directory are what one looks like with a
-`graph` under it.
+`80-cpu.disabled` and `85-temp.disabled` in the same directory are examples of
+`meter`, including a `graph` under it.
 
 **`cycle`** is the compact form of `segment`, and the trade it makes is that
 you cannot see the options without tapping through them. Three of them fit a

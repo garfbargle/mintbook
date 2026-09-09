@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# updates-install — the software-update indicator, its popup, and the timer
-# that keeps them honest. No root. See docs/updates.md.
+# updates-install — the software-update popup and the timer that keeps it
+# honest. On the current desktop its status lives in the System icon; older
+# installs retain the standalone conditional indicator. No root.
 #
-#   bin/updates-install            # plugin-20 on the bar, timer enabled
-#   bin/updates-install --revert   # both off; nothing installed is removed
+#   bin/updates-install            # popup/cache/timer; System shows status
+#   bin/updates-install --revert   # those off; nothing installed is removed
 #
 # Nothing here touches APT, and nothing here needs a password. The privileged
 # half lives in aptkit, which the popup talks to when you press a button.
@@ -102,15 +103,9 @@ else
   grep -q '^PANEL_ID=' "$CONF" || printf 'PANEL_ID=%s\n' "$PLUGIN" >> "$CONF"
 fi
 
-# Only if the Control Center is installed. The tile is the door that stays put
-# when the bar icon hides itself, and a plugin in a directory nothing reads is
-# just a file.
-if [ -d "$SHARE" ]; then
-  echo "==> control-center tile"
-  install -m755 "$ROOT/control-center/plugins/70-updates" "$SHARE/70-updates"
-  rm -f "$BIN/control-center"
-  install -m755 "$ROOT/bin/control-center" "$BIN/control-center"   # the box glyph
-fi
+# Updates moved to the System sheet. Clear the old Control Center tile when
+# upgrading an existing installation.
+rm -f "$SHARE/70-updates"
 
 echo "==> disabling Mint's duplicate tray icon"
 install -dm755 "$AUTOSTART"
@@ -141,17 +136,18 @@ xfce4-panel -q 2>/dev/null || true
 sleep 0.4
 xfconf-query -c xfce4-panel -p "/plugins/plugin-$PLUGIN" -n -t string -s genmon 2>/dev/null || true
 
-# Left of the readings, not right of them. The bar is packed against the right
-# edge, so an item added at the left of the group grows the group leftward and
-# nothing already on it moves. Added on the right, every appearance and
-# disappearance of this icon would have shuffled the clock.
+# With the System menu installed, its small badge replaces the conditional
+# update arrow. Otherwise retain the legacy placement for a standalone update
+# installation.
 out=(); placed=0
 for id in $ids; do
   [ "$id" = "$PLUGIN" ] && continue
   out+=("$id")
-  if [ "$id" = "$AFTER" ]; then out+=("$PLUGIN"); placed=1; fi
+  if [ ! -e "$STATE/system.conf" ] && [ "$id" = "$AFTER" ]; then
+    out+=("$PLUGIN"); placed=1
+  fi
 done
-[ "$placed" = 1 ] || out=("$PLUGIN" "${out[@]}")
+if [ ! -e "$STATE/system.conf" ] && [ "$placed" = 0 ]; then out=("$PLUGIN" "${out[@]}"); fi
 write_ids "${out[@]}"
 
 nohup xfce4-panel >/dev/null 2>&1 &
@@ -166,9 +162,18 @@ systemctl --user enable --now mintbook-updates-check.timer
 
 echo "==> first check"
 "$BIN/updates-check" || true
-xfce4-panel "--plugin-event=plugin-$PLUGIN:refresh:bool:true" >/dev/null 2>&1 || true
+if [ -e "$STATE/system.conf" ]; then
+  sid=$(sed -n 's/^PANEL_ID=\([0-9]*\).*/\1/p' "$STATE/system.conf" | head -1)
+  [ -n "$sid" ] && xfce4-panel "--plugin-event=plugin-$sid:refresh:bool:true" >/dev/null 2>&1 || true
+else
+  xfce4-panel "--plugin-event=plugin-$PLUGIN:refresh:bool:true" >/dev/null 2>&1 || true
+fi
 
 echo
 echo "bar: ${out[*]}"
-echo "the icon is only there when something is waiting · the Updates tile always is"
+if [ -e "$STATE/system.conf" ]; then
+  echo "updates appear in the System menu; its badge changes when something is waiting"
+else
+  echo "the standalone icon is only there when something is waiting"
+fi
 echo "undo: $(basename "$0") --revert"

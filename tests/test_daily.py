@@ -106,6 +106,63 @@ class DailyTests(unittest.TestCase):
                     health.check()
             self.assertFalse(health.STATE.exists())
 
+    def test_health_detail_filters_match_clicked_system_counts(self):
+        health = load('mintbook-health')
+        window = health.Window.__new__(health.Window)
+        window.state = {'rows': [
+            {'status': 'ok', 'label': 'a'},
+            {'status': 'warn', 'label': 'b'},
+            {'status': 'fail', 'label': 'c'},
+        ]}
+        window.filter = 'notes'
+        self.assertEqual([row['label'] for row in window.shown], ['b'])
+        window.filter = 'errors'
+        self.assertEqual([row['label'] for row in window.shown], ['c'])
+
+    def test_system_menu_reads_doctor_and_update_counts(self):
+        system = load('system-menu')
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            health_path = base / 'health.json'
+            health_path.write_text(json.dumps({'checked': 12, 'kernel': '7.0', 'rows': [
+                {'status': 'ok'}, {'status': 'ok'}, {'status': 'warn'}, {'status': 'fail'}]}))
+            updates_path = base / 'updates.state'
+            updates_path.write_text('count = 4\nsecurity = 1\nflatpak = 2\nchecked = 10\nerror = \n')
+            self.assertEqual(system.health_snapshot(health_path),
+                             {'ok': 2, 'warn': 1, 'fail': 1, 'checked': 12.0, 'kernel': '7.0'})
+            self.assertEqual(system.updates_snapshot(updates_path)['security'], 1)
+            self.assertEqual(system.updates_snapshot(updates_path)['flatpak'], 2)
+
+    def test_system_background_does_not_double_scale_child_controls(self):
+        system = load('system-menu')
+        surface = system.cairo.ImageSurface(system.cairo.FORMAT_ARGB32, 800, 900)
+        context = system.cairo.Context(surface)
+        menu = system.Menu.__new__(system.Menu)
+        menu.colors = system.LIGHT
+        menu.win = NS(get_allocation=lambda: NS(width=755, height=870))
+        previous = system.SC
+        system.SC = 1.75
+        try:
+            before = tuple(context.get_matrix())
+            system.Menu.draw_background(menu, None, context)
+            self.assertEqual(tuple(context.get_matrix()), before)
+        finally:
+            system.SC = previous
+
+    def test_system_indicator_prioritizes_real_failures(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            cache = base / '.cache/mintbook'; cache.mkdir(parents=True)
+            cache.joinpath('health.json').write_text(json.dumps({'rows': [
+                {'status': 'warn'}, {'status': 'fail'}, {'status': 'ok'}]}))
+            cache.joinpath('updates.state').write_text(
+                'count = 5\nsecurity = 2\nchecked = 10\nerror = \n')
+            result = subprocess.run([str(ROOT / 'bin/panel-system')],
+                                    env={**os.environ, 'HOME': directory}, text=True,
+                                    capture_output=True, check=True)
+            self.assertIn('system-alert.svg</img>', result.stdout)
+            self.assertIn('Doctor: 1 passed · 1 notes · 1 errors', result.stdout)
+
     def test_awake_status_rejects_expired_and_reused_process_ids(self):
         awake = load('keep-awake')
         with tempfile.TemporaryDirectory() as directory:

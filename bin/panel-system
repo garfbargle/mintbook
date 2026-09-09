@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""Static System indicator with one small, meaningful status badge."""
+import json
+import os
+from pathlib import Path
+
+home = Path.home()
+menu = home / '.local/bin/system-menu'
+icons = home / '.local/share/mintbook/system'
+
+fail = notes = passed = 0
+try:
+    rows = json.loads((home / '.cache/mintbook/health.json').read_text())['rows']
+    fail = sum(row.get('status') == 'fail' for row in rows)
+    notes = sum(row.get('status') == 'warn' for row in rows)
+    passed = sum(row.get('status') == 'ok' for row in rows)
+except (OSError, ValueError, KeyError, TypeError):
+    pass
+
+updates = security = checked = 0
+update_error = ''
+updates_installed = (home / '.config/mintbook/updates.conf').exists()
+try:
+    if not updates_installed:
+        raise FileNotFoundError
+    for line in (home / '.cache/mintbook/updates.state').read_text().splitlines():
+        key, sep, value = line.partition(' = ')
+        if sep and key in ('count', 'security', 'checked'):
+            try:
+                if key == 'count': updates = int(value)
+                elif key == 'security': security = int(value)
+                else: checked = int(value)
+            except ValueError: pass
+        elif sep and key == 'error': update_error = value.strip()
+except OSError:
+    pass
+
+if fail or update_error:
+    icon = 'system-alert.svg'
+elif security:
+    icon = 'system-security.svg'
+elif updates:
+    icon = 'system-update.svg'
+else:
+    icon = 'system.svg'
+
+disk = os.statvfs('/')
+free = disk.f_bavail * disk.f_frsize / 1_000_000_000
+doctor = 'not checked' if not (passed or notes or fail) else f'{passed} passed · {notes} notes · {fail} errors'
+up = ('Update Manager' if not updates_installed else 'check failed' if update_error else f'{updates} waiting' if updates else
+      'up to date' if checked else 'not checked')
+print(f'<click>{menu}</click>\n<iconclick>{menu}</iconclick>')
+print(f'<img>{icons / icon}</img>')
+print(f'<tool>System\nDoctor: {doctor}\nUpdates: {up}\nStorage: {free:.0f} GB free</tool>')

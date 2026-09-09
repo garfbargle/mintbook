@@ -28,13 +28,13 @@ It costs about 2.5 s of CPU for apt and about 2.5 s of waiting for flatpak,
 which is why nothing polls it:
 
     bin/panel-updates      reads the state file below, and nothing else
-    control-center 70-updates    the same file
+    bin/panel-system      the same file, for its compact status badge
     bin/updates-menu       reads it on open, then re-runs this in a thread
     mintbook-updates-check.timer   runs it 5 min after login and every 6 h
 
 Two files come out, in ~/.cache/mintbook:
 
-    updates.state   `key = value`, for the two readers that are shell
+    updates.state   `key = value`, for the two tiny status readers
     updates.json    the list, for the popup
 
 Both are written atomically, because the popup reads them without a lock.

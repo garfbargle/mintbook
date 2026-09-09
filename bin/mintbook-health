@@ -4,7 +4,7 @@ the running kernel changes.
 
 `doctor` is the authority; nothing here re-implements a check or repairs
 anything. This is a reader: it runs `doctor --tsv`, caches the result for the
-Control Center tile, and draws it.
+System menu, and draws it.
 
 The window is cairo on a DrawingArea rather than themed GTK widgets, for the
 same reason the Control Center and the battery history window are: it has to
@@ -321,9 +321,15 @@ class Window:
         self.pressed = None
         self.copied = None
         self.drag_thumb = None
-        # Opening on the notes would make them the entire window on a machine
-        # whose card says it is fine. Only a failure earns that.
-        self.filter = 'attention' if self.failing else 'all'
+        # The System menu can open directly on a clicked count. Ordinary opens
+        # still lead with errors only when there are any; notes do not make a
+        # healthy machine open on an exception list.
+        requested = os.environ.get('MINTBOOK_HEALTH_FILTER', '')
+        available = {'all': True,
+                     'errors': any(r['status'] == 'fail' for r in self.rows),
+                     'notes': any(r['status'] == 'warn' for r in self.rows)}
+        self.filter = (requested if requested in available and available[requested]
+                       else 'errors' if self.failing else 'all')
         self.segments, self.seg_rects, self.chip_rects = [], [], []
         self.close_rect = self.recheck_rect = self.copy_rect = self.thumb_rect = (0, 0, 0, 0)
         self.measure = cairo.Context(cairo.ImageSurface(cairo.FORMAT_ARGB32, 1, 1))
@@ -380,7 +386,11 @@ class Window:
 
     @property
     def shown(self):
-        return self.unhappy if self.filter == 'attention' else self.rows
+        if self.filter == 'errors':
+            return [r for r in self.rows if r['status'] == 'fail']
+        if self.filter == 'notes':
+            return [r for r in self.rows if r['status'] == 'warn']
+        return self.rows
 
     def relayout(self):
         """Place every section heading and row, and size the window to fit."""
@@ -572,12 +582,13 @@ class Window:
         """The filter segment, and the copy affordance opposite it."""
         c, y = self.colors, self.BAR_Y
         counts = tally(self.rows)
-        # "Needs attention" only when something actually does; a run whose
-        # findings are all notes should not be labelled as needing anything.
-        lead = (f"Needs attention {counts['fail'] + counts['warn']}"
-                if counts['fail'] else f"Notes {counts['warn']}")
-        self.segments = ([('attention', lead), ('all', f'All {len(self.rows)}')]
-                         if self.unhappy else [])
+        self.segments = []
+        if counts['fail']:
+            self.segments.append(('errors', f"Errors {counts['fail']}"))
+        if counts['warn']:
+            self.segments.append(('notes', f"Notes {counts['warn']}"))
+        if self.segments:
+            self.segments.append(('all', f'All {len(self.rows)}'))
         self.seg_rects = []
         if self.segments:
             widths = [text(self.measure, label, 0, 0, 9.5, None, weight='medium',
@@ -920,8 +931,10 @@ class Window:
             self.recheck()
         elif code == Gdk.KEY_c:
             self.to_clipboard(report(self.state), 'report')
-        elif code in (Gdk.KEY_1, Gdk.KEY_2) and self.segments:
-            self.activate('seg', self.segments[code - Gdk.KEY_1][0])
+        elif code in (Gdk.KEY_1, Gdk.KEY_2, Gdk.KEY_3) and self.segments:
+            index = code - Gdk.KEY_1
+            if index < len(self.segments):
+                self.activate('seg', self.segments[index][0])
         elif code in (Gdk.KEY_Down, Gdk.KEY_Up):
             self.glide(56 if code == Gdk.KEY_Down else -56)
         elif code in (Gdk.KEY_Page_Down, Gdk.KEY_Page_Up):
@@ -960,8 +973,10 @@ class Window:
         if state:
             was_failing = self.failing
             self.state = state
-            if self.filter == 'attention' and (not self.unhappy or
-                                               (was_failing and not self.failing)):
+            empty_filter = ((self.filter == 'errors' and not self.failing) or
+                            (self.filter == 'notes' and not any(
+                                r['status'] == 'warn' for r in self.rows)))
+            if empty_filter or (was_failing and not self.failing and self.filter == 'errors'):
                 self.filter = 'all'
         self.relayout()
         self.area.queue_draw()

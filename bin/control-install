@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# control-install — Control Center on the top bar, and the indicators it
-# replaces taken off it. No root. See docs/control-center.md.
+# control-install — Control Center and System menus on the top bar, with the
+# indicators they replace taken off it. No root. See docs/control-center.md.
 #
-# What stays visible is the macOS set: Wi-Fi, battery, Control Center, clock,
-# plus whatever the apps put in the systray. Everything else moves behind the
-# click. Both lists are right here — move an id back to VISIBLE and re-run if
-# you want its indicator on the bar again.
+# What stays visible is the compact set: live readings, Control Center, System,
+# clock, plus whatever apps put in the systray. Everything else moves behind a
+# focused click. Both lists are right here — move an id back to VISIBLE and
+# re-run if you want its indicator on the bar again.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
@@ -18,7 +18,7 @@ PLUGIN=25
 
 #   1 app grid     7 separator  8 systray  10 xapp-status  19 cpu sparkline
 #  17 temperature  21 bluetooth 18 wifi    11 battery      25 control
-#  13 clock        27 overview
+#  28 system       13 clock        27 overview
 #
 # CPU and temperature stay on the bar deliberately: they are readings you
 # glance at, not settings you open something to change. Everything that is a
@@ -32,18 +32,9 @@ if [ -r "$STATE/battery.conf" ]; then    # `[ ] && x` would exit under set -e
   BATTERY=$(sed -n 's/^PANEL_ID=\([0-9]*\).*/\1/p' "$STATE/battery.conf" | head -1)
   [ -n "$BATTERY" ] || BATTERY=11
 fi
-# The software-update indicator is only on the bar once bin/updates-install
-# has run, and it hides itself when there is nothing waiting — so it is read
-# rather than hardcoded, the same way the battery is. Re-running this without
-# it would have quietly taken it back off.
-UPDATES=()
-if [ -r "$STATE/updates.conf" ]; then
-  uid=$(sed -n 's/^PANEL_ID=\([0-9]*\).*/\1/p' "$STATE/updates.conf" | head -1)
-  # An `if`, not `[ -n "$uid" ] && UPDATES=(…)`: a conf file with no PANEL_ID
-  # line makes that whole list return 1, and under `set -e` the install ends
-  # right here with the bar untouched and nothing said.
-  if [ -n "$uid" ]; then UPDATES=("$uid"); fi
-fi
+# Updates now report through the always-present System icon. The existing
+# updater/timer still owns plugin-20's files and cache, but that conditional
+# indicator no longer takes a second seat on the bar.
 # Bluetooth is behind the click until bin/bt-panel-install puts it back on the
 # bar, and read rather than hardcoded for the same reason the battery and the
 # update arrow are: re-running this must not quietly undo that installer.
@@ -59,7 +50,8 @@ if [ -r "$STATE/overview.conf" ]; then
   oid=$(sed -n 's/^PANEL_ID=\([0-9]*\).*/\1/p' "$STATE/overview.conf" | head -1)
   if [ -n "$oid" ]; then OVERVIEW=("$oid"); fi
 fi
-VISIBLE=(1 7 8 10 "${UPDATES[@]}" 19 17 "${BLUETOOTH[@]}" 18 "$BATTERY" $PLUGIN 13 "${OVERVIEW[@]}")
+SYSTEM_PLUGIN=28
+VISIBLE=(1 7 8 10 19 17 "${BLUETOOTH[@]}" 18 "$BATTERY" $PLUGIN $SYSTEM_PLUGIN 13 "${OVERVIEW[@]}")
 #  21 bluetooth (unless bt-panel-install has claimed it above)
 #  22 power profile  23 night light  24 appearance
 #  12 volume — its plugin was also the XF86Audio grab, so bin/volume-key
@@ -78,7 +70,8 @@ if [ "${1:-}" = --revert ]; then
     xfconf-query -c xfce4-keyboard-shortcuts -p "/commands/custom/$key" -r 2>/dev/null || true
   done
   nohup xfce4-panel >/dev/null 2>&1 &
-  echo "the old indicators are back; plugin-$PLUGIN is still registered but unused"
+  rm -f "$STATE/system.conf"
+  echo "the old indicators are back; plugins $PLUGIN and $SYSTEM_PLUGIN stay registered but unused"
   exit 0
 fi
 
@@ -91,10 +84,11 @@ PANEL_FOREGROUND='#ffffff'
 # shellcheck disable=SC1091
 [ -r "$STATE/system-chrome.env" ] && . "$STATE/system-chrome.env"
 MINTBOOK_PANEL_FG="$PANEL_FOREGROUND" python3 "$ROOT/icons/generate-control-genmon.py"
+MINTBOOK_PANEL_FG="$PANEL_FOREGROUND" python3 "$ROOT/icons/generate-system-genmon.py"
 
 echo "==> $BIN"
 install -dm755 "$BIN"
-for f in control-center panel-control volume-key; do
+for f in control-center panel-control system-menu panel-system mintbook-health doctor keep-awake volume-key; do
   rm -f "$BIN/$f"
   install -m755 "$ROOT/bin/$f" "$BIN/$f"
 done
@@ -103,15 +97,21 @@ echo "==> plugins"
 install -dm755 "$SHARE"
 rm -rf "$SHARE/plugins"
 install -dm755 "$SHARE/plugins"
-install -m755 "$ROOT"/control-center/plugins/* "$SHARE/plugins/"
+for source in "$ROOT"/control-center/plugins/*; do
+  [ -f "$source" ] || continue
+  install -m755 "$source" "$SHARE/plugins/"
+done
 
 echo "==> genmon-$PLUGIN.rc"
 install -dm755 "$PANEL_RC"
 sed "s|^Command=.*|Command=$BIN/panel-control|" \
   "$ROOT/config/xfce4-panel/genmon-$PLUGIN.rc" > "$PANEL_RC/genmon-$PLUGIN.rc"
+sed "s|^Command=.*|Command=$BIN/panel-system|" \
+  "$ROOT/config/xfce4-panel/genmon-$SYSTEM_PLUGIN.rc" > "$PANEL_RC/genmon-$SYSTEM_PLUGIN.rc"
+install -dm755 "$STATE"
+printf 'PANEL_ID=%s\n' "$SYSTEM_PLUGIN" > "$STATE/system.conf"
 
 echo "==> panel"
-install -dm755 "$STATE"
 [ -s "$SAVED" ] || xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids \
   | grep -oE '^[0-9]+$' | tr '\n' ' ' > "$SAVED"
 
@@ -119,6 +119,7 @@ install -dm755 "$STATE"
 xfce4-panel -q 2>/dev/null || true
 sleep 0.4
 xfconf-query -c xfce4-panel -p "/plugins/plugin-$PLUGIN" -n -t string -s genmon 2>/dev/null || true
+xfconf-query -c xfce4-panel -p "/plugins/plugin-$SYSTEM_PLUGIN" -n -t string -s genmon 2>/dev/null || true
 
 args=(); for id in "${VISIBLE[@]}"; do args+=(-t int -s "$id"); done
 xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids --force-array "${args[@]}"
@@ -141,7 +142,7 @@ for pair in "XF86AudioRaiseVolume:up" "XF86AudioLowerVolume:down" \
 done
 
 echo
-echo "bar: app grid · systray${UPDATES:+ · updates} · cpu · temp${BLUETOOTH:+ · bluetooth} · wi-fi · battery · control · clock${OVERVIEW:+ · overview}"
+echo "bar: app grid · systray · cpu · temp${BLUETOOTH:+ · bluetooth} · wi-fi · battery · control · system · clock${OVERVIEW:+ · overview}"
 echo "behind the click: ${RETIRED[*]}"
 echo "plugins: $SHARE/plugins"
 echo "undo: $(basename "$0") --revert"

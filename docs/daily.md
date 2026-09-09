@@ -30,9 +30,9 @@ reconsider a lid that was already closed when the charger is later unplugged.
 
 ## Keep Awake
 
-The Control Center switch starts a 30-minute timer or stops the active one.
-Overview offers 30 minutes, one hour and two hours. Remaining minutes appear in
-the tile. A transient user systemd service holds both the power manager's and
+The System tray menu offers Off, 30 minutes, one hour and two hours in one
+compact row; Overview offers the same durations. Remaining minutes appear next
+to the row. A transient user systemd service holds both the power manager's and
 screensaver's D-Bus inhibitors until expiry. Stopping the service releases them;
 process exit releases the D-Bus ownership too. Nothing rewrites power settings.
 Normal explicit lock/suspend actions remain the user's choice. This feature
@@ -79,7 +79,7 @@ coalesces pending changes, so slow replies cannot reorder rapid key presses.
 ## System Health
 
 [`bin/mintbook-health`](../bin/mintbook-health) is the desktop view of
-[`bin/doctor`](../bin/doctor) — the Control Center's System Health tile, and
+[`bin/doctor`](../bin/doctor) — the System tray menu's Doctor detail, and
 **Check system health** in Overview. It is a reader: it runs `doctor --tsv`,
 caches the answer in `~/.cache/mintbook/health.json` for the tile, and draws it.
 No check and no repair lives here.
@@ -103,8 +103,9 @@ window — same palette source, same `appearance.applied` light/dark, same
   checks out"* unless something actually failed, the notes are a word at the
   end of the count line (*"83 passed · 2 notes"*), and only a failure gets the
   headline: *"1 check needs attention"*.
-- **Notes / All**, or **Needs attention / All** once something is failing. It
-  opens on the first only when there is a failure — opening on the notes would
+- **Errors / Notes / All**, showing only the filters that have findings. The
+  System menu opens the exact count clicked. An ordinary open starts with
+  errors only when there is a failure — opening on the notes would
   make them the whole window on a machine whose card says it is fine. With
   nothing to filter the segment is not drawn at all.
 - Findings **grouped under doctor's own section headings**. `doctor --tsv` prints

@@ -7,8 +7,8 @@
 #
 # The icon is not always there. Nothing waiting means the transparent icon, and
 # the indicator disappears the way macOS's does — "say nothing rather than show
-# a dead switch", the same rule the Control Center plugins follow. The door that
-# is always there is the Control Center's Updates tile.
+# a dead switch", the same rule the Control Center plugins follow. Its popup
+# remains reachable from the System menu.
 #
 # The transparent one, not *no* output: genmon has no way to be told to draw
 # nothing. Output with neither <txt> nor <img> in it makes it fall back to

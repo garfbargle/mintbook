@@ -15,9 +15,9 @@ SAVED = HOME / '.config/mintbook/daily-install.json'
 BIN = HOME / '.local/bin'
 UNIT_DIR = HOME / '.config/systemd/user'
 SCRIPTS = ('overview', 'spotlight', 'spotlight-actions', 'keep-awake', 'screenshot', 'screenshot-notify',
-           'window-place', 'mintbook-health', 'doctor', 'control-center', 'wifi-menu', 'bt-menu',
+           'window-place', 'mintbook-health', 'doctor', 'control-center', 'system-menu', 'wifi-menu', 'bt-menu',
            'battery-menu', 'battery-history', 'sleep-report', 'updates-menu', 'mintbook_keys.py')
-PLUGINS = ('65-awake', '75-health')
+PLUGINS = ()
 UNIT = 'mintbook-health.timer'
 KEYS = {'<Super>Left': 'left', '<Super>Right': 'right', '<Super>Down': 'restore'}
 SETTINGS = (
@@ -138,6 +138,12 @@ def install():
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.unlink(missing_ok=True)
         dest.symlink_to(source)
+    # These daily conveniences now live in the System tray menu. Remove old
+    # installed copies left by an earlier daily-install without putting them
+    # back into the Control Center on a rerun.
+    plugin_dir = HOME / '.local/share/mintbook/control-center/plugins'
+    for name in ('65-awake', '75-health'):
+        (plugin_dir / name).unlink(missing_ok=True)
     for key, mode in KEYS.items():
         run('xfconf-query', '-c', 'xfce4-keyboard-shortcuts', '-p', f'/xfwm4/custom/{key}', '-r', check=False)
         prop = f'/commands/custom/{key}'
@@ -151,7 +157,7 @@ def install():
     run('systemctl', '--user', 'daemon-reload')
     run('systemctl', '--user', 'enable', '--now', UNIT)
     print('Installed. Cmd+Space opens Overview; Cmd+Left/Right places windows; Cmd+Down restores.')
-    print('Reopen Control Center to see Keep Awake and System Health. No panel restart needed.')
+    print('Keep Awake and Doctor are available from the System tray menu.')
     print(f'Undo: {ROOT}/bin/daily-install --revert')
 
 

@@ -45,6 +45,7 @@ T0 = time.monotonic()
 HOME = os.path.expanduser('~')
 APPLIED = f'{HOME}/.config/mintbook/appearance.applied'
 CONF = f'{HOME}/.config/mintbook/updates.conf'
+SYSTEM_CONF = f'{HOME}/.config/mintbook/system.conf'
 CACHE = f'{HOME}/.cache/mintbook'
 LIST = f'{CACHE}/updates.json'
 PIDFILE = f'{CACHE}/updates-menu.pid'
@@ -1661,15 +1662,17 @@ class Menu:
     def nudge_panel(self):
         """genmon only re-reads on its own timer, and that timer is minutes
         long here on purpose. Tell it now."""
-        plugin = self.cfg.get('PANEL_ID', '')
-        if not plugin:
-            return
-        try:
-            subprocess.Popen(
-                ['xfce4-panel', f'--plugin-event=plugin-{plugin}:refresh:bool:true'],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except OSError:
-            pass
+        plugins = [self.cfg.get('PANEL_ID', '')]
+        for line in read_file(SYSTEM_CONF).splitlines():
+            if line.startswith('PANEL_ID='):
+                plugins.append(line.split('=', 1)[1].split()[0])
+        for plugin in {value for value in plugins if value}:
+            try:
+                subprocess.Popen(
+                    ['xfce4-panel', f'--plugin-event=plugin-{plugin}:refresh:bool:true'],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except OSError:
+                pass
 
 
     # ---- animation

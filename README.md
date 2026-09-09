@@ -110,8 +110,9 @@ machine:
   <img src="docs/images/doctor.svg" alt="bin/doctor output across the kernel, graphics, audio, camera and Bluetooth sections, ending 83 ok, 2 warn, 0 FAIL" width="880">
 </p>
 
-The same run has a window. **System Health** is in the Control Center and in
-Overview: one sentence for the machine's state, findings grouped the way
+The same run has a window. **Doctor** lives in the System tray menu and in
+Overview: the tray shows the passed, note and error counts at a glance; click
+a count for the matching findings. The full view groups them the way
 `doctor` groups them, and—when something is wrong—the repair command sitting
 right under the finding, one click from your clipboard. A warning is not a
 failure here, and the card does not pretend otherwise.
@@ -126,7 +127,7 @@ failure here, and the card does not pretend otherwise.
 
 | | |
 |---|---|
-| **Desktop** | [Look and behavior](docs/desktop.md) · [Control Center](docs/control-center.md) · [Software updates](docs/updates.md) · [HiDPI display](docs/display.md) |
+| **Desktop** | [Look and behavior](docs/desktop.md) · [Control Center and System menu](docs/control-center.md) · [Software updates](docs/updates.md) · [HiDPI display](docs/display.md) |
 | **Daily use** | [Shortcuts and search](docs/daily.md) · [Battery](docs/battery.md) · [Video](docs/video.md) |
 | **Hardware** | [Input and sleep](docs/input.md) · [Audio](docs/audio.md) · [Camera](docs/camera.md) · [Bluetooth](docs/bluetooth.md) |
 | **System** | [Boot and kernels](docs/boot.md) · [App performance](docs/app-performance.md) · [Implementation guide](CONTRIBUTING.md) |
