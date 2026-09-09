@@ -110,6 +110,15 @@ machine:
   <img src="docs/images/doctor.svg" alt="bin/doctor output across the kernel, graphics, audio, camera and Bluetooth sections, ending 82 ok, 2 warn, 1 FAIL" width="880">
 </p>
 
+The same run has a window. **System Health** is in the Control Center and in
+Overview: a sentence for the machine's state, findings grouped the way `doctor`
+groups them, and the repair command for a finding sitting right under it, one
+click from your clipboard.
+
+<p align="center">
+  <img src="docs/images/health.jpg" alt="The System Health window listing checks by section, with a summary card reading 1 check needs attention" width="760">
+</p>
+
 [See the measurements](docs/performance.md) · [See how fast it feels](docs/feel.md) · [See hardware status](docs/hardware.md)
 
 ## Built all the way through.

@@ -403,6 +403,22 @@ class Window:
         self.view_h = self.height - self.HEAD - PAD
         self.scroll = self.scroll_to = min(self.scroll, self.max_scroll)
         self.area.set_size_request(round(W * SC), round(self.height * SC))
+        if self.win.get_realized():
+            # Switching to All is a large growth, and the window keeps the
+            # top-left corner it was centred on. Measured from what was just
+            # requested rather than from get_size(), which is still the old
+            # size until the resize has been through the window manager.
+            edge = 2 * round(SHADOW * SC)
+            self.stay_on_screen(monitor, round(W * SC) + edge,
+                                round(self.height * SC) + edge)
+
+    def stay_on_screen(self, monitor, width, height):
+        area = monitor.get_workarea()
+        x, y = self.win.get_position()
+        placed = (min(max(area.x, x), area.x + area.width - width),
+                  min(max(area.y, y), area.y + area.height - height))
+        if placed != (x, y):
+            self.win.move(*placed)
 
     @property
     def max_scroll(self):

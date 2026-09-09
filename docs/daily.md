@@ -78,24 +78,59 @@ coalesces pending changes, so slow replies cannot reorder rapid key presses.
 
 ## System Health
 
-The panel runs `doctor --tsv` asynchronously and shows failures and notes first,
-with passed checks collapsed. Diagnostic details can be selected/copied.
-The Control Center tile uses cached results; opening the view rechecks.
+[`bin/mintbook-health`](../bin/mintbook-health) is the desktop view of
+[`bin/doctor`](../bin/doctor) — the Control Center's System Health tile, and
+**Check system health** in Overview. It is a reader: it runs `doctor --tsv`,
+caches the answer in `~/.cache/mintbook/health.json` for the tile, and draws it.
+No check and no repair lives here.
+
+The window opens on the cached answer and re-checks behind it. `doctor --tsv`
+takes about 3.5 s on this machine, and a window that shows nothing for that long
+is one you stop opening; the summary card says *checking now* while it runs, and
+the list is replaced when the answer lands.
+
+It is cairo on the popup glass, like the Control Center and the battery history
+window — same palette source, same `appearance.applied` light/dark, same
+`bin/palette-generate --check` drift guard. What it draws:
+
+- A **summary card**: one sentence for the machine's state, the counts under it,
+  and the kernel the answer belongs to. Green tick, amber triangle, red circle —
+  shape as well as colour, so the state does not depend on seeing hue.
+- **Needs attention / All**, defaulting to attention when there is any. With
+  nothing to filter the segment is not drawn at all.
+- Findings **grouped under doctor's own section headings**. `doctor --tsv` prints
+  those headings now; grouping the desktop view by guessing at label text would
+  be a second, quietly diverging opinion about what belongs together.
+- A passing check whose detail fits gets **one line**, label left and detail
+  right. Two lines are for findings you have to read.
+- A finding whose detail names a repair command carries that command as a **chip**;
+  clicking it copies it. The commands are read out of doctor's own detail text
+  rather than kept in a table here, so there is nothing to drift. The exception
+  is the handful of findings that name no command — `updates genmon rc` and
+  `failed units` — which map to one in `REMEDY`.
+- Clicking a finding copies `status label — detail`; **Copy report** (or `C`)
+  copies the whole run. That replaces the old selectable labels, which is what
+  anyone opening this window in order to file an issue was using them for.
+
+`Esc`/`Q` close, `R` re-checks, `1`/`2` switch the filter, arrows and Page
+Up/Down scroll. The list scrolls with its own overlay bar rather than a
+`Gtk.ScrolledWindow`, for the same reason nothing else here is a themed widget.
+
 The user timer checks two minutes after startup, then every six hours, but runs
 `doctor` only when the running kernel differs from the last completed check.
 Notifications report newly failing check names; unchanged results remain quiet.
 A manual Check again is always available, including after repairs on the same kernel.
 
-A missing `genmon-20.rc` update-indicator configuration was reported by the first
-check on this machine. This predates these changes; the health view exposes the
-existing doctor result. CPU mitigation and thermal notes are also existing policy
-and measurement findings, not changes made by this feature.
+The findings in the screenshots are this machine's real ones and predate the
+window: the missing `genmon-20.rc`, the CPU mitigation note and the thermal
+notes are existing policy and measurement results, not anything this view does.
 
 ## Validation
 
 Regression tests cover fixed action dispatch, ignored custom input, health record
-parsing, keyboard focus/slider bounds, device-list refreshes and per-tile write
-ordering. A live two-second inhibitor test verified acquisition, expiry and clean
+parsing, the section each finding is filed under, the repair command read out of
+a finding's detail, keyboard focus/slider bounds, device-list refreshes and
+per-tile write ordering. A live two-second inhibitor test verified acquisition, expiry and clean
 release. Window tests verified exact restoration of normal and maximized windows.
 A separate test selection verified PNG clipboard transfer and ownership cleanup
 without changing the user clipboard. The installer undo was executed, all backed-up

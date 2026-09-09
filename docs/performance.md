@@ -135,7 +135,7 @@ All read-only unless stated. `--check` / no-argument forms need no root.
 
 | | |
 |---|---|
-| [`bin/doctor`](../bin/doctor) | 52 checks. Everything installed, plus guards on the things that would fail silently |
+| [`bin/doctor`](../bin/doctor) | 85 checks. Everything installed, plus guards on the things that would fail silently. `bin/mintbook-health` is the same run, drawn |
 | [`bin/io-probe`](../bin/io-probe) | Disk constraints and cold-cache benchmark. `--sweep` walks `read_ahead_kb` and restores it |
 | [`bin/idle-probe`](../bin/idle-probe) | RAPL watts, FBC/PSR state, runtime PM. `--try` A/Bs one device and puts it back |
 | [`bin/service-trim`](../bin/service-trim) | `--check` re-runs every probe and says what it would mask, and why |

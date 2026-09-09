@@ -1026,6 +1026,11 @@ the Bluetooth DSDT override and `hci0`, the SPI input quirks, panel size vs
 `xfwm4 margin_top`, the genmon plugins, failed units, the journal cap and battery
 health. **Run it after every kernel update.**
 
+`doctor --tsv` prints the same run as `status<TAB>label<TAB>detail` lines, with a
+`section<TAB>name<TAB>` line before each group. That is what
+[`bin/mintbook-health`](../bin/mintbook-health) — the System Health window and the
+Control Center tile — reads; see docs/daily.md.
+
 > Do not put `set -o pipefail` in it. `grep -q` exits on first match, the writer gets
 > SIGPIPE, and the pipeline reports 141 — which reads as a hardware failure. That is
 > what the first version of the CS4208 check did.
