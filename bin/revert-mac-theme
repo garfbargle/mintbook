@@ -1,8 +1,23 @@
 #!/usr/bin/env bash
-# Undo the macOS-style XFCE customisation. Restores config from /home/cobo/mac-mint-backup-20260831-224309
+# Undo the macOS-style XFCE customisation. Pass a backup directory explicitly,
+# set MINTBOOK_THEME_BACKUP, or let this choose the newest dated backup.
 set -e
-BK="/home/cobo/mac-mint-backup-20260831-224309"
-[ -f "$BK/xfce4-config.tar.gz" ] || { echo "Backup missing: $BK"; exit 1; }
+BK=${1:-${MINTBOOK_THEME_BACKUP:-}}
+if [ -z "$BK" ]; then
+  shopt -s nullglob
+  backups=("$HOME"/mac-mint-backup-*)
+  for ((i=${#backups[@]} - 1; i >= 0; i--)); do
+    if [ -f "${backups[i]}/xfce4-config.tar.gz" ]; then
+      BK=${backups[i]}
+      break
+    fi
+  done
+fi
+[ -n "$BK" ] && [ -f "$BK/xfce4-config.tar.gz" ] || {
+  echo "Backup missing; pass its directory as the first argument" >&2
+  exit 1
+}
+echo "Using backup: $BK"
 echo "Stopping dock + panel..."
 pkill plank 2>/dev/null || true
 rm -f ~/.config/autostart/plank.desktop

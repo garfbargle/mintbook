@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""
-Render night-light SVGs for the genmon panel indicator.
+"""Render locally drawn night-light SVGs for the genmon panel indicator.
 
-Adwaita's weather-clear-night-symbolic (crescent), same 34px glyph + 7px
-side padding canvas as wifi/bt. Shown via genmon <img>, so fill is
-hardcoded #ffffff; GTK does not recolour these.
+The crescent uses the same 34px glyph + 7px side-padding canvas as wifi/bt.
+Shown via genmon <img>, so the fill colour is explicit; GTK does not recolour
+these files.
 
 Output: ~/.local/share/mintbook/night/{night-on,night-off}.svg
 """
@@ -12,22 +11,12 @@ import os
 
 GLYPH, PAD_X, COLOR = 34, 7, os.environ.get('MINTBOOK_PANEL_FG', '#ffffff')
 
-# 16x16 Adwaita status/weather-clear-night-symbolic
 MOON = (
-    'm 0.917969 8.003906 c 0 3.914063 3.164062 7.078125 7.078125 7.078125 c '
-    '3.605468 -0.007812 6.617187 -2.703125 7.023437 -6.285156 c 0.042969 '
-    '-0.378906 -0.136719 -0.75 -0.457031 -0.957031 c -0.324219 -0.203125 '
-    '-0.738281 -0.207032 -1.0625 -0.003906 c -0.609375 0.375 -1.316406 '
-    '0.578124 -2.03125 0.578124 c -2.140625 0 -3.882812 -1.742187 -3.882812 '
-    '-3.882812 c 0 -0.714844 0.203124 -1.421875 0.578124 -2.03125 c 0.203126 '
-    '-0.324219 0.199219 -0.738281 -0.003906 -1.0625 c -0.207031 -0.320312 '
-    '-0.578125 -0.5 -0.957031 -0.457031 c -3.582031 0.40625 -6.277344 '
-    '3.417969 -6.285156 7.023437 z m 4.667969 -3.472656 c 0 3.253906 2.628906 '
-    '5.882812 5.886718 5.882812 c 1.085938 0 2.152344 -0.304687 3.078125 '
-    '-0.878906 l -1.519531 -0.960937 c -0.289062 2.554687 -2.464844 4.503906 '
-    '-5.035156 4.507812 c -2.796875 0 -5.078125 -2.28125 -5.078125 -5.078125 '
-    'c 0.003906 -2.570312 1.953125 -4.746094 4.507812 -5.035156 l -0.960937 '
-    '-1.519531 c -0.574219 0.925781 -0.875 1.992187 -0.878906 3.082031 z m 0 0'
+    'M 10.4 1.7 '
+    'C 5.3 2.6 2.5 7.4 4.2 11.8 '
+    'C 6.3 17.0 13.1 17.1 15.7 12.3 '
+    'C 12.9 13.6 9.8 12.9 8.0 10.6 '
+    'C 5.8 7.7 6.9 3.8 10.4 1.7 Z'
 )
 
 
@@ -47,8 +36,10 @@ def svg(opacity):
 def main():
     out = os.path.expanduser('~/.local/share/mintbook/night')
     os.makedirs(out, exist_ok=True)
-    open(os.path.join(out, 'night-on.svg'), 'w').write(svg(1))
-    open(os.path.join(out, 'night-off.svg'), 'w').write(svg(0.35))
+    with open(os.path.join(out, 'night-on.svg'), 'w', encoding='utf-8') as handle:
+        handle.write(svg(1))
+    with open(os.path.join(out, 'night-off.svg'), 'w', encoding='utf-8') as handle:
+        handle.write(svg(0.35))
     print(f'wrote 2 SVGs, {GLYPH + 2 * PAD_X}x{GLYPH}px canvas')
 
 

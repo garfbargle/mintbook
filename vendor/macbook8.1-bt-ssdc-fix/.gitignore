@@ -1,0 +1,9 @@
+# ACPI build artifacts
+*.aml
+*.dat
+*.dsl
+*.img
+
+# Editor / OS
+*~
+.DS_Store

@@ -4,7 +4,7 @@
  "http://www.freedesktop.org/standards/PolicyKit/1.0/policyconfig.dtd">
 <policyconfig>
   <vendor>mintbook</vendor>
-  <vendor_url>file:///home/cobo/mintbook</vendor_url>
+  <vendor_url>https://github.com/garfbargle/mintbook</vendor_url>
   <icon_name>battery</icon_name>
 
   <action id="org.mintbook.power.apply">

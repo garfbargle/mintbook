@@ -1,88 +1,52 @@
 #!/usr/bin/env python3
-"""
-Render power-profile SVGs for the genmon panel indicator.
-
-Adwaita's power-profile-*-symbolic paths, scaled into the same 34px glyph +
-7px side padding canvas as wifi/bt. Shown via genmon <img>, so fill is
-hardcoded #ffffff; GTK does not recolour these.
-
-Output: ~/.local/share/mintbook/power/{power-saver,balanced,performance}.svg
-"""
+"""Render Mintbook's original power-profile glyphs for the genmon panel."""
 import os
 
-GLYPH, PAD_X, COLOR = 34, 7, os.environ.get('MINTBOOK_PANEL_FG', '#ffffff')
 
-# 16x16 Adwaita status/power-profile-*-symbolic (filled paths)
+GLYPH, PAD_X = 34, 7
+COLOR = os.environ.get('MINTBOOK_PANEL_FG', '#ffffff')
+
+
+def leaf():
+    """A narrow leaf and midrib for the saver profile."""
+    return (
+        '<path d="M 8 1.6 C 13.2 4.3 13.2 11.7 8 14.4 '
+        'C 2.8 11.7 2.8 4.3 8 1.6 Z"/>'
+        '<path d="M 8 13.9 L 8 5"/>'
+    )
+
+
+def bolt():
+    """A compact bolt for the balanced profile."""
+    return '<path d="M 9.3 1.5 L 3.8 8.7 H 7.4 L 6.7 14.5 L 12.3 6.8 H 8.7 Z"/>'
+
+
+def gauge():
+    """A high needle for the sustained-performance profile."""
+    return (
+        '<path d="M 2.4 11.7 A 6.3 6.3 0 1 1 13.6 11.7"/>'
+        '<path d="M 8 10.2 L 11.5 6.7"/>'
+        '<circle cx="8" cy="10.2" r="0.75" fill="currentColor" stroke="none"/>'
+    )
+
+
 ICONS = {
-    'power-saver': (
-        'm 8 1.003906 c -2.050781 0 -4.097656 0.78125 -5.65625 2.339844 c '
-        '-3.117188 3.117188 -3.117188 8.195312 0 11.3125 c 0.390625 0.390625 '
-        '1.023438 0.390625 1.414062 0 c 0.390626 -0.390625 0.390626 -1.023438 '
-        '0 -1.414062 c -0.378906 -0.378907 -0.699218 -0.796876 -0.957031 '
-        '-1.242188 c -1.332031 -2.296875 -1.015625 -5.269531 0.957031 '
-        '-7.242188 c 2.351563 -2.351562 6.132813 -2.351562 8.484376 0 c '
-        '2.351562 2.351563 2.351562 6.132813 0 8.484376 c -0.390626 0.390624 '
-        '-0.390626 1.023437 0 1.414062 c 0.390624 0.390625 1.023437 0.390625 '
-        '1.414062 0 c 3.117188 -3.117188 3.117188 -8.195312 0 -11.3125 c '
-        '-1.558594 -1.558594 -3.605469 -2.339844 -5.65625 -2.339844 z m '
-        '-5.199219 10.996094 l 1.367188 0.363281 l 2.835937 -1.632812 c '
-        '0.617188 0.355469 1.378906 0.355469 1.996094 0 c 0.957031 -0.550781 '
-        '1.285156 -1.773438 0.730469 -2.730469 c -0.550781 -0.957031 '
-        '-1.773438 -1.285156 -2.730469 -0.734375 c -0.617188 0.359375 '
-        '-0.996094 1.019531 -0.996094 1.730469 l -2.835937 1.636718 z m 0 0',
-        'm 12 9 c -0.003906 1.058594 -0.429688 2.074219 -1.179688 2.820312 l '
-        '2.128907 2.128907 c 1.3125 -1.3125 2.050781 -3.09375 2.050781 '
-        '-4.949219 z m 0 0',
-    ),
-    'balanced': (
-        'm 8 1.003906 c -2.050781 0 -4.097656 0.78125 -5.65625 2.339844 c '
-        '-3.117188 3.117188 -3.117188 8.195312 0 11.3125 c 0.390625 0.390625 '
-        '1.023438 0.390625 1.414062 0 c 0.390626 -0.390625 0.390626 -1.023438 '
-        '0 -1.414062 c -2.351562 -2.351563 -2.351562 -6.132813 0 -8.484376 c '
-        '2.351563 -2.351562 6.132813 -2.351562 8.484376 0 c 2.351562 2.351563 '
-        '2.351562 6.132813 0 8.484376 c -0.390626 0.390624 -0.390626 1.023437 '
-        '0 1.414062 c 0.390624 0.390625 1.023437 0.390625 1.414062 0 c '
-        '3.117188 -3.117188 3.117188 -8.195312 0 -11.3125 c -1.558594 '
-        '-1.558594 -3.605469 -2.339844 -5.65625 -2.339844 z m -1 2.996094 v '
-        '3.273438 c -0.617188 0.355468 -0.996094 1.015624 -1 1.726562 c 0 '
-        '1.105469 0.894531 2 2 2 s 2 -0.894531 2 -2 c 0 -0.714844 -0.382812 '
-        '-1.375 -1 -1.730469 v -3.269531 l -1 -1 z m 0 0',
-        'm 12 9 c -0.003906 1.058594 -0.429688 2.074219 -1.179688 2.820312 l '
-        '2.128907 2.128907 c 1.3125 -1.3125 2.050781 -3.09375 2.050781 '
-        '-4.949219 z m 0 0',
-    ),
-    'performance': (
-        'm 8 1.003906 c -2.050781 0 -4.097656 0.78125 -5.65625 2.339844 c '
-        '-3.117188 3.117188 -3.117188 8.195312 0 11.3125 c 0.390625 0.390625 '
-        '1.023438 0.390625 1.414062 0 c 0.390626 -0.390625 0.390626 -1.023438 '
-        '0 -1.414062 c -2.351562 -2.351563 -2.351562 -6.132813 0 -8.484376 c '
-        '2.351563 -2.351562 6.132813 -2.351562 8.484376 0 c 1.972656 1.972657 '
-        '2.289062 4.953126 0.953124 7.246094 c -0.257812 0.445313 -0.574218 '
-        '0.859375 -0.953124 1.238282 c -0.390626 0.390624 -0.390626 1.023437 '
-        '0 1.414062 c 0.390624 0.390625 1.023437 0.390625 1.414062 0 c '
-        '3.117188 -3.117188 3.117188 -8.195312 0 -11.3125 c -1.558594 '
-        '-1.558594 -3.605469 -2.339844 -5.65625 -2.339844 z m 5.195312 11 l '
-        '-0.363281 -1.363281 l -2.832031 -1.636719 c 0 -0.714844 -0.382812 '
-        '-1.371094 -1 -1.730468 c -0.957031 -0.550782 -2.179688 -0.222657 '
-        '-2.730469 0.730468 c -0.554687 0.957032 -0.226562 2.183594 0.730469 '
-        '2.734375 c 0.617188 0.355469 1.378906 0.351563 1.996094 -0.003906 l '
-        '2.835937 1.636719 z m 0 0',
-        'm 12 9 c -0.003906 1.058594 -0.429688 2.074219 -1.179688 2.820312 l '
-        '2.128907 2.128907 c 1.3125 -1.3125 2.050781 -3.09375 2.050781 '
-        '-4.949219 z m 0 0',
-    ),
+    'power-saver': leaf,
+    'balanced': bolt,
+    'performance': gauge,
 }
 
 
-def svg(main, tail):
-    k = GLYPH / 16.0
-    w = GLYPH + 2 * PAD_X
+def svg(draw):
+    scale = GLYPH / 16.0
+    width = GLYPH + 2 * PAD_X
     return (
-        f'<svg width="{w}" height="{GLYPH}" viewBox="0 0 {w} {GLYPH}" '
+        f'<svg width="{width}" height="{GLYPH}" viewBox="0 0 {width} {GLYPH}" '
         f'version="1.1" xmlns="http://www.w3.org/2000/svg">\n'
-        f' <g fill="{COLOR}" transform="translate({PAD_X},0) scale({k})">\n'
-        f'  <path d="{main}"/>\n'
-        f'  <path d="{tail}" fill-opacity="0.35"/>\n'
+        f' <g color="{COLOR}" fill="none" stroke="{COLOR}" stroke-width="1.35" '
+        f'stroke-linecap="round" stroke-linejoin="round" '
+        f'transform="translate({PAD_X},0) scale({scale})">\n'
+        f'  {draw()}\n'
         f' </g>\n</svg>\n'
     )
 
@@ -90,8 +54,9 @@ def svg(main, tail):
 def main():
     out = os.path.expanduser('~/.local/share/mintbook/power')
     os.makedirs(out, exist_ok=True)
-    for name, paths in ICONS.items():
-        open(os.path.join(out, f'{name}.svg'), 'w').write(svg(*paths))
+    for name, draw in ICONS.items():
+        with open(os.path.join(out, f'{name}.svg'), 'w', encoding='utf-8') as handle:
+            handle.write(svg(draw))
     print(f'wrote {len(ICONS)} SVGs, {GLYPH + 2 * PAD_X}x{GLYPH}px canvas')
 
 

@@ -193,7 +193,7 @@ is gone, `serial0-0` will go back to `URT0.SSDC`. Re-run `bin/bt-install`.
 
 | | |
 |---|---|
-| Problem + DSDT patch | `/home/cobo/src/macbook8.1-bt-ssdc-fix` |
-| Upstream | [thomas-shirley/macbook8.1-bt-ssdc-fix](https://github.com/thomas-shirley/macbook8.1-bt-ssdc-fix) |
+| Preserved upstream source | [`vendor/macbook8.1-bt-ssdc-fix`](../vendor/macbook8.1-bt-ssdc-fix/SOURCE.md), commit `8e201cf647e7eacba137dd9afce3f82d1c90a9de` |
+| Upstream | [thomas-shirley/macbook8.1-bt-ssdc-fix](https://github.com/thomas-shirley/macbook8.1-bt-ssdc-fix), MIT License |
 | In-tree driver | `hci_uart` / `hci_uart_bcm` on `7.0.0-30-generic` |
 | Hook | [`config/initramfs/zz-acpi-ssdc-override`](../config/initramfs/zz-acpi-ssdc-override) |

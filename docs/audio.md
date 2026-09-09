@@ -389,9 +389,9 @@ pactl get-default-sink   # input.MacBook_Speaker
 
 The CS4208 headphone DAC (`0x02`) and the TDM speaker converter (`0x0a`) share
 an HDA stream tag. The speaker Raw node is pinned open, so a normal unplug
-leaves the speakers silent. Upstream ships `mb81-jack-switch.service`; it
-assumes WirePlumber 0.5 raw-PCM names and that restarting WirePlumber recreates
-Raw. Neither is true here.
+leaves the speakers silent. Mintbook's watcher is a local implementation for
+the PipeWire/WirePlumber versions used here and does not embed the upstream
+watcher script.
 
 This machine's watcher is [`bin/mb81-jack-switch`](../bin/mb81-jack-switch),
 enabled via `~/.config/systemd/user/mb81-jack-switch.service.d/override.conf`:

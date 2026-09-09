@@ -32,7 +32,8 @@ install -dm755 "$BIN" "$APPS"
 install -m755 "$ROOT/bin/app-grid" "$BIN/app-grid"
 install -m755 "$ROOT/bin/overview" "$BIN/overview"
 install -m755 "$ROOT/bin/spotlight" "$BIN/spotlight"
-install -m644 "$ROOT/config/applications/$DESKTOP" "$APPS/$DESKTOP"
+sed "s|^Exec=.*|Exec=$BIN/app-grid|" \
+  "$ROOT/config/applications/$DESKTOP" > "$APPS/$DESKTOP"
 desktop-file-validate "$APPS/$DESKTOP"
 
 xfconf-query -c xfce4-panel -p /plugins/plugin-1 -r -R 2>/dev/null || true

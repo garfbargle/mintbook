@@ -29,12 +29,14 @@ install -m644 "$ROOT/config/redshift.conf" "$HOME/.config/redshift.conf"
 
 echo "==> genmon-$PLUGIN.rc"
 install -dm755 "$PANEL_RC"
-install -m644 "$ROOT/config/xfce4-panel/genmon-23.rc" "$PANEL_RC/genmon-23.rc"
+sed "s|^Command=.*|Command=$BIN/panel-night|" \
+  "$ROOT/config/xfce4-panel/genmon-23.rc" > "$PANEL_RC/genmon-23.rc"
 
 echo "==> autostart"
 install -dm755 "$AUTOSTART"
-install -m644 "$ROOT/config/autostart/mintbook-night.desktop" \
-  "$AUTOSTART/mintbook-night.desktop"
+sed "s|^Exec=.*|Exec=$BIN/night-apply|" \
+  "$ROOT/config/autostart/mintbook-night.desktop" \
+  > "$AUTOSTART/mintbook-night.desktop"
 rm -f "$AUTOSTART/redshift-gtk.desktop"
 
 echo "==> panel plugin $PLUGIN"

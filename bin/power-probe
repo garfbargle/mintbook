@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # power-probe — root-only thermal levers on MacBook8,1. Writes sysfs, restores
-# on exit. Log: /tmp/mintbook-power-probe.log
+# on exit. A private, unpredictable log is retained in /tmp.
 set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -8,9 +8,10 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-LOG=/tmp/mintbook-power-probe.log
+LOG=$(mktemp /tmp/mintbook-power-probe.XXXXXX.log)
 RAPL=/sys/class/powercap/intel-rapl:0
 PSTATE=/sys/devices/system/cpu/intel_pstate
+printf 'log: %s\n' "$LOG"
 exec > >(tee "$LOG") 2>&1
 
 pkg_temp() {

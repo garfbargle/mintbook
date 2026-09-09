@@ -3,7 +3,6 @@
 import os
 import subprocess
 
-ROOT = '/home/cobo/mintbook'
 APPLY = os.path.expanduser('~/.local/bin/appearance-mode')
 MENU = os.path.expanduser('~/.local/bin/appearance-menu')
 STATE = os.path.expanduser('~/.config/mintbook/appearance.mode')

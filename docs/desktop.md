@@ -578,7 +578,7 @@ does to the CPU), not two different modes. "Turbo allowed" means the 2.4 GHz
 ceiling is unlocked; it is not a fourth profile.
 
 Icons from [`icons/generate-power-genmon.py`](../icons/generate-power-genmon.py)
-(Adwaita `power-profile-*-symbolic` paths, baked `#ffffff`).
+(locally drawn leaf, bolt, and gauge glyphs, coloured for the active panel).
 
 The indicator is a bash script reading `ActiveProfile` with `busctl`. It used
 to be Python shelling out to `powerprofilesctl get`, which meant starting a
@@ -729,6 +729,8 @@ zoom-percent=150   hide-mode=intelligent   auto-pinning=false
 Theme copied from [`config/plank/WhiteSur/dock.theme`](../config/plank/WhiteSur/dock.theme)
 to `~/.local/share/plank/themes/WhiteSur/dock.theme`. It retains WhiteSur's
 geometry and animation, with its fill translated from the shared pearl palette.
+The MIT-licensed source inputs and exact revision are preserved under
+[`vendor/WhiteSur-gtk-theme`](../vendor/WhiteSur-gtk-theme/SOURCE.md).
 
 ### Firefox glass chrome
 

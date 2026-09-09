@@ -112,3 +112,10 @@ can always be restored with `bin/revert-mac-theme`.
 
 Nothing here asks you to trust a tweak you cannot inspect—or keep a change you
 cannot undo.
+
+## License and upstream work
+
+Mintbook is available under the [MIT License](LICENSE). Small upstream sources
+that Mintbook directly adapts are preserved under [`vendor/`](vendor/README.md),
+with their original licenses and exact source revisions listed in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

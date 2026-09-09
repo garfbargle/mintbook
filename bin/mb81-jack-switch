@@ -1,129 +1,198 @@
-#!/bin/bash
-# MacBook8,1 headphone-jack auto-switch, adapted for this machine.
-#
-# Upstream mb81-jack-switch assumes WirePlumber 0.5 raw-PCM node names
-# (alsa_output...playback.0.0) and that restarting WirePlumber recreates
-# MacBook_Speaker_Raw. Mint 22 is WP 0.4: ACP stays on, the analog headphone
-# sink is alsa_output...analog-stereo, and Raw is a static PipeWire adapter
-# that only comes back if pipewire itself restarts.
-#
-#   plugged   -> close Raw (frees the HDA stream tag), analog profile, HP sink
-#   unplugged -> restart PipeWire (recreates Raw + EQ), default = speaker EQ
-#
-# Overrides: MB81_CARD_ID MB81_HP_SINK MB81_SPK_SINK MB81_CARD_NAME MB81_HP_PROFILE
+#!/usr/bin/env python3
+"""Route MacBook8,1 audio when the headphone-jack state changes.
 
-set -u
+The speaker DSP sink holds the HDA stream while it exists. Plugging
+headphones therefore removes that raw node before selecting the analog sink;
+unplugging restarts the user audio services so the speaker graph is rebuilt.
+"""
 
-CARD_ID="${MB81_CARD_ID:-PCH}"
-HP_SINK="${MB81_HP_SINK:-alsa_output.pci-0000_00_1b.0.analog-stereo}"
-SPK_SINK="${MB81_SPK_SINK:-input.MacBook_Speaker}"
-CARD_NAME="${MB81_CARD_NAME:-alsa_card.pci-0000_00_1b.0}"
-HP_PROFILE="${MB81_HP_PROFILE:-output:analog-stereo+input:analog-stereo}"
+import os
+import re
+import subprocess
+import sys
+import time
+from pathlib import Path
 
-log() { printf 'mb81-jack-switch: %s\n' "$*"; }
 
-card_index() {
-    local d
-    for d in /sys/class/sound/card[0-9]*; do
-        [[ -f "$d/id" && "$(cat "$d/id")" == "$CARD_ID" ]] || continue
-        echo "${d##*card}"
-        return 0
-    done
+CARD_ID = os.environ.get("MB81_CARD_ID", "PCH")
+HEADPHONE_SINK = os.environ.get(
+    "MB81_HP_SINK", "alsa_output.pci-0000_00_1b.0.analog-stereo"
+)
+SPEAKER_SINK = os.environ.get("MB81_SPK_SINK", "input.MacBook_Speaker")
+CARD_NAME = os.environ.get("MB81_CARD_NAME", "alsa_card.pci-0000_00_1b.0")
+HEADPHONE_PROFILE = os.environ.get(
+    "MB81_HP_PROFILE", "output:analog-stereo+input:analog-stereo"
+)
+RAW_NODE = "MacBook_Speaker_Raw"
+
+
+def log(message):
+    print(f"mb81-jack-switch: {message}", flush=True)
+
+
+def capture(*argv):
+    try:
+        return subprocess.run(
+            argv,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).stdout
+    except OSError:
+        return ""
+
+
+def call(*argv):
+    try:
+        return subprocess.run(
+            argv, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        ).returncode
+    except OSError:
+        return 127
+
+
+def find_card():
+    for card_dir in sorted(Path("/sys/class/sound").glob("card[0-9]*")):
+        try:
+            if (card_dir / "id").read_text().strip() == CARD_ID:
+                return card_dir.name.removeprefix("card")
+        except OSError:
+            continue
+    return None
+
+
+def find_jack_control(card):
+    controls = capture("amixer", "-c", card, "controls")
+    match = re.search(r"numid=(\d+).*name='Headphone Jack'", controls)
+    return match.group(1) if match else None
+
+
+def jack_state(card, numid):
+    value = capture("amixer", "-c", card, "cget", f"numid={numid}")
+    match = re.search(r"\bvalues=(on|off)\b", value)
+    return match.group(1) if match else None
+
+
+def pipewire_nodes():
+    """Return {node name: numeric id} from pw-cli's record-oriented output."""
+    nodes = {}
+    current_id = None
+    for line in capture("pw-cli", "ls", "Node").splitlines():
+        match = re.match(r"\s*id\s+(\d+),", line)
+        if match:
+            current_id = match.group(1)
+            continue
+        match = re.search(r'node\.name\s*=\s*"([^"]+)"', line)
+        if current_id is not None and match:
+            nodes[match.group(1)] = current_id
+    return nodes
+
+
+def wait_for_node(name, timeout=8.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if name in pipewire_nodes():
+            return True
+        time.sleep(0.25)
+    return False
+
+
+def destroy_node(name):
+    node_id = pipewire_nodes().get(name)
+    if node_id is not None:
+        call("pw-cli", "destroy", node_id)
+
+
+def set_default_sink(name):
+    call(
+        "pw-metadata",
+        "-n",
+        "default",
+        "0",
+        "default.configured.audio.sink",
+        f'{{ "name": "{name}" }}',
+    )
+    call("pactl", "set-default-sink", name)
+
+
+def move_application_streams(destination):
+    for line in capture("pactl", "list", "short", "sink-inputs").splitlines():
+        fields = line.split()
+        if len(fields) >= 3 and fields[2] != "-":
+            call("pactl", "move-sink-input", fields[0], destination)
+
+
+def route_headphones():
+    log(f"headphones plugged -> {HEADPHONE_SINK}")
+    destroy_node(RAW_NODE)
+    call("pactl", "set-card-profile", CARD_NAME, HEADPHONE_PROFILE)
+    if wait_for_node(HEADPHONE_SINK):
+        set_default_sink(HEADPHONE_SINK)
+        move_application_streams(HEADPHONE_SINK)
+    else:
+        log(f"headphone sink {HEADPHONE_SINK} did not appear")
+
+
+def route_speakers():
+    log(f"headphones unplugged -> recreate speaker + {SPEAKER_SINK}")
+    call("systemctl", "--user", "restart", "pipewire", "pipewire-pulse", "wireplumber")
+    if wait_for_node(SPEAKER_SINK):
+        set_default_sink(SPEAKER_SINK)
+    else:
+        log(f"speaker sink {SPEAKER_SINK} did not appear")
+
+
+def monitor(card, numid, initial_state):
+    try:
+        process = subprocess.Popen(
+            ["alsactl", "monitor", f"hw:{card}"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            bufsize=1,
+        )
+    except OSError as error:
+        log(f"cannot start alsactl monitor: {error}")
+        return 1
+
+    previous = initial_state
+    assert process.stdout is not None
+    for _event in process.stdout:
+        current = jack_state(card, numid)
+        if current is None or current == previous:
+            continue
+        previous = current
+        route_headphones() if current == "on" else route_speakers()
+
+    log("alsactl monitor exited")
     return 1
-}
 
-jack_numid() {
-    amixer -c "$1" controls 2>/dev/null \
-        | sed -n "s/numid=\([0-9]*\).*name='Headphone Jack'.*/\1/p" | head -1
-}
 
-jack_state() {
-    amixer -c "$1" cget numid="$2" 2>/dev/null \
-        | sed -n 's/.*: values=\(on\|off\).*/\1/p' | head -1
-}
+def main():
+    card = find_card()
+    if card is None:
+        log(f"CS4208 card ({CARD_ID}) not found; exiting")
+        return 1
 
-set_default() {
-    pw-metadata -n default 0 default.configured.audio.sink \
-        "{ \"name\": \"$1\" }" >/dev/null 2>&1
-    pactl set-default-sink "$1" >/dev/null 2>&1 || true
-}
+    numid = find_jack_control(card)
+    if numid is None:
+        log(f"Headphone Jack control not found on card {card}; exiting")
+        return 1
 
-node_exists() {
-    pw-cli ls Node 2>/dev/null | grep -q "node.name = \"$1\""
-}
+    state = jack_state(card, numid)
+    if state is None:
+        log(f"cannot read Headphone Jack control on card {card}; exiting")
+        return 1
 
-wait_node() {
-    local name="$1" i
-    for i in $(seq 1 32); do
-        node_exists "$name" && return 0
-        sleep 0.25
-    done
-    return 1
-}
+    log(f"watching card {card} 'Headphone Jack' (numid={numid})")
+    if state == "on":
+        route_headphones()
+    else:
+        log(f"startup: speakers -> {SPEAKER_SINK}")
+        set_default_sink(SPEAKER_SINK)
+    return monitor(card, numid, state)
 
-pw_node_id() {
-    pw-cli ls Node 2>/dev/null | awk -v n="$1" '
-        /^[[:space:]]*id / { id=$2; sub(",", "", id) }
-        $0 ~ "node.name = \"" n "\"" { print id; exit }
-    '
-}
 
-destroy_node() {
-    local id
-    id="$(pw_node_id "$1")"
-    [[ -n "$id" ]] && pw-cli destroy "$id" >/dev/null 2>&1 || true
-}
-
-move_clients() {
-    local dest="$1" in
-    while read -r in; do
-        [[ -z "${in:-}" ]] && continue
-        # Leave the EQ's 4ch DSP loopback (client "-") alone; move real apps.
-        pactl move-sink-input "$in" "$dest" >/dev/null 2>&1 || true
-    done < <(pactl list short sink-inputs 2>/dev/null | awk '$3 != "-" {print $1}')
-}
-
-apply() {
-    if [[ "$1" == on ]]; then
-        log "headphones plugged -> $HP_SINK"
-        # Raw holds converter 0x0a with pause-on-idle off; destroy it so the
-        # analog headphone DAC can take a clean stream tag.
-        destroy_node MacBook_Speaker_Raw
-        pactl set-card-profile "$CARD_NAME" "$HP_PROFILE" >/dev/null 2>&1 || true
-        if wait_node "$HP_SINK"; then
-            set_default "$HP_SINK"
-            move_clients "$HP_SINK"
-        else
-            log "headphone sink $HP_SINK did not appear"
-        fi
-    else
-        log "headphones unplugged -> recreate speaker + $SPK_SINK"
-        systemctl --user restart pipewire pipewire-pulse wireplumber
-        if wait_node "$SPK_SINK"; then
-            set_default "$SPK_SINK"
-        else
-            log "speaker sink $SPK_SINK did not appear"
-        fi
-    fi
-}
-
-CARD="$(card_index)" || { log "CS4208 card ($CARD_ID) not found; exiting"; exit 1; }
-NUMID="$(jack_numid "$CARD")"
-[[ -z "$NUMID" ]] && { log "Headphone Jack control not found on card $CARD; exiting"; exit 1; }
-log "watching card $CARD 'Headphone Jack' (numid=$NUMID)"
-
-last="$(jack_state "$CARD" "$NUMID")"
-case "$last" in
-    on) log "startup: headphones present -> $HP_SINK"; apply on ;;
-    *)  log "startup: speakers -> $SPK_SINK"; set_default "$SPK_SINK" ;;
-esac
-
-alsactl monitor "hw:$CARD" 2>/dev/null | while read -r _; do
-    s="$(jack_state "$CARD" "$NUMID")"
-    [[ -z "$s" || "$s" == "$last" ]] && continue
-    last="$s"
-    apply "$s"
-done
-
-log "alsactl monitor exited"
-exit 1
+if __name__ == "__main__":
+    sys.exit(main())

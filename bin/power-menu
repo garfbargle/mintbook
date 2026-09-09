@@ -101,7 +101,7 @@ def apply(profile):
     except OSError as e:
         return subprocess.CompletedProcess(
             ['want'], 1, '',
-            f'{e}\nRe-run: pkexec /home/cobo/mintbook/bin/power-install')
+            f'{e}\nRe-run bin/power-install from the Mintbook checkout')
     for _ in range(25):
         time.sleep(0.1)
         if current() == profile:

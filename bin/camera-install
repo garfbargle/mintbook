@@ -11,7 +11,24 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-SRC="${CAMERA_SRC:-/home/cobo/src/macbook8.1-camera}"
+if [ -n "${CAMERA_SRC:-}" ]; then
+  SRC=$CAMERA_SRC
+else
+  SOURCE_USER=${MINTBOOK_USER:-${SUDO_USER:-}}
+  if [ -z "$SOURCE_USER" ] && [[ ${PKEXEC_UID:-} =~ ^[0-9]+$ ]]; then
+    SOURCE_USER=$(id -nu "$PKEXEC_UID")
+  fi
+  if [ -z "$SOURCE_USER" ] || [ "$SOURCE_USER" = root ]; then
+    echo "cannot locate camera source; set CAMERA_SRC=/path/to/macbook8.1-camera" >&2
+    exit 1
+  fi
+  SOURCE_HOME=$(getent passwd "$SOURCE_USER" | cut -d: -f6)
+  if [ -z "$SOURCE_HOME" ]; then
+    echo "cannot find a home directory for $SOURCE_USER" >&2
+    exit 1
+  fi
+  SRC="$SOURCE_HOME/src/macbook8.1-camera"
+fi
 FW_DIR="$SRC/facetimehd-firmware"
 DRV_SRC="$SRC/bcwc_pcie"
 GRUB=/etc/default/grub

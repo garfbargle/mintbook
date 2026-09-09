@@ -107,7 +107,8 @@ install -m755 "$ROOT"/control-center/plugins/* "$SHARE/plugins/"
 
 echo "==> genmon-$PLUGIN.rc"
 install -dm755 "$PANEL_RC"
-install -m644 "$ROOT/config/xfce4-panel/genmon-$PLUGIN.rc" "$PANEL_RC/genmon-$PLUGIN.rc"
+sed "s|^Command=.*|Command=$BIN/panel-control|" \
+  "$ROOT/config/xfce4-panel/genmon-$PLUGIN.rc" > "$PANEL_RC/genmon-$PLUGIN.rc"
 
 echo "==> panel"
 install -dm755 "$STATE"

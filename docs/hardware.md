@@ -203,7 +203,8 @@ That copies:
   + [`.service`](../config/systemd/mintbook-power-settle.service) — re-applies the
   cap 90 s after boot, once thermald and PPD have started. See below.
 - [`config/tmpfiles.d/mintbook-power.conf`](../config/tmpfiles.d/mintbook-power.conf)
-  → `/etc/tmpfiles.d/` (`/run/mintbook-power` owned `root:cobo`, mode 0770)
+  → `/etc/tmpfiles.d/` (`/run/mintbook-power` owned by root and the invoking
+  desktop user's primary group, mode 0770)
 - [`config/polkit/org.mintbook.power.policy`](../config/polkit/org.mintbook.power.policy)
   + [`10-mintbook-power.rules`](../config/polkit/10-mintbook-power.rules) — leftover
   `pkexec` from a terminal, not used by the panel

@@ -31,6 +31,22 @@ POLKIT_DST=/usr/share/polkit-1/actions/org.mintbook.power.policy
 RULES_SRC="$ROOT/config/polkit/10-mintbook-power.rules"
 RULES_DST=/etc/polkit-1/rules.d/10-mintbook-power.rules
 
+# sudo and pkexec expose the invoking user differently. The explicit override
+# also makes direct root installs deterministic.
+SESSION_USER=${MINTBOOK_USER:-${SUDO_USER:-}}
+if [ -z "$SESSION_USER" ] && [[ ${PKEXEC_UID:-} =~ ^[0-9]+$ ]]; then
+  SESSION_USER=$(id -nu "$PKEXEC_UID")
+fi
+if [ -z "$SESSION_USER" ] || [ "$SESSION_USER" = root ]; then
+  echo "cannot identify the desktop user; run with MINTBOOK_USER=<user>" >&2
+  exit 1
+fi
+SESSION_GROUP=$(id -gn "$SESSION_USER")
+if [[ ! $SESSION_GROUP =~ ^[A-Za-z0-9_.-]+$ ]]; then
+  echo "unsupported desktop group name: $SESSION_GROUP" >&2
+  exit 1
+fi
+
 for f in "$APPLY_SRC" "$UDEV_SRC" "$UNIT_SRC" "$REQ_PATH_SRC" "$REQ_UNIT_SRC" \
          "$SETTLE_UNIT_SRC" "$SETTLE_TIMER_SRC" \
          "$TMPFILES_SRC" "$POLKIT_SRC" "$RULES_SRC"; do
@@ -49,7 +65,8 @@ install -m644 "$UDEV_SRC" "$UDEV_DST"
 udevadm control --reload-rules
 
 echo "==> $TMPFILES_DST"
-install -m644 "$TMPFILES_SRC" "$TMPFILES_DST"
+sed "s/@SESSION_GROUP@/$SESSION_GROUP/g" "$TMPFILES_SRC" > "$TMPFILES_DST"
+chmod 0644 "$TMPFILES_DST"
 systemd-tmpfiles --create "$TMPFILES_DST"
 
 echo "==> $UNIT_DST"
