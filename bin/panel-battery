@@ -123,18 +123,22 @@ r16=${fg:1:2}
 mode=light
 [ "$((16#${r16:-ff}))" -gt 128 ] 2>/dev/null && mode=dark
 
-# Apple's system palette, in both appearances. Charging is always green, which
-# is the one place this departs from macOS (it keeps the ink colour and shows
-# only the bolt) and does what a battery indicator has done since 1995.
+# Apple's system palette in both appearances, plus a yellow that is not in it.
+# macOS keeps the ink colour while charging and shows only the bolt; this shows
+# the bolt *and* colours the charge, the way a battery indicator has since
+# 1995, and the charging colour is electric yellow rather than green so that
+# "current going in" and "enough charge left" are not the same signal. Full but
+# plugged in is still green: nothing is flowing.
 if [ "$mode" = dark ]; then
-  GREEN='#30d158' AMBER='#ffd60a' RED='#ff453a'
+  GREEN='#30d158' AMBER='#ffd60a' RED='#ff453a' YELLOW='#ffe814'
 else
-  GREEN='#34c759' AMBER='#ff9f0a' RED='#ff3b30'
+  GREEN='#34c759' AMBER='#ff9f0a' RED='#ff3b30' YELLOW='#ffd60a'
 fi
 case "$COLOR" in
   mono) fill=$fg ;;
   *)
-    if   [ "$st" = C ] || [ "$st" = F ]; then fill=$GREEN
+    if   [ "$st" = C ]; then fill=$YELLOW
+    elif [ "$st" = F ]; then fill=$GREEN
     elif [ "$pct" -lt "$LOW" ]; then fill=$RED
     elif [ "$pct" -lt "$MID" ]; then fill=$AMBER
     else fill=$GREEN; fi ;;
@@ -173,9 +177,12 @@ if [ "${osig:-}" != "$sig" ] || [ ! -s "$SVG" ]; then
   # digits out of the charge the way the bolt is punched was tried first and is
   # in docs/battery.md: it is prettier at 100% and unreadable at 30, where half
   # a number sits on the fill and half on the glass.
-  bx=14 bolt='' marks='' maskattr='' opacity=1
+  bx=14 bolt='' marks='' boltmark='' maskattr='' opacity=1
   if [ "$SHOW_PERCENT" = 1 ]; then bw=92 opacity=.66; else bw=84; fi
-  [ "$st" = C ] && [ "$SHOW_PERCENT" = 1 ] && bx=30   # room for a bolt outside
+  # The bolt is inside the body in every state. With the percentage on it takes
+  # the leading end of the well and the number takes what is left, so the body
+  # grows by the bolt's 18 units and a gap rather than the number giving way.
+  [ "$st" = C ] && [ "$SHOW_PERCENT" = 1 ] && bw=$(( bw + 23 ))
   iw=$(( bw - 14 ))                     # the well inside the outline
   w=$(( bx + bw + 9 + 14 ))             # + cap + right padding
   fw=$(( (pct * iw + 50) / 100 )); [ "$fw" -lt 8 ] && fw=8
@@ -184,21 +191,21 @@ if [ "${osig:-}" != "$sig" ] || [ ! -s "$SVG" ]; then
   cap=$(rr "$(( bx + bw + 3 ))" 24 6 20 3)
 
   if [ "$SHOW_PERCENT" = 1 ]; then
+    tx=$(( bx + bw / 2 ))
+    [ "$st" = C ] && tx=$(( ix + (26 + iw) / 2 ))   # the well past the bolt
     marks=$(printf '  <text x="%s" y="44" text-anchor="middle" fill="%s" fill-opacity=".95" font-family="Inter" font-size="29" font-weight="600" style="font-feature-settings:%s">%s</text>' \
-      "$(( bx + bw / 2 ))" "$fg" "'tnum'" "$pct")
+      "$tx" "$fg" "'tnum'" "$pct")
   fi
 
   if [ "$st" = C ]; then
-    if [ "$SHOW_PERCENT" = 1 ]; then
-      # Outside and to the left, because the inside is the number's now.
-      bolt=$(printf '  <path d="M11,17 L-1,35 L5,35 L1,51 L13,33 L7,33 Z" fill="%s"/>' "$fill")
-    else
-      # Negative space over the charge and the charge's own colour past it, so
-      # it is visible at 4% and at 96%. Two masks, no conditionals in the paint.
-      cx=$(( bx + bw / 2 ))
-      d="M$((cx+5)),18 L$((cx-9)),36 L$((cx-1)),36 L$((cx-5)),50 L$((cx+9)),32 L$((cx+1)),32 Z"
-      maskattr=' mask="url(#punch)"'
-      bolt=$(cat <<BOLT
+    # Negative space over the charge and the charge's own colour past it, so it
+    # is visible at 4% and at 96%. Two masks, no conditionals in the paint —
+    # and the same two whether the bolt is centred in the body or sitting at
+    # the leading edge of the well with the number after it.
+    if [ "$SHOW_PERCENT" = 1 ]; then cx=$(( ix + 13 )); else cx=$(( bx + bw / 2 )); fi
+    d="M$((cx+5)),18 L$((cx-9)),36 L$((cx-1)),36 L$((cx-5)),50 L$((cx+9)),32 L$((cx+1)),32 Z"
+    maskattr=' mask="url(#punch)"'
+    bolt=$(cat <<BOLT
  <defs>
   <mask id="punch">
    <rect x="0" y="0" width="$w" height="68" fill="#fff"/>
@@ -211,8 +218,7 @@ if [ "${osig:-}" != "$sig" ] || [ ! -s "$SVG" ]; then
  </defs>
 BOLT
 )
-      marks=$(printf '  <path d="%s" fill="%s" mask="url(#past)"/>' "$d" "$fill")
-    fi
+    boltmark=$(printf '  <path d="%s" fill="%s" mask="url(#past)"/>' "$d" "$fill")
   fi
 
   mkdir -p "$CACHE"
@@ -225,6 +231,7 @@ $bolt
  </g>
  <rect x="$ix" y="19" width="$fw" height="30" rx="10" fill="$fill" fill-opacity="$opacity"$maskattr/>
 $marks
+$boltmark
 </svg>
 SVGDOC
   mv -f "$SVG.tmp" "$SVG"

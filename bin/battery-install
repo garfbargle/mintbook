@@ -57,7 +57,7 @@ install -dm755 "$STATE"
 if [ ! -e "$CONF" ]; then
   cat > "$CONF" <<CONFEOF
 # mintbook battery indicator. Sourced by bin/panel-battery, read by the menu.
-SHOW_PERCENT=0     # the charge as a number, left of the icon
+SHOW_PERCENT=0     # the charge as a number, inside the icon
 COLOR=traffic      # traffic | mono — mono is the macOS look, panel ink only
 LOW=15             # below this the fill is red
 MID=40             # below this it is amber

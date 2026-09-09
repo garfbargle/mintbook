@@ -24,9 +24,17 @@ the rest of the bar, and opens `xfce4-power-manager-settings` on click.
 
 macOS's battery: an outline, a fill, and a cap. Green above 40%, amber below,
 red below 15 — `COLOR=mono` in the config gives the actual macOS look, which is
-the panel's own ink and no traffic lights at all. Charging is always green,
-which is the one place this departs from macOS and does what a battery
-indicator has done since 1995.
+the panel's own ink and no traffic lights at all.
+
+**Charging is electric yellow — `#ffe814` on a dark bar, `#ffd60a` on a light
+one — and shows the bolt.** Two departures from macOS, which keeps the ink
+colour and shows only the bolt. The bolt is what a battery indicator has done
+since 1995. The yellow is so that *current going in* and *enough charge left*
+are not the same signal: charging used to be green, which is also 40–100% on
+battery, so the only thing separating "plugged in" from "fine" was a small
+glyph. Full-but-plugged-in stays green, because nothing is flowing. The same
+colour rule is in `bin/battery-menu` (`fill_color`), so the glyph in the popup
+and the charge sparkline agree with the bar.
 
 **Bash, not Python**, for the reason in [desktop.md](desktop.md): `python3`
 costs 30–50 ms to start before it has done anything, and this runs every five
@@ -48,7 +56,8 @@ directly made an 83%-health battery appear to stop charging around 81–82%.
 
 **The bolt is punched out of the charge while charging**: negative space over
 the fill and positive space past it, two masks and no conditionals in the
-paint, so it is visible at 4% and at 96%.
+paint, so it is visible at 4% and at 96%. It is always *inside* the body —
+centred, or against the leading edge of the well with the number after it.
 
 **The palette is decided by the ink, not by a second file.** `bin/appearance-mode`
 writes `system-chrome.env` before it writes `appearance.applied`, and a tick
@@ -71,8 +80,17 @@ text-plus-battery was. The digits are the panel's ink over a charge dropped to
 **Punching the digits out of the charge — the way the bolt is punched — was
 tried first, and is prettier at 100%.** It was dropped because at 30% half a
 number sits on the fill and half on the glass, and the two halves are
-different colours. Charging with the percentage on puts the bolt *outside* the
-body, to the left, because the inside is the number's.
+different colours.
+
+Charging with the percentage on used to put the bolt *outside* the body, to
+its left, on the argument that the inside was the number's. **That was wrong**
+— it read as an icon with an ornament next to it rather than as one icon, and
+it was the only state in which the bar's leftmost battery pixel was not the
+battery. The bolt now takes the leading end of the well and the number takes
+what is left of it: the body grows by the bolt's 18 units plus a gap (`bw + 23`)
+rather than the number giving way, and the number re-centres on the well past
+the bolt. The icon is 76 px wide in that state against the old 72.5 — 3.5 px
+for a shape that belongs inside the thing it describes.
 
 The menu writes `SHOW_PERCENT` back to the config and then nudges genmon
 (`xfce4-panel --plugin-event=plugin-26:refresh:bool:true`), so the bar changes
