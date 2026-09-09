@@ -177,7 +177,7 @@ if [ "${osig:-}" != "$sig" ] || [ ! -s "$SVG" ]; then
   # digits out of the charge the way the bolt is punched was tried first and is
   # in docs/battery.md: it is prettier at 100% and unreadable at 30, where half
   # a number sits on the fill and half on the glass.
-  bx=14 marks='' boltmark='' opacity=1
+  bx=14 bolt='' marks='' boltmark='' maskattr='' opacity=1
   if [ "$SHOW_PERCENT" = 1 ]; then bw=92 opacity=.66; else bw=84; fi
   # The bolt is inside the body in every state. With the percentage on it takes
   # the trailing end of the well and the number takes what is left, so the body
@@ -198,33 +198,38 @@ if [ "${osig:-}" != "$sig" ] || [ ! -s "$SVG" ]; then
   fi
 
   if [ "$st" = C ]; then
-    # One solid yellow bolt, painted over whatever is under it. It used to be
-    # negative space punched out of the charge with the charge's own colour
-    # past it — two masks, and a bolt that was green because the charge was.
-    # A bolt with a colour of its own needs neither: yellow reads on the glass
-    # and on all three fills. Being drawn over the charge rather than punched
-    # out of it is also the only version with no seam where the charge ends —
-    # a mask leaves the fill's rounded cap showing inside the bolt's notch.
+    # One solid yellow bolt drawn over everything, with a hairline of glass
+    # punched out of the charge around it so it separates from a fill of any
+    # colour — including amber, which is nearly the same hue. The halo is the
+    # *stroke* on the mask's copy of the path, which is how a 3-unit outset of
+    # a six-point polygon happens without dilating it in integer bash.
     #
-    # The one fill that could swallow it is amber, which is nearly the same
-    # hue. That needs the charge to reach the bolt while still under MID, so it
-    # is 36-39% with the percentage off (the number pushes the bolt out to 78%,
-    # where the fill is green) — and there the charge has only just touched the
-    # bolt's leading tip.
+    # It used to be negative space over the charge and the charge's colour past
+    # it: two masks, and a bolt whose colour was whatever the charge was.
     if [ "$SHOW_PERCENT" = 1 ]; then cx=$(( ix + iw - 13 )); else cx=$(( bx + bw / 2 )); fi
-    boltmark=$(printf '  <path d="M%s,18 L%s,36 L%s,36 L%s,50 L%s,32 L%s,32 Z" fill="%s"/>' \
-      "$(( cx + 5 ))" "$(( cx - 9 ))" "$(( cx - 1 ))" "$(( cx - 5 ))" \
-      "$(( cx + 9 ))" "$(( cx + 1 ))" "$boltfill")
+    d="M$((cx+5)),18 L$((cx-9)),36 L$((cx-1)),36 L$((cx-5)),50 L$((cx+9)),32 L$((cx+1)),32 Z"
+    maskattr=' mask="url(#punch)"'
+    bolt=$(cat <<BOLT
+ <defs>
+  <mask id="punch">
+   <rect x="0" y="0" width="$w" height="68" fill="#fff"/>
+   <path d="$d" fill="#000" stroke="#000" stroke-width="6" stroke-linejoin="round"/>
+  </mask>
+ </defs>
+BOLT
+)
+    boltmark=$(printf '  <path d="%s" fill="%s"/>' "$d" "$boltfill")
   fi
 
   mkdir -p "$CACHE"
   cat > "$SVG.tmp" <<SVGDOC
 <svg width="$(( w / 2 ))" height="34" viewBox="0 0 $w 68" xmlns="http://www.w3.org/2000/svg">
+$bolt
  <g fill="$fg" fill-opacity=".9">
   <path d="$body" fill-rule="evenodd"/>
   <path d="$cap"/>
  </g>
- <rect x="$ix" y="19" width="$fw" height="30" rx="10" fill="$fill" fill-opacity="$opacity"/>
+ <rect x="$ix" y="19" width="$fw" height="30" rx="10" fill="$fill" fill-opacity="$opacity"$maskattr/>
 $marks
 $boltmark
 </svg>
