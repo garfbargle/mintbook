@@ -202,7 +202,11 @@ section "Bluetooth"
 check "DSDT override image" "/boot/acpi_override_ssdc.img" have /boot/acpi_override_ssdc.img
 check "initramfs re-apply hook" "post-update.d/zz-acpi-ssdc-override" have /etc/initramfs/post-update.d/zz-acpi-ssdc-override
 if [ -e /sys/class/bluetooth/hci0 ]; then
-  ok "hci0" "$(hciconfig hci0 2>/dev/null | sed -n 2p | tr -s ' ' | cut -c1-40 || echo present)"
+  # State and bus, never the BD address: doctor output gets pasted into issues,
+  # and "Bus: UART" is the line that proves the DSDT override still holds.
+  HCI_STATE=$(hciconfig hci0 2>/dev/null | sed -n 3p | tr -s ' \t' ' ' | sed 's/^ *//;s/ *$//')
+  HCI_BUS=$(hciconfig hci0 2>/dev/null | sed -n 1p | grep -o 'Bus: [A-Za-z0-9]*')
+  ok "hci0" "${HCI_STATE:-present}${HCI_BUS:+ — $HCI_BUS}"
 else
   bad "hci0" "no adapter — SSDC is probably binding the UART again"
 fi
