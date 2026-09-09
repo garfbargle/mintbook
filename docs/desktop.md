@@ -256,8 +256,8 @@ Its tooltip lists CPU / SSD / PCH / battery, right-justified inside a
 
 ### Update manager (mintUpdate tray)
 
-A genmon replacement (`plugin-20` / `bin/panel-update`) was tried and **reverted**.
-Two independent failures stacked:
+A first genmon replacement (`plugin-20`) was tried and reverted. Two independent
+failures stacked:
 
 1. The script read `~/.linuxmint/mintupdate/updates.json`, which stays `{"updates": {}}`
    even when Update Manager has a real list, so the genmon icon never switched to
@@ -268,9 +268,13 @@ Two independent failures stacked:
    whenever updates exist, so the old XApp icon appeared next to the dead genmon one
    as soon as there was something to install.
 
-mintUpdate's own XApp icon in `plugin-10` is the indicator again. `hide-systray`
-stays **true**, so the bar is clean when the system is up to date and the stock icon
-appears (still ~20px) when there is work to do. Click it to open Update Manager.
+The current replacement does not read Mint's stale JSON. [`bin/updates-check`](../bin/updates-check)
+imports Mint's own `checkAPT` backend, writes a small state file, and `plugin-20` reads
+that file. [`bin/updates-install`](../bin/updates-install) also installs a `Hidden=true`
+user autostart override for `mintupdate.desktop`, because `hide-systray` cannot prevent
+the stock icon from returning when updates exist. The Update Manager application is
+still installed and opens on demand from the custom popup; only its automatic session
+tray process is disabled.
 
 ### Wi-Fi indicator (`plugin-18`, genmon)
 
@@ -1015,7 +1019,9 @@ whenever `set_status` is called with `visible=True` — which is the "updates av
 and "restart required" paths. A genmon replacement that assumed the stock icon would
 stay gone therefore produced two icons as soon as there were updates. The setting also
 does nothing to a running `mintUpdate` until that process is restarted
-(`mintupdate-launcher`).
+(`mintupdate-launcher`). The custom updater therefore installs a `Hidden=true` user
+override for `/etc/xdg/autostart/mintupdate.desktop` and stops the running process;
+the Update Manager itself remains available from the custom popup.
 
 **Panel plugins re-append themselves.** Removing a plugin from `plugin-ids` is not
 enough — on restart the panel finds the orphaned `/plugins/plugin-N` config and adds it

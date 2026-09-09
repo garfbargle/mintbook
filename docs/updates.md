@@ -17,9 +17,11 @@ bin/updates-install            # plugin-20 on the bar, and the timer
 bin/updates-install --revert   # both off; nothing installed is removed
 ```
 
-Mint's Update Manager is untouched by all of this and is still one click away
-in the popup's footer — it is where the things a popup should not try to be
-live: update history, the kernel list, sources, automation, the blacklist.
+Mint's Update Manager is still one click away in the popup's footer — it is
+where the things a popup should not try to be live: update history, the kernel
+list, sources, automation, the blacklist. Its session autostart is disabled by
+a user override so its stock XApp icon does not duplicate this one; the program
+and all of its settings remain installed and available on demand.
 
 ---
 
@@ -324,10 +326,11 @@ bin/updates-install --revert
 ```
 
 Takes plugin-20 off the bar, disables the timer, and removes the three scripts,
-the Control Center tile and the icons. `plugin-20` stays registered but unused;
-the cached list in `~/.cache/mintbook/updates.json` is left alone. Nothing that
-was installed by apt is touched, and Mint's Update Manager was never modified
-in the first place — `mintupdate` still opens the window it always did.
+the Control Center tile and the icons. It also restores the Mint Update Manager
+autostart state that existed before installation. `plugin-20` stays registered
+but unused; the cached list in `~/.cache/mintbook/updates.json` is left alone.
+Nothing installed by apt is touched, and `mintupdate` still opens the window it
+always did.
 
 ---
 

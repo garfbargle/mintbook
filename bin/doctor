@@ -411,6 +411,11 @@ if [ -e "$HOME/.config/mintbook/updates.conf" ]; then
   check "updates indicator" "bin/panel-updates" have "$HOME/.local/bin/panel-updates"
   check "updates menu" "bin/updates-menu" have "$HOME/.local/bin/updates-menu"
   check "updates check" "bin/updates-check" have "$HOME/.local/bin/updates-check"
+  if grep -qx 'Hidden=true' "$HOME/.config/autostart/mintupdate.desktop" 2>/dev/null; then
+    ok "stock update autostart" "disabled; the custom indicator is the only login tray icon"
+  else
+    warn "stock update autostart" "enabled — run bin/updates-install to prevent a duplicate icon"
+  fi
   UID_=$(sed -n 's/^PANEL_ID=\([0-9]*\).*/\1/p' "$HOME/.config/mintbook/updates.conf" | head -1)
   check "updates genmon rc" "genmon-${UID_:-20}.rc" have "$HOME/.config/xfce4/panel/genmon-${UID_:-20}.rc"
   check "updates timer" "mintbook-updates-check.timer" \

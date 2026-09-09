@@ -17,6 +17,10 @@ UNITS="$HOME/.config/systemd/user"
 STATE="$HOME/.config/mintbook"
 CONF="$STATE/updates.conf"
 SAVED="$STATE/panel-ids.before-updates"
+AUTOSTART="$HOME/.config/autostart"
+MINTUPDATE_AUTOSTART="$AUTOSTART/mintupdate.desktop"
+MINTUPDATE_SAVED="$STATE/mintupdate.desktop.before-updates"
+MINTUPDATE_WAS_ABSENT="$STATE/mintupdate.desktop.absent-before-updates"
 PLUGIN=20
 AFTER=10        # the indicator sits to the left of the CPU sparkline
 
@@ -33,6 +37,15 @@ write_ids() {
 if [ "${1:-}" = --revert ]; then
   echo "==> timer"
   systemctl --user disable --now mintbook-updates-check.timer 2>/dev/null || true
+
+  echo "==> Mint Update Manager autostart"
+  if [ -e "$MINTUPDATE_SAVED" ]; then
+    install -dm755 "$AUTOSTART"
+    install -m644 "$MINTUPDATE_SAVED" "$MINTUPDATE_AUTOSTART"
+  elif [ -e "$MINTUPDATE_WAS_ABSENT" ]; then
+    rm -f "$MINTUPDATE_AUTOSTART"
+  fi
+  rm -f "$MINTUPDATE_SAVED" "$MINTUPDATE_WAS_ABSENT"
 
   echo "==> panel"
   ids=$(current_ids | tr '\n' ' ')
@@ -51,7 +64,7 @@ if [ "${1:-}" = --revert ]; then
   echo
   echo "plugin-$PLUGIN stays registered but unused; the cached list in"
   echo "~/.cache/mintbook/updates.json is left alone — delete it if you want it gone"
-  echo "Mint's own Update Manager was never touched: run 'mintupdate'"
+  echo "Mint's Update Manager autostart was restored; run 'mintupdate' to open it"
   exit 0
 fi
 
@@ -98,6 +111,21 @@ if [ -d "$SHARE" ]; then
   rm -f "$BIN/control-center"
   install -m755 "$ROOT/bin/control-center" "$BIN/control-center"   # the box glyph
 fi
+
+echo "==> disabling Mint's duplicate tray icon"
+install -dm755 "$AUTOSTART"
+if [ ! -e "$MINTUPDATE_SAVED" ] && [ ! -e "$MINTUPDATE_WAS_ABSENT" ]; then
+  if [ -e "$MINTUPDATE_AUTOSTART" ]; then
+    install -m644 "$MINTUPDATE_AUTOSTART" "$MINTUPDATE_SAVED"
+  else
+    : > "$MINTUPDATE_WAS_ABSENT"
+  fi
+fi
+install -m644 "$ROOT/config/autostart/mintupdate.desktop" "$MINTUPDATE_AUTOSTART"
+# The override takes effect at the next login. Stop the existing tray instance
+# now as well; aptkit owns any active package transaction, so it is not killed
+# with this UI process.
+pkill -x mintUpdate 2>/dev/null || true
 
 echo "==> genmon-$PLUGIN.rc"
 install -dm755 "$PANEL_RC"
