@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="816" height="701" viewBox="0 0 816 701" role="img" aria-label="82 ok, 2 warn, 1 FAIL">
+<svg xmlns="http://www.w3.org/2000/svg" width="816" height="701" viewBox="0 0 816 701" role="img" aria-label="83 ok, 2 warn, 0 FAIL">
   <rect width="816" height="701" rx="10" fill="#161b22"/>
-  <text x="26.0" y="47.0" fill="#6e7681" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace" font-size="13" font-weight="normal" xml:space="preserve">mintbook doctor — 2026-09-09 13:01</text>
+  <text x="26.0" y="47.0" fill="#6e7681" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace" font-size="13" font-weight="normal" xml:space="preserve">mintbook doctor — 2026-09-09 14:29</text>
   <text x="26.0" y="80.6" fill="#ffffff" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace" font-size="13" font-weight="bold" xml:space="preserve">Kernel</text>
   <text x="41.6" y="101.6" fill="#3fb950" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace" font-size="13" font-weight="bold" xml:space="preserve">ok</text>
   <text x="88.4" y="101.6" fill="#e6edf3" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace" font-size="13" font-weight="normal" xml:space="preserve">running kernel</text>
@@ -33,7 +33,7 @@
   <text x="322.4" y="332.6" fill="#8b949e" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace" font-size="13" font-weight="normal" xml:space="preserve">snd_hda_codec_cs420x</text>
   <text x="41.6" y="353.6" fill="#3fb950" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace" font-size="13" font-weight="bold" xml:space="preserve">ok</text>
   <text x="88.4" y="353.6" fill="#e6edf3" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace" font-size="13" font-weight="normal" xml:space="preserve">playback device</text>
-  <text x="322.4" y="353.6" fill="#8b949e" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace" font-size="13" font-weight="normal" xml:space="preserve">card 0 device 0 — CS4208 Analog</text>
+  <text x="322.4" y="353.6" fill="#8b949e" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace" font-size="13" font-weight="normal" xml:space="preserve">card 1 device 0 — CS4208 Analog</text>
   <text x="41.6" y="374.6" fill="#3fb950" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace" font-size="13" font-weight="bold" xml:space="preserve">ok</text>
   <text x="88.4" y="374.6" fill="#e6edf3" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace" font-size="13" font-weight="normal" xml:space="preserve">macbook12-audio dkms</text>
   <text x="322.4" y="374.6" fill="#8b949e" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace" font-size="13" font-weight="normal" xml:space="preserve">built for 7.0.0-31-generic</text>
@@ -64,5 +64,5 @@
   <text x="88.4" y="605.6" fill="#e6edf3" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace" font-size="13" font-weight="normal" xml:space="preserve">hci0</text>
   <text x="322.4" y="605.6" fill="#8b949e" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace" font-size="13" font-weight="normal" xml:space="preserve">UP RUNNING PSCAN — Bus: UART</text>
   <text x="26.0" y="643.4" fill="#6e7681" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace" font-size="13" font-weight="normal" xml:space="preserve">… 66 more checks across 7 further sections</text>
-  <text x="26.0" y="674.9" fill="#e6edf3" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace" font-size="13" font-weight="bold" xml:space="preserve">82 ok, 2 warn, 1 FAIL</text>
+  <text x="26.0" y="674.9" fill="#e6edf3" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, &quot;DejaVu Sans Mono&quot;, monospace" font-size="13" font-weight="bold" xml:space="preserve">83 ok, 2 warn, 0 FAIL</text>
 </svg>

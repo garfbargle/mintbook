@@ -321,7 +321,9 @@ class Window:
         self.pressed = None
         self.copied = None
         self.drag_thumb = None
-        self.filter = 'attention' if self.unhappy else 'all'
+        # Opening on the notes would make them the entire window on a machine
+        # whose card says it is fine. Only a failure earns that.
+        self.filter = 'attention' if self.failing else 'all'
         self.segments, self.seg_rects, self.chip_rects = [], [], []
         self.close_rect = self.recheck_rect = self.copy_rect = self.thumb_rect = (0, 0, 0, 0)
         self.measure = cairo.Context(cairo.ImageSurface(cairo.FORMAT_ARGB32, 1, 1))
@@ -371,6 +373,10 @@ class Window:
     @property
     def unhappy(self):
         return [r for r in self.rows if r['status'] != 'ok']
+
+    @property
+    def failing(self):
+        return any(r['status'] == 'fail' for r in self.rows)
 
     @property
     def shown(self):
@@ -439,18 +445,16 @@ class Window:
         if counts['fail']:
             n = counts['fail']
             return f'{n} check needs attention' if n == 1 else f'{n} checks need attention'
-        # A warning is never a fault here — doctor exits 0 on a run with
-        # nothing but notes in it, and several of them are recorded policy
-        # rather than a problem. The headline says so, and the notes
-        # themselves are one line down.
-        if counts['warn']:
-            return 'Nothing needs fixing'
+        # A note is not a fault, so it does not get the headline. It is a
+        # word at the end of the count line, and the filter below.
         return 'Everything checks out'
 
     @property
     def status(self):
-        counts = tally(self.rows)
-        return 'fail' if counts['fail'] else ('warn' if counts['warn'] else 'ok')
+        # Green unless something actually failed. doctor exits 0 on a run of
+        # nothing but notes, so an amber card there is a false alarm about a
+        # machine with nothing wrong with it.
+        return 'fail' if tally(self.rows)['fail'] else 'ok'
 
     @property
     def subtitles(self):
@@ -465,12 +469,15 @@ class Window:
             return ['Running the checks for the first time.' if self.checking
                     else 'Choose Check again to run the checks.', '']
         counts = tally(self.rows)
-        parts = []
         if counts['fail']:
-            parts.append(f"{counts['fail']} failing")
-        if counts['warn']:
-            parts.append(plural(counts['warn'], 'note'))
-        parts.append(f"{counts['ok']} passed")
+            parts = [f"{counts['fail']} failing"]
+            if counts['warn']:
+                parts.append(plural(counts['warn'], 'note'))
+            parts.append(f"{counts['ok']} passed")
+        elif counts['warn']:
+            parts = [f"{counts['ok']} passed", plural(counts['warn'], 'note')]
+        else:
+            parts = [f"{counts['ok']} checks passed"]
         second = ('Kernel ' + self.state.get('kernel', '?') + ' · '
                   + ('checking now' if self.checking
                      else 'checked ' + ago(self.state.get('checked', 0))))
@@ -951,8 +958,10 @@ class Window:
         self.checking = False
         self.error = error
         if state:
+            was_failing = self.failing
             self.state = state
-            if self.filter == 'attention' and not self.unhappy:
+            if self.filter == 'attention' and (not self.unhappy or
+                                               (was_failing and not self.failing)):
                 self.filter = 'all'
         self.relayout()
         self.area.queue_draw()

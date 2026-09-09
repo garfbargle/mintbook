@@ -107,16 +107,17 @@ running after every one. This is a real run, excerpted—the counts are the whol
 machine:
 
 <p align="center">
-  <img src="docs/images/doctor.svg" alt="bin/doctor output across the kernel, graphics, audio, camera and Bluetooth sections, ending 82 ok, 2 warn, 1 FAIL" width="880">
+  <img src="docs/images/doctor.svg" alt="bin/doctor output across the kernel, graphics, audio, camera and Bluetooth sections, ending 83 ok, 2 warn, 0 FAIL" width="880">
 </p>
 
 The same run has a window. **System Health** is in the Control Center and in
-Overview: a sentence for the machine's state, findings grouped the way `doctor`
-groups them, and the repair command for a finding sitting right under it, one
-click from your clipboard.
+Overview: one sentence for the machine's state, findings grouped the way
+`doctor` groups them, and—when something is wrong—the repair command sitting
+right under the finding, one click from your clipboard. A warning is not a
+failure here, and the card does not pretend otherwise.
 
 <p align="center">
-  <img src="docs/images/health.jpg" alt="The System Health window listing checks by section, with a summary card reading 1 check needs attention" width="760">
+  <img src="docs/images/health.jpg" alt="The System Health window listing checks by section, with a summary card reading Everything checks out, 83 passed and 2 notes" width="760">
 </p>
 
 [See the measurements](docs/performance.md) · [See how fast it feels](docs/feel.md) · [See hardware status](docs/hardware.md)
