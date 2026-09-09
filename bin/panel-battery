@@ -180,7 +180,7 @@ if [ "${osig:-}" != "$sig" ] || [ ! -s "$SVG" ]; then
   bx=14 bolt='' marks='' boltmark='' maskattr='' opacity=1
   if [ "$SHOW_PERCENT" = 1 ]; then bw=92 opacity=.66; else bw=84; fi
   # The bolt is inside the body in every state. With the percentage on it takes
-  # the leading end of the well and the number takes what is left, so the body
+  # the trailing end of the well and the number takes what is left, so the body
   # grows by the bolt's 18 units and a gap rather than the number giving way.
   [ "$st" = C ] && [ "$SHOW_PERCENT" = 1 ] && bw=$(( bw + 23 ))
   iw=$(( bw - 14 ))                     # the well inside the outline
