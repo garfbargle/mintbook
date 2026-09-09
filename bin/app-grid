@@ -183,16 +183,16 @@ class AppGrid:
           box-shadow: inset 0 2px 4px rgba(0,0,0,.16);
         }}
         window#mintbook-app-grid button.app-tile {{
-          min-width: 132px;
-          min-height: 122px;
-          padding: 9px 4px;
+          min-width: 190px;
+          min-height: 172px;
+          padding: 14px 10px;
           margin: 0;
           background-color: {c['tile']};
           background-image: none;
           border: 0;
           border-radius: 16px;
           box-shadow: none;
-          font: 500 15px Inter;
+          font: 500 16px Inter;
         }}
         window#mintbook-app-grid button.app-tile:hover,
         window#mintbook-app-grid button.app-tile:focus {{
@@ -263,8 +263,10 @@ class AppGrid:
         flow.set_selection_mode(Gtk.SelectionMode.NONE)
         flow.set_row_spacing(0)
         flow.set_column_spacing(0)
-        flow.set_min_children_per_line(8)
-        flow.set_max_children_per_line(max(8, min(12, self.geometry.width // 175)))
+        # Keep the grid deliberately spacious: ten sizeable tiles fit on a
+        # 2304px-wide display instead of the previous twelve compact ones.
+        flow.set_min_children_per_line(6)
+        flow.set_max_children_per_line(max(6, min(10, self.geometry.width // 220)))
         scroll.add(flow)
 
         for app in self.applications():
@@ -290,16 +292,16 @@ class AppGrid:
         button.set_relief(Gtk.ReliefStyle.NONE)
         button.set_tooltip_text(app.get_description() or app.get_display_name())
 
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         box.set_valign(Gtk.Align.CENTER)
         icon = app.get_icon()
         image = Gtk.Image.new_from_gicon(icon, Gtk.IconSize.DIALOG) if icon else Gtk.Image()
-        image.set_pixel_size(96)
+        image.set_pixel_size(112)
         box.pack_start(image, False, False, 0)
 
         label = Gtk.Label(label=app.get_display_name())
         label.set_ellipsize(Pango.EllipsizeMode.END)
-        label.set_max_width_chars(20)
+        label.set_max_width_chars(24)
         label.set_justify(Gtk.Justification.CENTER)
         box.pack_start(label, False, False, 0)
         button.add(box)
