@@ -16,6 +16,7 @@ loader.exec_module(sleep)
 
 def snap(status='Discharging', percent=80, wh=30):
     return {'timestamp': 1000.0,
+            'sleep_mode': 'deep',
             'battery': {'status': status, 'percent': percent, 'wh': wh,
                         'temperature_c': 35},
             'input': {'keyboard': True, 'touchpad': True},
@@ -99,6 +100,15 @@ class SleepReportTests(unittest.TestCase):
         self.assertEqual(report['verdict'], 'note')
         self.assertEqual(len(report['notes']), 2)
 
+    def test_s2idle_does_not_expect_legacy_rebind(self):
+        before = dict(snap(), sleep_mode='s2idle')
+        rows = [event(1000, 'PM: suspend entry (s2idle)'),
+                event(1060, 'PM: suspend exit')]
+        report = sleep.analyze(before, before['battery'], recovered(),
+                               60, 1060, rows)
+        self.assertEqual(report['verdict'], 'pass')
+        self.assertNotIn('journal has no applespi rebind result', report['notes'])
+
     def test_journal_keeps_resume_markers_and_errors(self):
         source = '\n'.join(json.dumps(item) for item in (
             {'__REALTIME_TIMESTAMP': '1000000', 'PRIORITY': '6',
@@ -120,6 +130,7 @@ class SleepReportTests(unittest.TestCase):
                                recovered(), 3600, 4600, rows)
         output = sleep.format_report(report)
         self.assertIn('0.50 W average', output)
+        self.assertIn('mode ............. deep', output)
         self.assertIn('keyboard + trackpad present', output)
 
 

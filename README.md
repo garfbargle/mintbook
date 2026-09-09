@@ -74,12 +74,14 @@ Wi-Fi, speakers, headphones, camera, Bluetooth, keyboard, trackpad.
 
 Speakers, camera, and Bluetooth want kernel **7.0**. **6.14** is the fallback if 7.0 will not boot — silent speakers, but it boots. OpenCore is the picker. GRUB is not.
 
-Sleep has been working in daily use over the last few days, reported on
-2026-09-07. The resume hook rebinds `applespi`, which previously left the keyboard
-and trackpad dead after S3. `bin/sleep-report arm` measures the next normal sleep:
+Deep S3 is proven broken on this MacBook8,1: the 2026-09-08 controlled cycle woke
+with 47 Apple SPI timeouts and no keyboard or trackpad, and reprobe failed three
+times. `bin/input-install` now selects suspend-to-idle at boot, avoiding the broken
+firmware path while retaining normal lid suspend. `bin/sleep-report arm` measures
+the next normal sleep:
 battery loss, resume timing, input recovery, Wi-Fi, Bluetooth, audio and the
 relevant journal. It never suspends the machine itself. The first controlled
-result is still outstanding; see [input](docs/input.md#the-sleep-black-box).
+result records the selected sleep mode; see [input](docs/input.md#the-sleep-black-box).
 
 `bin/hw-report` is live. Read-only. No sudo.
 

@@ -2,7 +2,7 @@
 """Measure one suspend/resume cycle, then exit.
 
 `sleep-report arm` starts this script as a transient user service. Linux freezes
-the watcher with the rest of userspace during S3. CLOCK_BOOTTIME includes that
+the watcher with the rest of userspace during suspend. CLOCK_BOOTTIME includes that
 time while CLOCK_MONOTONIC does not, so their difference gives the sleep length
 without polling the journal or running anything during sleep.
 """
@@ -82,6 +82,14 @@ def input_devices():
             'touchpad': 'Name="Apple SPI Touchpad"' in devices}
 
 
+def sleep_mode():
+    modes = read('/sys/power/mem_sleep')
+    for item in modes.split():
+        if item.startswith('[') and item.endswith(']'):
+            return item[1:-1]
+    return 'unknown'
+
+
 def wifi_state():
     output = run(['nmcli', '-t', '-f', 'TYPE,STATE', 'device', 'status'])
     states = [line.split(':', 1)[1] for line in output.splitlines()
@@ -108,7 +116,7 @@ def audio_sink():
 
 
 def snapshot(include_services=True):
-    value = {'timestamp': time.time(), 'battery': battery(),
+    value = {'timestamp': time.time(), 'sleep_mode': sleep_mode(), 'battery': battery(),
              'input': input_devices()}
     if include_services:
         value.update(wifi=wifi_state(), bluetooth=bluetooth_state(),
@@ -138,7 +146,9 @@ def observe_recovery(seconds=SETTLE):
 
 def journal(start, end):
     output = run(['journalctl', '-b', '--no-pager', '-o', 'json',
-                  '--since', f'@{max(0, start - 5):.3f}',
+                  # Resume detection happens after the kernel has entered sleep;
+                  # retain enough lead-in to include its suspend-entry marker.
+                  '--since', f'@{max(0, start - 15):.3f}',
                   '--until', f'@{end + 2:.3f}'], timeout=12)
     rows = []
     for line in output.splitlines():
@@ -213,13 +223,13 @@ def analyze(before, after_battery, recovery, sleep_seconds, resume_at, rows):
     notes = []
     if not any('suspend entry' in message for message in messages):
         notes.append('journal has no suspend-entry marker for this interval')
-    if not rebind:
+    if not rebind and before.get('sleep_mode') == 'deep':
         notes.append('journal has no applespi rebind result')
     drain = battery_change(before['battery'], after_battery, sleep_seconds)
     if not drain['measurable']:
         notes.append('battery drain not measured: ' + drain['reason'])
     return {
-        'version': 1, 'verdict': 'fail' if concerns else ('note' if notes else 'pass'),
+        'version': 2, 'verdict': 'fail' if concerns else ('note' if notes else 'pass'),
         'boot_id': boot_id(),
         'armed_at': before.get('armed_at', before['timestamp']),
         'suspend_at': resume_at - sleep_seconds, 'resume_at': resume_at,
@@ -260,7 +270,8 @@ def format_report(report):
     slept = duration(report['sleep_seconds'])
     interval = f"{when(report['suspend_at'])} → {when(report['resume_at'])}"
     lines = [f"Sleep check — {verdict}",
-             f"  slept ............ {slept}  ({interval})"]
+             f"  slept ............ {slept}  ({interval})",
+             f"  mode ............. {before.get('sleep_mode', 'unknown')}"]
     drain = report['battery_drain']
     if drain['measurable']:
         pct = (f", {drain['percent_points']} percentage point(s)"

@@ -1,0 +1,15 @@
+# The MacBook8,1 Apple SPI keyboard/trackpad does not recover from ACPI S3.
+# Select suspend-to-idle at boot so ordinary lid suspend remains usable.
+[Unit]
+Description=Use suspend-to-idle to preserve MacBook8,1 built-in input
+ConditionPathExists=/sys/power/mem_sleep
+Before=sleep.target
+
+[Service]
+Type=oneshot
+ExecCondition=/bin/grep -qw s2idle /sys/power/mem_sleep
+ExecStart=/bin/sh -c 'echo s2idle > /sys/power/mem_sleep'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

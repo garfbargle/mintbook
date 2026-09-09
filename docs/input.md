@@ -1,16 +1,16 @@
 # Input — Apple SPI keyboard and trackpad
 
-**Status: working at boot; sleep reported working in daily use (2026-09-07).** Three separate
+**Status: working at boot; deep sleep proven broken; s2idle ready for verification.** Three separate
 problems:
 
 | | |
 |---|---|
 | Dead at boot | **Fixed.** `dw_dmac_pci` is blacklisted, so SPI always uses PIO. |
-| Dead after sleep | **Working in daily use, per user report on 2026-09-07.** The resume hook rebinds applespi. `bin/sleep-report` now records the next controlled cycle; the first result remains outstanding. |
+| Dead after sleep | **Deep S3 proven broken.** A controlled 2026-09-08 cycle captured 47 timeouts and a failed reprobe. `bin/input-install` now selects s2idle at boot; its first controlled cycle is next. |
 | Palm / typing | **Quirk installed.** Disable-while-typing was a no-op until the keyboard was marked internal. **Log out once** for Xorg to reload it. |
 
-`bin/input-check` reports all three. `sudo bin/input-install` copies the quirk, the
-blacklist (if missing), and the resume hook.
+`bin/input-check` reports all three. `sudo bin/input-install` copies the quirk and
+blacklist (if missing), and selects the working sleep mode.
 
 **Two different failures look identical from the chair: no keyboard, no trackpad.**
 They are told apart by `using PIO` and by whether the machine slept —
@@ -185,59 +185,58 @@ Reproduce with:
 bin/input-check --history
 ```
 
-### The fix
+### The failed recovery experiment
 
-Unbind and rebind the device on resume, which re-runs the same probe path that works
-at boot. `applespi` is a module and the SPI device exposes bind/unbind, so nothing
-needs a patched kernel.
-
-[`bin/applespi-rebind`](../bin/applespi-rebind) → `/usr/local/sbin/mintbook-applespi-rebind`,
-driven by [`mintbook-applespi-resume.service`](../config/systemd/mintbook-applespi-resume.service):
+The first workaround rebound `spi-APP000D:00` after wake, expecting a fresh probe
+to repeat the working boot path. The controlled 2026-09-08 cycle disproved it:
 
 ```
-After=suspend.target ...
-WantedBy=suspend.target ...
+deep sleep       8m25s
+kernel wake      2.83s
+SPI timeouts     47 in the report window
+rebind           failed after 3 attempts
+built-in input   missing; power-button reboot required
 ```
 
-`After=` **plus** `WantedBy=` on the sleep targets is what makes a unit run on the way
-*out* of suspend rather than into it. The script waits 2 s for the controller to
-settle, then tries up to three times, checking for the touchpad after each — the
-touchpad is the tell, since on a failed probe the keyboard device still registers.
+The full journal continued logging one timeout per transfer until reboot. A rebind
+only repeats `applespi` probe against the same bad firmware link. Linux's driver
+checks `SIST`, sees that firmware still calls SPI enabled, and skips `SIEN(1)` and
+its recovery delay. The [driver's upstream repository](https://github.com/cb22/macbook12-spi-driver)
+still lists "Resume on MacBook8,1" under what does not work.
 
-Both writes are wrapped in `timeout 10`. A wedged device makes them block on SPI
-timeouts, and a hook that hangs would stall the whole resume transition.
+The automatic rebind hook and script are removed by the current installer. They
+were useful as a hypothesis and are now measured evidence against that hypothesis.
+
+### The fix: avoid the broken S3 path
+
+This machine exposes `s2idle [deep]`. Deep enters ACPI S3 and breaks the Apple SPI
+endpoint. Suspend-to-idle freezes userspace and preserves the session without
+taking that firmware path. It costs more battery during long sleeps, but it keeps
+ordinary lid suspend usable and avoids a forced reboot after every wake.
+
+[`mintbook-s2idle.service`](../config/systemd/mintbook-s2idle.service) selects it at
+boot. Install it and retire the failed rebind hook with:
 
 ```bash
 sudo bin/input-install
 ```
 
-It runs on the next wake. Rebinding is unconditional: one code path, exercised every
-time, rather than a detector that is itself only tested during a failure.
-
-To undo:
+The selected mode is visible between brackets:
 
 ```bash
-sudo systemctl disable mintbook-applespi-resume.service
-sudo rm /etc/systemd/system/mintbook-applespi-resume.service /usr/local/sbin/mintbook-applespi-rebind
+cat /sys/power/mem_sleep       # want: [s2idle] deep
+bin/input-check                # want: sleep mode: s2idle
 ```
+
+To undo the boot default, disable and remove `mintbook-s2idle.service`, then reboot
+or write `deep` to `/sys/power/mem_sleep`.
 
 ### Verification status
 
-On 2026-09-07 the user reported that sleep has been working over the last few days.
-The hook is left unchanged. This is evidence from normal use, not a recorded
-repeat-cycle or overnight-drain test. For a future controlled check, after wake:
-
-```bash
-bin/input-check                    # want: timeouts 0, touchpad present
-journalctl -t applespi-rebind      # want: "rebind ok on attempt 1"
-```
-
-The script can also be exercised without sleeping, though this drops input for a
-second or two while it re-probes:
-
-```bash
-sudo /usr/local/sbin/mintbook-applespi-rebind
-```
+Deep S3 and the old recovery are conclusively failed. The next controlled cycle
+must verify s2idle: arm `sleep-report`, close the lid, and confirm zero Apple SPI
+timeouts plus working keyboard and trackpad. Several longer cycles are needed to
+measure the battery tradeoff.
 
 ### The sleep black box
 
@@ -257,18 +256,18 @@ watcher is a transient user service. It exists only after `arm`, exits after one
 resume, and expires after 36 hours. No permanent timer, system hook, root change
 or extra sampling daemon is installed.
 
-Linux freezes the watcher with the rest of userspace during S3.
+Linux freezes the watcher with the rest of userspace during suspend.
 `CLOCK_BOOTTIME` includes suspended time and `CLOCK_MONOTONIC` does not, so the
 increase in their difference is the measured sleep duration. While armed, the
 watcher refreshes the battery counter once a second; this puts the pre-sleep
 reading within roughly one second of suspend without writing every reading to
-disk. After wake it waits 12 seconds for the existing applespi hook and desktop
-services to settle, then records:
+disk. After wake it waits 12 seconds for input and desktop services to settle,
+then records:
 
 - elapsed sleep time and estimated Wh / percentage-point loss;
 - average sleep watts when both ends were discharging;
 - kernel wake timing from the wake and `PM: suspend exit` journal markers;
-- built-in keyboard and trackpad presence, SPI timeouts and the rebind result;
+- selected sleep mode, built-in keyboard and trackpad presence, and SPI timeouts;
 - Wi-Fi reconnection, Bluetooth adapter state and the default PipeWire sink;
 - priority-3 journal errors and relevant suspend/applespi messages in the cycle.
 
@@ -283,24 +282,11 @@ append-only `history.jsonl`. `armed.json` exists only while armed (or after an
 expiry). `daily-install --revert` removes the command but deliberately retains
 the measurements.
 
-Validation on 2026-09-08 covered clean and failed resume fixtures, charger
-transitions, a rising battery gauge, journal filtering, kernel timing and report
-formatting. The complete 33-test suite passes. On the live machine, arm, status,
-cancel and re-arm were exercised without suspending it; the transient process
-used 9.9 MB and 0.027 CPU-seconds over a ten-second armed sample. The first real
-cycle is intentionally left to the next normal lid close.
-
-### If the rebind does not work
-
-The fallback is to avoid S3 entirely, since `deep` is what breaks:
-
-```bash
-echo s2idle | sudo tee /sys/power/mem_sleep
-```
-
-Not installed, and not free — s2idle on this fanless Broadwell draws noticeably more
-in the bag than S3. Only reach for it if the rebind is proven not to recover the
-device.
+Validation on 2026-09-08 covers clean, failed, deep and s2idle resume fixtures,
+charger transitions, a rising battery gauge, journal filtering, kernel timing and
+report formatting. The complete 34-test suite passes. The first live capture found
+the deep-sleep failure above and persisted it across the required reboot. A second
+capture is armed for the first s2idle cycle.
 
 ### Ruled out
 

@@ -74,14 +74,17 @@ if command -v libinput >/dev/null 2>&1; then
 fi
 
 echo
-if [ -f /etc/systemd/system/mintbook-applespi-resume.service ]; then
-  if systemctl is-enabled mintbook-applespi-resume.service >/dev/null 2>&1; then
-    echo "resume hook: INSTALLED and enabled"
-  else
-    echo "resume hook: installed but NOT enabled - sleep will kill input. See docs/input.md"
-  fi
+mode=$(sed -n 's/.*\[\([^]]*\)\].*/\1/p' /sys/power/mem_sleep 2>/dev/null)
+echo "sleep mode: ${mode:-unknown}"
+if [ "$mode" = s2idle ]; then
+  echo "     (good - deep S3 kills MacBook8,1 Apple SPI input)"
 else
-  echo "resume hook: NOT installed - input dies on every resume. See docs/input.md"
+  echo "     (unsafe - select s2idle before suspending. See docs/input.md)"
+fi
+if systemctl is-enabled mintbook-s2idle.service >/dev/null 2>&1; then
+  echo "sleep fix: INSTALLED and enabled"
+else
+  echo "sleep fix: NOT enabled - the safe mode will not survive a reboot"
 fi
 
 # What happened on this boot's most recent wake, if there was one.
@@ -95,7 +98,7 @@ else
   ms=$(printf '%s\n' "$post" | grep -c 'modeswitch done')
   echo "     resumes this boot ...... $wakes"
   echo "     timeouts since wake .... $to   (want 0)"
-  echo "     modeswitch since wake .. $ms   (want >0 if the hook fired)"
+  echo "     modeswitch since wake .. $ms"
   if grep -qF 'Name="Apple SPI Touchpad"' /proc/bus/input/devices 2>/dev/null; then
     echo "     touchpad now ........... present - input survived"
   else

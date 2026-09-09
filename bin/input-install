@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # input-install — libinput DWT/palm quirk, the DMA blacklist if missing, and
-# the post-resume applespi rebind. Must be run as root. See docs/input.md.
+# working suspend for the MacBook8,1. Must be run as root. See docs/input.md.
 #
 # Does not reboot. The quirk is visible to `libinput quirks list` immediately;
 # disable-while-typing only applies after Xorg reopens the devices (log out).
-# The resume hook is armed as soon as the unit is enabled.
+# Suspend-to-idle is selected immediately and again at every boot.
 set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -16,12 +16,12 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 QUIRKS_SRC="$ROOT/config/libinput/local-overrides.quirks"
 QUIRKS_DST=/etc/libinput/local-overrides.quirks
 BLACKLIST=/etc/modprobe.d/blacklist-dw-dmac.conf
-REBIND_SRC="$ROOT/bin/applespi-rebind"
-REBIND_DST=/usr/local/sbin/mintbook-applespi-rebind
-UNIT_SRC="$ROOT/config/systemd/mintbook-applespi-resume.service"
-UNIT_DST=/etc/systemd/system/mintbook-applespi-resume.service
+LEGACY_UNIT=/etc/systemd/system/mintbook-applespi-resume.service
+LEGACY_REBIND=/usr/local/sbin/mintbook-applespi-rebind
+SLEEP_UNIT_SRC="$ROOT/config/systemd/mintbook-s2idle.service"
+SLEEP_UNIT_DST=/etc/systemd/system/mintbook-s2idle.service
 
-for f in "$QUIRKS_SRC" "$REBIND_SRC" "$UNIT_SRC"; do
+for f in "$QUIRKS_SRC" "$SLEEP_UNIT_SRC"; do
   if [ ! -f "$f" ]; then
     echo "missing $f" >&2
     exit 1
@@ -49,17 +49,19 @@ install dw_dmac_pci /bin/false
 EOF
 fi
 
-echo "==> $REBIND_DST"
-install -m755 "$REBIND_SRC" "$REBIND_DST"
-
-echo "==> $UNIT_DST"
-install -m644 "$UNIT_SRC" "$UNIT_DST"
+echo "==> $SLEEP_UNIT_DST"
+install -m644 "$SLEEP_UNIT_SRC" "$SLEEP_UNIT_DST"
+# The old S3 recovery hook was measured on 2026-09-08: it retried the same
+# wedged endpoint three times and left input dead. Keep the manual diagnostic
+# script, but retire the ineffective automatic hook.
+systemctl disable --now mintbook-applespi-resume.service 2>/dev/null || true
+rm -f "$LEGACY_UNIT" "$LEGACY_REBIND"
 systemctl daemon-reload
-systemctl enable mintbook-applespi-resume.service
+systemctl enable --now mintbook-s2idle.service
 
 echo
 echo "quirk is on disk. log out once for disable-while-typing to take effect."
-echo "resume hook is armed — it runs on the next wake from sleep."
+echo "sleep mode is $(cat /sys/power/mem_sleep) — [s2idle] preserves built-in input."
 echo "then: bin/input-check"
 echo
-echo "undo: systemctl disable mintbook-applespi-resume.service && rm $UNIT_DST $REBIND_DST"
+echo "undo: systemctl disable mintbook-s2idle.service && rm $SLEEP_UNIT_DST"

@@ -210,8 +210,13 @@ fi
 section "Keyboard / trackpad"
 check "DMA blacklist" "/etc/modprobe.d/blacklist-dw-dmac.conf" have /etc/modprobe.d/blacklist-dw-dmac.conf
 check "libinput quirk" "/etc/libinput/local-overrides.quirks" have /etc/libinput/local-overrides.quirks
-check "resume rebind script" "/usr/local/sbin/mintbook-applespi-rebind" have /usr/local/sbin/mintbook-applespi-rebind
-check "resume hook enabled" "mintbook-applespi-resume.service" systemctl is-enabled mintbook-applespi-resume.service
+check "sleep mode service" "mintbook-s2idle.service" systemctl is-enabled mintbook-s2idle.service
+SLEEP_MODE=$(sed -n 's/.*\[\([^]]*\)\].*/\1/p' /sys/power/mem_sleep 2>/dev/null)
+if [ "$SLEEP_MODE" = s2idle ]; then
+  ok "sleep mode" "s2idle — preserves Apple SPI input"
+else
+  bad "sleep mode" "${SLEEP_MODE:-unknown} — deep sleep kills Apple SPI input"
+fi
 if grep -qF 'Name="Apple SPI Touchpad"' /proc/bus/input/devices 2>/dev/null; then
   ok "touchpad present" "input survived this boot"
 else
