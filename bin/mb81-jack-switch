@@ -24,6 +24,10 @@ HEADPHONE_PROFILE = os.environ.get(
     "MB81_HP_PROFILE", "output:analog-stereo+input:analog-stereo"
 )
 RAW_NODE = "MacBook_Speaker_Raw"
+# Bounded wait for the card at startup. Resume destroys and re-creates the
+# card, and systemd restarts this unit as soon as the user audio services
+# return — which can be seconds before ALSA has re-registered the controls.
+STARTUP_TIMEOUT = float(os.environ.get("MB81_STARTUP_TIMEOUT", "15"))
 
 
 def log(message):
@@ -87,6 +91,25 @@ def pipewire_nodes():
         if current_id is not None and match:
             nodes[match.group(1)] = current_id
     return nodes
+
+
+def wait_for(probe, deadline, interval=0.25):
+    """Poll probe() until it returns a value, or the shared deadline expires.
+
+    Exiting on the first miss made resume a lottery: on the 2026-09-09 cycle
+    this unit burned three of systemd's five permitted starts in four seconds
+    ("Headphone Jack control not found on card 0") before the controls showed
+    up. A slower re-enumeration exhausts that budget and leaves the unit failed
+    until someone notices it in bin/doctor. Probes at least once, so a caller
+    passing an already-expired deadline still gets one attempt.
+    """
+    while True:
+        result = probe()
+        if result is not None:
+            return result
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(interval)
 
 
 def wait_for_node(name, timeout=8.0):
@@ -170,19 +193,24 @@ def monitor(card, numid, initial_state):
 
 
 def main():
-    card = find_card()
+    # One deadline across all three probes, so a slow resume cannot stack three
+    # separate waits into a startup long enough to look like a hang.
+    deadline = time.monotonic() + STARTUP_TIMEOUT
+    waited = f"after {STARTUP_TIMEOUT:g}s"
+
+    card = wait_for(find_card, deadline)
     if card is None:
-        log(f"CS4208 card ({CARD_ID}) not found; exiting")
+        log(f"CS4208 card ({CARD_ID}) not found {waited}; exiting")
         return 1
 
-    numid = find_jack_control(card)
+    numid = wait_for(lambda: find_jack_control(card), deadline)
     if numid is None:
-        log(f"Headphone Jack control not found on card {card}; exiting")
+        log(f"Headphone Jack control not found on card {card} {waited}; exiting")
         return 1
 
-    state = jack_state(card, numid)
+    state = wait_for(lambda: jack_state(card, numid), deadline)
     if state is None:
-        log(f"cannot read Headphone Jack control on card {card}; exiting")
+        log(f"cannot read Headphone Jack control on card {card} {waited}; exiting")
         return 1
 
     log(f"watching card {card} 'Headphone Jack' (numid={numid})")

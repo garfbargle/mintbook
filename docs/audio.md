@@ -403,6 +403,27 @@ enabled via `~/.config/systemd/user/mb81-jack-switch.service.d/override.conf`:
 
 ACP still exposes IEC958 when the jack is unplugged — leave it unused.
 
+**Startup waits for the card, 2026-09-09.** The watcher used to exit 1 the
+instant `Headphone Jack` was missing from card 0 and rely on `Restart=always`.
+Resume re-creates the card *after* systemd restarts the unit, so on the
+2026-09-09 08:15 cycle it burned three of systemd's five permitted starts in
+four seconds before the controls appeared:
+
+```
+08:15:20  Headphone Jack control not found on card 0; exiting
+08:15:22  Headphone Jack control not found on card 0; exiting
+08:15:24  watching card 0 'Headphone Jack' (numid=14)
+```
+
+It recovered, so nothing was visible afterwards — but a slower re-enumeration
+exhausts the budget and leaves the unit failed until it shows up in
+`bin/doctor`. `wait_for()` now polls all three startup probes against one shared
+15 s deadline (`MB81_STARTUP_TIMEOUT`). Measured on a healthy card the probes
+resolve in 0.012 s, so there is no added startup latency; a card that never
+appears still gives up on time instead of hanging. Undo is a `git revert` — the
+script is in this repo and runs from the checkout via
+`~/.config/systemd/user/mb81-jack-switch.service.d/override.conf`.
+
 Bluetooth audio needs `hci0`. That adapter is working on 7.0 after the
 SSDC/UART DSDT override — [bluetooth.md](bluetooth.md). Not this codec.
 
