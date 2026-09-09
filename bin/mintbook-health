@@ -151,7 +151,8 @@ def report(state):
     lines = ['mintbook system health — '
              + time.strftime('%Y-%m-%d %H:%M', time.localtime(state.get('checked', time.time()))),
              f"kernel {state.get('kernel', '?')} — "
-             f"{counts['fail']} failed, {counts['warn']} notes, {counts['ok']} passed", '']
+             f"{counts['fail']} failed, {plural(counts['warn'], 'note')}, "
+             f"{counts['ok']} passed", '']
     section = None
     for row in rows:
         if row.get('section') != section:
@@ -161,6 +162,10 @@ def report(state):
             lines.append(section or 'Checks')
         lines.append(f"  {row['status']:<4}  {row['label']}  —  {row['detail']}")
     return '\n'.join(lines) + '\n'
+
+
+def plural(n, word):
+    return f'{n} {word}' if n == 1 else f'{n} {word}s'
 
 
 def tally(rows):
@@ -429,14 +434,17 @@ class Window:
         if self.error:
             return 'Could not finish checking'
         if not self.rows:
-            return 'Checking this Mac…' if self.checking else 'Not checked yet'
+            return 'Checking the system…' if self.checking else 'Not checked yet'
         counts = tally(self.rows)
         if counts['fail']:
             n = counts['fail']
-            return f"{n} check needs attention" if n == 1 else f'{n} checks need attention'
+            return f'{n} check needs attention' if n == 1 else f'{n} checks need attention'
+        # A warning is never a fault here — doctor exits 0 on a run with
+        # nothing but notes in it, and several of them are recorded policy
+        # rather than a problem. The headline says so, and the notes
+        # themselves are one line down.
         if counts['warn']:
-            n = counts['warn']
-            return f"{n} thing to know about" if n == 1 else f'{n} things to know about'
+            return 'Nothing needs fixing'
         return 'Everything checks out'
 
     @property
@@ -461,7 +469,7 @@ class Window:
         if counts['fail']:
             parts.append(f"{counts['fail']} failing")
         if counts['warn']:
-            parts.append(f"{counts['warn']} to know about")
+            parts.append(plural(counts['warn'], 'note'))
         parts.append(f"{counts['ok']} passed")
         second = ('Kernel ' + self.state.get('kernel', '?') + ' · '
                   + ('checking now' if self.checking
@@ -557,8 +565,11 @@ class Window:
         """The filter segment, and the copy affordance opposite it."""
         c, y = self.colors, self.BAR_Y
         counts = tally(self.rows)
-        self.segments = ([('attention', f"Needs attention {counts['fail'] + counts['warn']}"),
-                          ('all', f'All {len(self.rows)}')]
+        # "Needs attention" only when something actually does; a run whose
+        # findings are all notes should not be labelled as needing anything.
+        lead = (f"Needs attention {counts['fail'] + counts['warn']}"
+                if counts['fail'] else f"Notes {counts['warn']}")
+        self.segments = ([('attention', lead), ('all', f'All {len(self.rows)}')]
                          if self.unhappy else [])
         self.seg_rects = []
         if self.segments:

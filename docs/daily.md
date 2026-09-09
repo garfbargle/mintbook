@@ -96,8 +96,15 @@ window — same palette source, same `appearance.applied` light/dark, same
 - A **summary card**: one sentence for the machine's state, the counts under it,
   and the kernel the answer belongs to. Green tick, amber triangle, red circle —
   shape as well as colour, so the state does not depend on seeing hue.
-- **Needs attention / All**, defaulting to attention when there is any. With
-  nothing to filter the segment is not drawn at all.
+- **A warning is not a fault**, and the wording keeps that straight. `doctor`
+  exits 0 on a run with nothing but warnings in it, and several of them —
+  `cpu mitigations`, `thermald`, the trimmable services — are recorded policy
+  rather than a problem. So a failure gives *"1 check needs attention"*, notes
+  alone give *"Nothing needs fixing"* over the count, and a clean run gives
+  *"Everything checks out"*. The findings are one line below either way.
+- **Needs attention / All**, defaulting to the first when there is anything in
+  it — labelled **Notes** instead when nothing is failing, for the same reason.
+  With nothing to filter the segment is not drawn at all.
 - Findings **grouped under doctor's own section headings**. `doctor --tsv` prints
   those headings now; grouping the desktop view by guessing at label text would
   be a second, quietly diverging opinion about what belongs together.
