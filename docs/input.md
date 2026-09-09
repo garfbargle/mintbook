@@ -1,12 +1,12 @@
 # Input — Apple SPI keyboard and trackpad
 
-**Status: working at boot; deep sleep proven broken; s2idle ready for verification.** Three separate
+**Status: working at boot; deep sleep proven broken; s2idle verified.** Three separate
 problems:
 
 | | |
 |---|---|
 | Dead at boot | **Fixed.** `dw_dmac_pci` is blacklisted, so SPI always uses PIO. |
-| Dead after sleep | **Deep S3 proven broken.** A controlled 2026-09-08 cycle captured 47 timeouts and a failed reprobe. `bin/input-install` now selects s2idle at boot; its first controlled cycle is next. |
+| Dead after sleep | **Fixed with s2idle.** A controlled 2026-09-08 deep cycle captured 47 timeouts and a failed reprobe; a 2026-09-09 s2idle cycle returned both devices with zero timeouts. |
 | Palm / typing | **Quirk installed.** Disable-while-typing was a no-op until the keyboard was marked internal. **Log out once** for Xorg to reload it. |
 
 `bin/input-check` reports all three. `sudo bin/input-install` copies the quirk and
@@ -237,10 +237,11 @@ or write `deep` to `/sys/power/mem_sleep`.
 
 ### Verification status
 
-Deep S3 and the old recovery are conclusively failed. The next controlled cycle
-must verify s2idle: arm `sleep-report`, close the lid, and confirm zero Apple SPI
-timeouts plus working keyboard and trackpad. Several longer cycles are needed to
-measure the battery tradeoff.
+Deep S3 and the old recovery are conclusively failed. A controlled 25-second
+s2idle cycle on 2026-09-09 returned the keyboard and trackpad, logged a successful
+`modeswitch done.`, and had zero Apple SPI timeouts. Wi-Fi reconnected in 5.5
+seconds; Bluetooth and PipeWire were present. Several longer cycles are still
+needed to measure the battery tradeoff.
 
 ### The sleep black box
 
@@ -290,7 +291,7 @@ Validation covers clean, failed, deep and s2idle resume fixtures,
 charger transitions, a rising battery gauge, journal filtering, kernel timing and
 report formatting. The complete 35-test suite passes. The first live capture found
 the deep-sleep failure above and persisted it across the required reboot. A second
-capture remains armed for the first s2idle cycle. The 2026-09-08/09 overnight lid
+capture verified the s2idle recovery above. The 2026-09-08/09 overnight lid
 close did not exercise it: the laptop was on external power, Xfce's AC lid action
 was absent, and the journal contains no suspend entry. The machine stayed awake and
 warm until morning. Both lid actions are now installed as Suspend, with their prior

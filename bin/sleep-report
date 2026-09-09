@@ -281,7 +281,9 @@ def format_report(report):
     else:
         lines.append('  battery .......... not measured · ' + drain['reason'])
     kernel = (f"{report['kernel_resume_seconds']:.2f}s kernel wake"
-              if report['kernel_resume_seconds'] is not None else 'journal timing unavailable')
+              if report['kernel_resume_seconds'] is not None else
+              ('no separate S3 wake phase' if before.get('sleep_mode') == 's2idle'
+               else 'journal timing unavailable'))
     lines.append(f"  resume ........... {kernel}")
     inputs = after['input']
     lines.append('  built-in input ... ' + ('keyboard + trackpad present'

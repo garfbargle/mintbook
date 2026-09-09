@@ -108,6 +108,7 @@ class SleepReportTests(unittest.TestCase):
                                60, 1060, rows)
         self.assertEqual(report['verdict'], 'pass')
         self.assertNotIn('journal has no applespi rebind result', report['notes'])
+        self.assertIn('no separate S3 wake phase', sleep.format_report(report))
 
     def test_journal_keeps_resume_markers_and_errors(self):
         source = '\n'.join(json.dumps(item) for item in (

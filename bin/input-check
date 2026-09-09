@@ -87,13 +87,14 @@ else
   echo "sleep fix: NOT enabled - the safe mode will not survive a reboot"
 fi
 
-# What happened on this boot's most recent wake, if there was one.
-wakes=$(journalctl -b -k --no-pager 2>/dev/null | grep -c 'Waking up from system sleep')
+# What happened on this boot's most recent sleep cycle. S3 emits an ACPI
+# "Waking up" marker; s2idle does not, so PM: suspend exit is the common marker.
+wakes=$(journalctl -b -k --no-pager 2>/dev/null | grep -c 'PM: suspend exit')
 if [ "$wakes" -eq 0 ]; then
   echo "     (no resume yet this boot - nothing to judge)"
 else
   post=$(journalctl -b -k --no-pager 2>/dev/null \
-           | awk '/Waking up from system sleep/{n++} n' )
+           | awk '/PM: suspend entry/{cycle=""; found=1} found {cycle=cycle $0 ORS} END {printf "%s", cycle}')
   to=$(printf '%s\n' "$post" | grep -c 'SPI transfer timed out')
   ms=$(printf '%s\n' "$post" | grep -c 'modeswitch done')
   echo "     resumes this boot ...... $wakes"
