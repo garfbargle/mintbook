@@ -406,6 +406,102 @@ ACP still exposes IEC958 when the jack is unplugged — leave it unused.
 Bluetooth audio needs `hci0`. That adapter is working on 7.0 after the
 SSDC/UART DSDT override — [bluetooth.md](bluetooth.md). Not this codec.
 
+### `mb81-resume-recover` fails on every resume — the greeter's PipeWire, 2026-09-09
+
+`bin/doctor` reports `FAIL failed units mb81-resume-recover.service` under
+Housekeeping. The unit is not mintbook's: `/usr/local/bin/mb81-resume-recover`
+comes from the third-party MacBook8,1 speaker project's `install.sh`, alongside
+`efi_recover.py`. Nothing in this repo references it.
+
+It has never once succeeded on this machine — 2/2 runs failed, both identically:
+
+```
+=== 2/5: unload the whole HDA stack so 00:1b.0 sits UNOWNED ===
+FAIL: 00:1b.0 still bound after unload:
+/sys/bus/pci/devices/0000:00:1b.0/driver -> ../../../bus/pci/drivers/snd_hda_intel
+Something still holds the module. Reboot to recover.
+```
+
+**The holder is the LightDM greeter's own PipeWire, running as uid 113.**
+
+Step 1 of the script stops PipeWire, WirePlumber and the jack-switch *for one
+user* — it resolves that user with
+`loginctl list-users --no-legend | awk '$1>=1000{print $2; exit}'`, which yields
+`cobo` and nothing else. But `pipewire.socket`, `pipewire.service` and
+`wireplumber.service` are enabled `--global`, so **every** session gets a full
+stack, including the greeter session LightDM opens on resume to draw the unlock
+screen. That greeter is uid 113 — excluded by the `$1>=1000` filter, and by the
+`exit` that stops at the first user regardless.
+
+The interleaving is visible in the journal, and is the same on both runs:
+
+```
+21:30:44  lightdm[]: pam_unix(lightdm-greeter:session): session opened for user lightdm(uid=113)
+21:30:44  sudo: COMMAND=/usr/bin/systemctl --user stop pipewire.socket ... wireplumber.service
+21:30:44  kernel: snd_hda_codec_cs420x hdaudioC1D0: MB81 TDM CLEANUP   <- cobo's stream closes
+21:30:44  systemd[1]: Started user@113.service - User Manager for UID 113
+21:30:44  systemd[643958]: Started pipewire.service                    <- the greeter's
+21:30:44  systemd[643958]: Started wireplumber.service                 <-   "
+21:30:45  kernel: snd_hda_codec_cs420x hdaudioC1D0: MB81 TDM OPEN      <- greeter grabs the codec
+21:30:46  mb81-resume-recover: FAIL: 00:1b.0 still bound after unload
+```
+
+`MB81 TDM OPEN` lands inside the script's single `sleep 1`, so `modprobe -r
+snd_hda_intel` runs against a codec that was reopened about a second earlier.
+The greeter's WirePlumber also logs `Error opening low-level control device
+'hw:1'` in the same instant — it is enumerating cards while the script tears
+them down.
+
+The script's `2>/dev/null` on every `rmmod`/`modprobe -r` is why none of this
+reached the log: the kernel's `Module snd_hda_intel is in use` never appeared,
+so the failure said only "something still holds the module".
+
+#### Measured, not assumed
+
+Stopping the same units by hand, with no greeter session running, releases the
+module fully and within the script's own 1-second budget:
+
+```bash
+systemctl --user stop mb81-jack-switch.service
+systemctl --user stop pipewire.socket pipewire-pulse.socket \
+    pipewire.service pipewire-pulse.service wireplumber.service
+sleep 1; cat /sys/module/snd_hda_intel/refcnt      # 0
+lsof /dev/snd/*                                    # empty
+# undo:
+systemctl --user start pipewire.socket pipewire-pulse.socket \
+    pipewire.service pipewire-pulse.service wireplumber.service
+sleep 3; systemctl --user start mb81-jack-switch.service
+```
+
+So the settle time is adequate and no ordinary desktop app holds `/dev/snd`
+directly — refcount tracks open card fds exactly (4 fds open = `refcnt` 4:
+`controlC0` from pipewire, wireplumber and alsactl, plus `pcmC0D1p` from
+pipewire). Firefox and the Electron apps play through PipeWire and never appear.
+`user@113.service` happens to be inactive between greeter appearances, which is
+why the failure looks intermittent from `lsof` but is in fact 2/2.
+
+#### Side effect: HDMI audio stays dead until reboot
+
+Step 2 unbinds `0000:00:03.0` (the Broadwell-U HDMI controller, `card1` at boot)
+*before* the unload it never completes, then exits without rebinding it. After a
+failed run `/proc/asound/cards` lists only the PCH card, and
+`/sys/bus/pci/devices/0000:00:03.0/driver` is gone until the next boot.
+
+Every Audio check in `bin/doctor` still passes, because they all look at the
+CS4208 on card 0. Internal speakers genuinely work — the codec never needed
+healing on these s2idle cycles (`coef 0x1f` was not latched), which is the other
+half of why a permanently red unit is misleading here.
+
+#### Not yet fixed
+
+`/usr/local/bin/mb81-resume-recover` is root-owned, outside this repo, and
+replaced by the upstream `install.sh`. Nothing has been changed yet — see the
+open question in the commit that added this section.
+
+Do **not** clear it with `systemctl reset-failed mb81-resume-recover.service`.
+That turns doctor green without the service working, and the next resume fails
+again.
+
 ---
 
 ## Reverting
