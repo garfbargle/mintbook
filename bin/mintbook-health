@@ -131,7 +131,7 @@ def check(only_changed=False, notify=False):
         rows = parse(result.stdout)
         complete = any(line.startswith('summary\t') for line in result.stdout.splitlines())
         if not rows or not complete or result.returncode not in (0, 1):
-            raise RuntimeError('System check could not complete. Run bin/doctor in a terminal.')
+            raise RuntimeError('doctor did not finish — its output was incomplete.')
         state = dict(kernel=kernel, checked=time.time(), rows=rows)
         tmp = STATE.with_suffix('.tmp')
         tmp.write_text(json.dumps(state))
@@ -184,7 +184,7 @@ def ago(stamp):
 # Everything below is only reached by `show()`, which imports GTK. The parsing
 # and checking above stay importable without a display.
 
-W, PAD, GAP, SHADOW, RADIUS, CARD = 720, 18, 10, 18, 20, 13
+W, PAD, SHADOW, RADIUS, CARD = 720, 18, 18, 20, 13
 SC = 1.0                     # resolved from the desktop when opening the window
 DOT_X, TEXT_X = 27, 48       # the status glyph, and where every row's text starts
 
@@ -447,7 +447,12 @@ class Window:
     @property
     def subtitles(self):
         if self.error:
-            return [self.error, '']
+            # Whatever went wrong in its own words, then where to go and look —
+            # and, because the findings below it are still on screen, how old
+            # the answer they came from is.
+            stale = ('Showing the last check, ' + ago(self.state['checked']) + '. '
+                     if self.rows else '')
+            return [self.error, stale + 'Run bin/doctor in a terminal to see it.']
         if not self.rows:
             return ['Running the checks for the first time.' if self.checking
                     else 'Choose Check again to run the checks.', '']
@@ -915,7 +920,7 @@ class Window:
         if self.checking:
             return
         self.checking = True
-        self.spin = GLib.timeout_add(90, self.tick)
+        GLib.timeout_add(90, self.tick)
 
         def worker():
             try:
