@@ -179,7 +179,15 @@ fi
 
 section "Audio"
 if grep -q '^snd_hda_codec_cs420x ' /proc/modules; then ok "CS4208 codec module" "snd_hda_codec_cs420x"; else bad "CS4208 codec module" "not loaded"; fi
-if aplay -l 2>/dev/null | grep -qi 'CS4208\|MacBook'; then ok "playback device" "$(aplay -l 2>/dev/null | grep -m1 -i 'CS4208\|MacBook' | cut -c1-60)"; else warn "playback device" "no CS4208 card in aplay -l"; fi
+# Named, not cut: a fixed-width cut of the aplay line lands mid-word and the
+# detail stops saying anything. Card and device index still matter — the EQ
+# sink has to point at the analog device, not the raw speaker one.
+APLAY=$(aplay -l 2>/dev/null | grep -m1 -i 'CS4208\|MacBook')
+if [ -n "$APLAY" ]; then
+  ok "playback device" "$(printf '%s' "$APLAY" | sed -n 's/^card \([0-9]*\).*device \([0-9]*\): \([^[]*[^[ ]\).*/card \1 device \2 — \3/p')"
+else
+  warn "playback device" "no CS4208 card in aplay -l"
+fi
 check "macbook12-audio dkms" "built for $KREL" bash -c "dkms status macbook12-audio 2>/dev/null | grep -q \"$KREL.*installed\""
 # power_save=0 is load-bearing, not an oversight. The CS4208 class-D amp rails
 # are set once by EFI and the driver never re-drives them, so a runtime-PM D3
