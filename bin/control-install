@@ -18,7 +18,7 @@ PLUGIN=25
 
 #   1 app grid     7 separator  8 systray  10 xapp-status  19 cpu sparkline
 #  17 temperature  21 bluetooth 18 wifi    11 battery      25 control
-#  13 clock
+#  13 clock        27 overview
 #
 # CPU and temperature stay on the bar deliberately: they are readings you
 # glance at, not settings you open something to change. Everything that is a
@@ -52,7 +52,14 @@ if [ -r "$STATE/bluetooth.conf" ]; then
   bid=$(sed -n 's/^PANEL_ID=\([0-9]*\).*/\1/p' "$STATE/bluetooth.conf" | head -1)
   if [ -n "$bid" ]; then BLUETOOTH=("$bid"); fi
 fi
-VISIBLE=(1 7 8 10 "${UPDATES[@]}" 19 17 "${BLUETOOTH[@]}" 18 "$BATTERY" $PLUGIN 13)
+# Overview is a separately installable launcher. Keep its far-right seat when
+# this installer is rerun after bin/overview-install.
+OVERVIEW=()
+if [ -r "$STATE/overview.conf" ]; then
+  oid=$(sed -n 's/^PANEL_ID=\([0-9]*\).*/\1/p' "$STATE/overview.conf" | head -1)
+  if [ -n "$oid" ]; then OVERVIEW=("$oid"); fi
+fi
+VISIBLE=(1 7 8 10 "${UPDATES[@]}" 19 17 "${BLUETOOTH[@]}" 18 "$BATTERY" $PLUGIN 13 "${OVERVIEW[@]}")
 #  21 bluetooth (unless bt-panel-install has claimed it above)
 #  22 power profile  23 night light  24 appearance
 #  12 volume — its plugin was also the XF86Audio grab, so bin/volume-key
@@ -133,7 +140,7 @@ for pair in "XF86AudioRaiseVolume:up" "XF86AudioLowerVolume:down" \
 done
 
 echo
-echo "bar: app grid · systray${UPDATES:+ · updates} · cpu · temp${BLUETOOTH:+ · bluetooth} · wi-fi · battery · control · clock"
+echo "bar: app grid · systray${UPDATES:+ · updates} · cpu · temp${BLUETOOTH:+ · bluetooth} · wi-fi · battery · control · clock${OVERVIEW:+ · overview}"
 echo "behind the click: ${RETIRED[*]}"
 echo "plugins: $SHARE/plugins"
 echo "undo: $(basename "$0") --revert"

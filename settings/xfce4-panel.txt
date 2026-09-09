@@ -35,6 +35,7 @@
 /plugins/plugin-1/items                       <<UNSUPPORTED>>
 /plugins/plugin-2                             showdesktop
 /plugins/plugin-21                            genmon
+/plugins/plugin-27                            genmon
 /plugins/plugin-3                             launcher
 /plugins/plugin-3/items                       <<UNSUPPORTED>>
 /plugins/plugin-4                             launcher

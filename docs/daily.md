@@ -7,14 +7,14 @@ The installed files link to this checkout, which must remain at its current path
 `bin/daily-install --revert` restores the prior files, shortcuts, lid actions and health timer;
 backup files are retained in `~/.local/state/mintbook/daily-before-*`.
 
-## Spotlight actions
+## Overview actions
 
 Cmd+Space combines rofi's application mode with a curated script mode. Search
 for `dark`, `Bluetooth`, `battery history`, `health`, `updates`, `keep awake` or
 `sleep check`.
 The app grid's first-keystroke handoff seeds the same combined search.
 
-`bin/spotlight-actions` supplies labels, keywords and fixed IDs. Selection launches
+`bin/spotlight-actions` supplies Overview's labels, keywords and fixed IDs. Selection launches
 only the corresponding fixed argv list, detached from rofi's pipes. Custom text
 never becomes a command. Unavailable backends do not appear. Existing application
 search remains available if the actions helper is missing.
@@ -31,7 +31,7 @@ reconsider a lid that was already closed when the charger is later unplugged.
 ## Keep Awake
 
 The Control Center switch starts a 30-minute timer or stops the active one.
-Spotlight offers 30 minutes, one hour and two hours. Remaining minutes appear in
+Overview offers 30 minutes, one hour and two hours. Remaining minutes appear in
 the tile. A transient user systemd service holds both the power manager's and
 screensaver's D-Bus inhibitors until expiry. Stopping the service releases them;
 process exit releases the D-Bus ownership too. Nothing rewrites power settings.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fullscreen glass application grid with a first-keystroke Spotlight handoff."""
+"""Fullscreen glass application grid with a first-keystroke Overview handoff."""
 
 import fcntl
 import math
@@ -20,7 +20,7 @@ from gi.repository import Gdk, Gio, GLib, Gtk, Pango
 HOME = os.path.expanduser('~')
 PIDFILE = os.path.join(HOME, '.cache', 'mintbook', 'app-grid.pid')
 APPLIED = os.path.join(HOME, '.config', 'mintbook', 'appearance.applied')
-SPOTLIGHT = os.path.join(HOME, '.local', 'bin', 'spotlight')
+OVERVIEW = os.path.join(HOME, '.local', 'bin', 'overview')
 
 LIGHT = {
     'top': (229, 231, 234, .91), 'bottom': (202, 205, 210, .89),
@@ -245,7 +245,7 @@ class AppGrid:
         title.set_margin_start(22)
         topbar.pack_start(title, False, False, 0)
 
-        hint = Gtk.Label(label='Just start typing  ·  Spotlight search')
+        hint = Gtk.Label(label='Just start typing  ·  Overview search')
         hint.get_style_context().add_class('search-hint')
         topbar.pack_end(hint, False, False, 8)
 
@@ -351,16 +351,16 @@ class AppGrid:
         if codepoint and not (event.state & blocked):
             char = chr(codepoint)
             if char.isprintable() and not char.isspace():
-                self.handoff_to_spotlight(char)
+                self.handoff_to_overview(char)
                 return True
         return False
 
-    def handoff_to_spotlight(self, text):
+    def handoff_to_overview(self, text):
         if self.handing_off:
             return
         self.handing_off = True
         self.win.hide()
-        subprocess.Popen([SPOTLIGHT, '--filter', text], start_new_session=True,
+        subprocess.Popen([OVERVIEW, '--filter', text], start_new_session=True,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         GLib.timeout_add(80, self.win.destroy)
 

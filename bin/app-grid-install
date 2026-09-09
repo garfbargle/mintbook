@@ -30,6 +30,7 @@ fi
 
 install -dm755 "$BIN" "$APPS"
 install -m755 "$ROOT/bin/app-grid" "$BIN/app-grid"
+install -m755 "$ROOT/bin/overview" "$BIN/overview"
 install -m755 "$ROOT/bin/spotlight" "$BIN/spotlight"
 install -m644 "$ROOT/config/applications/$DESKTOP" "$APPS/$DESKTOP"
 desktop-file-validate "$APPS/$DESKTOP"
@@ -43,5 +44,5 @@ xfconf-query -c xfce4-keyboard-shortcuts -p /commands/custom/Super_L -s /bin/tru
 nohup xfce4-panel >/dev/null 2>&1 &
 sleep 1
 echo "app grid installed: panel button"
-echo "Spotlight remains: Super+Space"
+echo "Overview remains: Super+Space"
 echo "undo: $(basename "$0") --revert"

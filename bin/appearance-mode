@@ -60,14 +60,14 @@ fi
 # reason. Quoted like this, both a `.` and a naive parser get '#ffffff'.
 printf "PANEL_FOREGROUND='%s'\n" "$foreground" > "$env_file"
 install -m644 "$css" "$HOME/.config/gtk-3.0/gtk.css"
-# Spotlight reads its theme at launch, so this needs no reload of anything.
+# Overview reads its theme at launch, so this needs no reload of anything.
 install -m644 "$rasi" "$HOME/.config/rofi/palette.rasi"
 
 xfconf-query -c xfce4-panel -p /panels/panel-1/background-rgba \
   -t double -s "${rgba[0]}" -t double -s "${rgba[1]}" \
   -t double -s "${rgba[2]}" -t double -s "${rgba[3]}"
 
-for generator in generate-wifi-genmon.py generate-bt-genmon.py generate-power-genmon.py generate-night-genmon.py generate-appearance-genmon.py generate-control-genmon.py generate-updates-genmon.py; do
+for generator in generate-wifi-genmon.py generate-bt-genmon.py generate-power-genmon.py generate-night-genmon.py generate-appearance-genmon.py generate-control-genmon.py generate-updates-genmon.py generate-overview-genmon.py; do
   MINTBOOK_PANEL_FG="$foreground" python3 "$root/icons/$generator"
 done
 

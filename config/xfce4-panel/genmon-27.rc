@@ -1,0 +1,6 @@
+Command=/home/cobo/.local/bin/panel-overview
+UpdatePeriod=86400000
+Text=
+Font=Inter 9
+UseLabel=0
+SingleRow=1

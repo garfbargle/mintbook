@@ -1,11 +1,11 @@
-/* macOS Spotlight-style rofi theme — tuned for 2304x1440 @ Xft.dpi 168
+/* Mintbook Overview rofi theme — tuned for 2304x1440 @ Xft.dpi 168
  *
  * rofi lays px out literally (it does not scale them by Xft.dpi), so every
  * size here is a real device pixel on the Retina panel: ~1.7x the values a
- * 96dpi theme would use, which is what puts it at macOS Spotlight's size.
+ * 96dpi theme would use, which gives Overview the intended optical size.
  *
  * Colours are not here. palette.rasi is whichever of palette-light.rasi /
- * palette-dark.rasi bin/appearance-mode installed, so Spotlight turns over at
+ * palette-dark.rasi bin/appearance-mode installed, so Overview turns over at
  * sunset with the bar and the Control Center. rofi reads its theme at launch,
  * so the next Cmd+Space is already in the new appearance. */
 
@@ -50,7 +50,7 @@ prompt {
 }
 
 entry {
-    placeholder:                 "Spotlight Search";
+    placeholder:                 "Search apps and actions";
     placeholder-color:           @fg-dim;
     font:                        "Inter 30";
     vertical-align:              0.5;

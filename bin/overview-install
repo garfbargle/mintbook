@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# overview-install — put the Overview search launcher at the far right of the
+# top bar and bind Super+Space to the same surface. No root.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+BIN="$HOME/.local/bin"
+PANEL_RC="$HOME/.config/xfce4/panel"
+ROFI="$HOME/.config/rofi"
+STATE="$HOME/.config/mintbook"
+PLUGIN=27
+SHORTCUT='/commands/custom/<Super>space'
+
+[ -n "${DISPLAY:-}" ] || { echo "DISPLAY is unset" >&2; exit 1; }
+
+current_ids() {
+  xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids 2>/dev/null \
+    | grep -oE '^[0-9]+$'
+}
+
+write_ids() {
+  local args=(); local id
+  for id in "$@"; do args+=(-t int -s "$id"); done
+  [ ${#args[@]} -gt 0 ] || { echo "refusing to write an empty panel" >&2; return 1; }
+  xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids --force-array "${args[@]}"
+}
+
+reorder() {
+  local want=$1 id out=()
+  while read -r id; do
+    [ "$id" = "$PLUGIN" ] || out+=("$id")
+  done < <(current_ids)
+  [ "$want" = add ] && out+=("$PLUGIN")
+  printf '%s\n' "${out[@]}"
+}
+
+apply_panel() {
+  local want=$1 ids=() id
+  while read -r id; do [ -n "$id" ] && ids+=("$id"); done < <(reorder "$want")
+  xfce4-panel -q 2>/dev/null || true
+  sleep 0.4
+  write_ids "${ids[@]}"
+  nohup xfce4-panel >/dev/null 2>&1 &
+  sleep 1
+}
+
+if [ "${1:-}" = --revert ]; then
+  echo "==> taking Overview off the bar"
+  apply_panel remove
+  rm -f "$STATE/overview.conf"
+  # Keep the established command usable for old snapshots and integrations.
+  xfconf-query -c xfce4-keyboard-shortcuts -p "$SHORTCUT" -r 2>/dev/null || true
+  xfconf-query -c xfce4-keyboard-shortcuts -p "$SHORTCUT" -n -t string \
+    -s "$BIN/spotlight"
+  echo "Overview is no longer on the bar; Super+Space still opens it"
+  exit 0
+elif [ "$#" -ne 0 ]; then
+  echo "usage: $(basename "$0") [--revert]" >&2
+  exit 2
+fi
+
+echo "==> Overview command and panel widget"
+install -dm755 "$BIN" "$PANEL_RC" "$ROFI" "$STATE"
+for file in overview spotlight panel-overview app-grid; do
+  rm -f "$BIN/$file"
+  install -m755 "$ROOT/bin/$file" "$BIN/$file"
+done
+install -m644 "$ROOT/config/rofi/spotlight.rasi" "$ROFI/spotlight.rasi"
+
+FG='#ffffff'
+# shellcheck disable=SC1090
+[ -r "$STATE/system-chrome.env" ] \
+  && . "$STATE/system-chrome.env" \
+  && FG=$PANEL_FOREGROUND
+MINTBOOK_PANEL_FG="$FG" python3 "$ROOT/icons/generate-overview-genmon.py"
+sed "s|^Command=.*|Command=$BIN/panel-overview|" \
+  "$ROOT/config/xfce4-panel/genmon-$PLUGIN.rc" > "$PANEL_RC/genmon-$PLUGIN.rc"
+printf 'PANEL_ID=%s\n' "$PLUGIN" > "$STATE/overview.conf"
+
+echo "==> Super+Space"
+xfconf-query -c xfce4-keyboard-shortcuts -p "$SHORTCUT" -r 2>/dev/null || true
+xfconf-query -c xfce4-keyboard-shortcuts -p "$SHORTCUT" -n -t string \
+  -s "$BIN/overview"
+
+echo "==> far right of the top bar"
+xfconf-query -c xfce4-panel -p "/plugins/plugin-$PLUGIN" -n -t string -s genmon \
+  2>/dev/null || true
+apply_panel add
+
+echo
+echo "Overview installed: click the far-right search icon or press Super+Space"
+echo "undo: $(basename "$0") --revert"

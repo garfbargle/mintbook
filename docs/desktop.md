@@ -4,7 +4,7 @@
 > [daily.md](daily.md). Earlier measurements below retain their original scope.
 
 Making XFCE on this machine look and behave like macOS: the top bar, the dock,
-Spotlight, the window manager and the panel indicators.
+Overview, the window manager and the panel indicators.
 
 Scaling and DPI are **not** here — see [display.md](display.md).
 
@@ -80,12 +80,12 @@ indicator inherited it from the retired `genmon-24` sun/moon icon, which is why
 a bar icon that never changes still has an update period at all.
 
 [`bin/appearance-mode`](../bin/appearance-mode) applies the surface, panel-only
-foreground CSS, the Spotlight palette and regenerated Mintbook status icons
+foreground CSS, the Overview palette and regenerated Mintbook status icons
 together. It writes the
 desired mode to `~/.config/mintbook/appearance.mode`; `auto` remains there even
 when the currently applied surface is Light or Dark. The custom Wi-Fi,
 Bluetooth, power, Night Light, CPU, and temperature indicators therefore switch
-with the bar, and so do the Control Center and Spotlight.
+with the bar, and so do the Control Center and Overview.
 
 > **The CPU sparkline did not, until 2026-09-06,** even though this said it
 > did. It was black in both appearances — right by accident on pearl, wrong on
@@ -135,10 +135,11 @@ Plugin order (`plugin-ids`), left to right:
 | 26 | genmon | battery — click opens [`bin/battery-menu`](../bin/battery-menu); see [battery.md](battery.md) |
 | 25 | genmon | **Control Center** — see [control-center.md](control-center.md) |
 | 13 | clock | ` %a %-d %b  %H:%M  `, Inter 11, `digital-layout=3` (time only) |
+| 27 | genmon | **Overview** — click opens app and action search; hover teaches `Super + Space` |
 
-Right-to-left: **date/time, Control Center, battery, wifi, bluetooth,
+Right-to-left: **Overview, date/time, Control Center, battery, wifi, bluetooth,
 temperature, CPU, then the rest.** This follows the macOS convention — the
-clock is furthest right, then Control Center, then battery, Wi-Fi and
+search affordance is furthest right, then the clock, Control Center, battery, Wi-Fi and
 Bluetooth. Informational items (temp,
 CPU) sit inboard of the system status group, and anything unrecognised
 accumulates right-to-left from the far left of the group. mintUpdate's own icon
@@ -183,10 +184,10 @@ light/dark foreground instead of using WhiteSur's fixed black symbolic SVGs.
 Session-ending actions use a confirmation dialog; Escape, Super, or the close
 button dismisses the grid.
 
-Any printable key hides the grid and starts the existing centered Spotlight
+Any printable key hides the grid and starts the existing centered Overview
 launcher with that first character already in its query. The panel button opens
 the grid; Super stays inert so it cannot also fire during Super+Space, which
-continues to open Spotlight directly. [`bin/app-grid-install`](../bin/app-grid-install)
+continues to open Overview directly. [`bin/app-grid-install`](../bin/app-grid-install)
 installs the launcher; `app-grid-install --revert` restores Whisker.
 
 ### CPU sparkline (`plugin-19`, genmon)
@@ -788,17 +789,22 @@ margin_top=52                    # fallback only; the panel's strut is the real 
 show_dock_shadow=false           # see Gotchas
 ```
 
-### Spotlight (rofi)
+### Overview (rofi)
 
-`Cmd+Space` runs [`bin/spotlight`](../bin/spotlight), which toggles
+`Cmd+Space` runs [`bin/overview`](../bin/overview), which toggles
 `rofi -show drun` with [`config/rofi/spotlight.rasi`](../config/rofi/spotlight.rasi):
 centred, 52% wide, 14% from the top, translucent glass, rounded 24px, fuzzy
 matching.
 
+[`bin/overview-install`](../bin/overview-install) also adds a dedicated search
+icon as plugin 27, after the clock at the far-right edge of the top bar. Clicking
+it opens Overview; its tooltip reads `Open with Super + Space`. The old
+`bin/spotlight` name remains as a compatibility shim for existing integrations.
+
 <p align="center">
-  <img src="images/spotlight-light.jpg" alt="Spotlight, pearl" width="46%">
+  <img src="images/spotlight-light.jpg" alt="Overview, pearl" width="46%">
   &nbsp;
-  <img src="images/spotlight-dark.jpg" alt="Spotlight, slate" width="46%">
+  <img src="images/spotlight-dark.jpg" alt="Overview, slate" width="46%">
 </p>
 
 **It follows the appearance mode.** The theme file holds no colours at all — it
@@ -823,7 +829,7 @@ lightness reads as fog rather than glass.
 Sizes in the theme are **real device pixels** — rofi 1.7.5 lays `px` out
 literally and does not scale it by `Xft.dpi`, so on this 168dpi panel a
 96dpi-sized theme comes out at ~0.6x. The theme is written ~1.7x up to land at
-macOS Spotlight's apparent size: 52px app icons, 80px rows, `Inter 30` in the
+the familiar macOS search surface's apparent size: 52px app icons, 80px rows, `Inter 30` in the
 search field, `Inter 18` in the list. Fonts follow the same rule (rofi renders
 them at 96dpi here), so a point size in this file is not the point size you
 would use in a GTK app.
@@ -832,7 +838,7 @@ would use in a GTK app.
 
 ```
 /commands/custom/Super_L                    = /bin/true              # frees the Super key
-/commands/custom/<Super>space               = ~/.local/bin/spotlight
+/commands/custom/<Super>space               = ~/.local/bin/overview
 /commands/custom/<Shift><Super>numbersign   = ~/.local/bin/screenshot -f  # Cmd+Shift+3
 /commands/custom/<Shift><Super>dollar       = ~/.local/bin/screenshot -r  # Cmd+Shift+4
 /commands/custom/<Shift><Super>percent      = ~/.local/bin/screenshot -w  # Cmd+Shift+5
@@ -846,7 +852,7 @@ Copy/paste is deliberately unchanged: **Ctrl+C / Ctrl+V** everywhere,
 
 This keyboard has **no Print key**, so the stock XFCE `Print` /
 `Shift+Print` / `Alt+Print` bindings are unreachable. Super is already the
-Cmd-like key (Spotlight), so the macOS chords are the ones that work:
+Cmd-like key (Overview), so the macOS chords are the ones that work:
 
 | Chord | What | Saved as |
 |---|---|---|
@@ -929,7 +935,7 @@ reliably appear, so the process sits there until killed. `-s` must be a
 
 - **The tool.** `xfce4-screenshooter -f -s /tmp/foo.png` writes a valid
   2304×1440 PNG immediately. No extra package (`scrot` / `maim` / `import`).
-- **Super_L = /bin/true eating chords.** `Cmd+Space` (Spotlight) still fires.
+- **Super_L = /bin/true eating chords.** `Cmd+Space` (Overview) still fires.
   Only the shifted number keys were wrong.
 - **Clipboard (`-c`).** `xclip` is not installed. `-f -c -s <dir>` sat for ~30s
   and then wrote a file anyway; skip `-c`.

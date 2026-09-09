@@ -50,7 +50,7 @@ def check(only_changed=False, notify=False):
         new = [r['label'] for r in rows if r['status'] == 'fail' and r['label'] not in before]
         if notify and new:
             subprocess.run(['notify-send', '-a', 'Mintbook', 'System needs attention',
-                            ', '.join(new) + '. Open “Check system health” in Spotlight.'], timeout=5)
+                            ', '.join(new) + '. Open “Check system health” in Overview.'], timeout=5)
         return state
 
 

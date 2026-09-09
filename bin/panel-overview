@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Static Overview launcher for xfce4-genmon-plugin.
+OVERVIEW="$HOME/.local/bin/overview"
+
+printf '<click>%s</click>\n<iconclick>%s</iconclick>\n' "$OVERVIEW" "$OVERVIEW"
+printf '<img>%s/.local/share/mintbook/overview.svg</img>\n' "$HOME"
+printf '<tool>Overview\nOpen with Super + Space</tool>\n'

@@ -8,6 +8,7 @@ import unittest
 import tempfile
 import json
 import os
+import subprocess
 import time
 from unittest.mock import patch
 import gi
@@ -31,6 +32,15 @@ def panel_class():
     return namespace['Panel']
 
 class DailyTests(unittest.TestCase):
+    def test_overview_panel_widget_teaches_shortcut(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(
+                [str(ROOT / 'bin/panel-overview')],
+                env={**os.environ, 'HOME': directory}, text=True,
+                capture_output=True, check=True)
+        self.assertIn(f'<click>{directory}/.local/bin/overview</click>', result.stdout)
+        self.assertIn('<tool>Overview\nOpen with Super + Space</tool>', result.stdout)
+
     def test_rofi_custom_input_cannot_execute(self):
         actions = load('spotlight-actions')
         with patch.dict(actions.os.environ, {'ROFI_RETV': '2', 'ROFI_INFO': 'dark'}), patch.object(actions.subprocess, 'Popen') as spawn:

@@ -6,7 +6,7 @@ Keep each change bounded and retain the measured decisions in the relevant doc.
 1. Read the relevant `docs/*.md` and the script's comments before editing. The
    docs distinguish measured results, user reports and untested ideas.
 2. Prefer existing `bin/` backends. A Control Center tile implements `read` and
-   `set <value>`; reads should be cheap and return actual system state. Spotlight
+   `set <value>`; reads should be cheap and return actual system state. Overview
    uses fixed action IDs and argv lists, never executes the user's search text.
 3. No ongoing work for a closed popup. Keep timers coarse; measure idle CPU and
    launch latency before adding polling or a resident process.

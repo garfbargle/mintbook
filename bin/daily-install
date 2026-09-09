@@ -14,7 +14,7 @@ HOME = Path.home()
 SAVED = HOME / '.config/mintbook/daily-install.json'
 BIN = HOME / '.local/bin'
 UNIT_DIR = HOME / '.config/systemd/user'
-SCRIPTS = ('spotlight', 'spotlight-actions', 'keep-awake', 'screenshot', 'screenshot-notify',
+SCRIPTS = ('overview', 'spotlight', 'spotlight-actions', 'keep-awake', 'screenshot', 'screenshot-notify',
            'window-place', 'mintbook-health', 'doctor', 'control-center', 'wifi-menu', 'bt-menu',
            'battery-menu', 'battery-history', 'sleep-report', 'updates-menu', 'mintbook_keys.py')
 PLUGINS = ('65-awake', '75-health')
@@ -150,7 +150,7 @@ def install():
         run('xfconf-query', '-c', channel, '-p', prop, *args)
     run('systemctl', '--user', 'daemon-reload')
     run('systemctl', '--user', 'enable', '--now', UNIT)
-    print('Installed. Cmd+Space searches apps and actions; Cmd+Left/Right places windows; Cmd+Down restores.')
+    print('Installed. Cmd+Space opens Overview; Cmd+Left/Right places windows; Cmd+Down restores.')
     print('Reopen Control Center to see Keep Awake and System Health. No panel restart needed.')
     print(f'Undo: {ROOT}/bin/daily-install --revert')
 

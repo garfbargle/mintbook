@@ -479,7 +479,7 @@ so `off` is not really on the table; the honest choice is between `auto`,
 ### 9. Acknowledge input in under 150 ms — **measured, and already inside it**
 
 The idea: what makes a machine feel fast is that *something* happens promptly,
-not that the work is finished. So the Spotlight launcher, which is the most-used
+not that the work is finished. So the Overview launcher, which is the most-used
 interaction on this desktop, should paint within about 150 ms of Cmd+Space.
 
 Measured, it already does:
@@ -530,9 +530,9 @@ bin/pixel-budget --undo            # back to native
 ### 9. Acknowledge input in under 150 ms
 
 What makes a machine feel fast is that *something* happens promptly, not that
-the work is finished. A launch indicator in plank or Spotlight the moment a key
+the work is finished. A launch indicator in plank or Overview the moment a key
 is pressed covers a cold-launch wait perceptually. It is the trick macOS used on
-this exact hardware. Spotlight here is ours to change.
+this exact hardware. Overview here is ours to change.
 
 ### 10. Render fewer pixels
 
