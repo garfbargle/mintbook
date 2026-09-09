@@ -82,6 +82,8 @@ the next normal sleep:
 battery loss, resume timing, input recovery, Wi-Fi, Bluetooth, audio and the
 relevant journal. It never suspends the machine itself. The first controlled
 result records the selected sleep mode; see [input](docs/input.md#the-sleep-black-box).
+The daily installer sets lid suspend on both battery and external power; Xfce's
+missing AC action previously left a closed, charging laptop awake overnight.
 
 `bin/hw-report` is live. Read-only. No sudo.
 

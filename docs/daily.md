@@ -1,10 +1,10 @@
 # Daily conveniences — 2026-09-07
 
 `bin/daily-install` enables this set in the current desktop session. It snapshots
-replaced files and the three window shortcuts before changing them, prints an
+replaced files, the three window shortcuts and lid actions before changing them, prints an
 undo command, and does not restart the panel. Reopen menus to see the changes.
 The installed files link to this checkout, which must remain at its current path.
-`bin/daily-install --revert` restores the prior files, shortcuts and health timer;
+`bin/daily-install --revert` restores the prior files, shortcuts, lid actions and health timer;
 backup files are retained in `~/.local/state/mintbook/daily-before-*`.
 
 ## Spotlight actions
@@ -23,6 +23,10 @@ search remains available if the actions helper is missing.
 suspends the machine. **Show last sleep result** puts the completed recovery and
 battery result in a notification. Details and terminal commands are in
 [input.md](input.md#the-sleep-black-box).
+
+Closing the lid suspends on both battery and external power. This prevents a
+plugged-in laptop from spending a closed-lid night awake and hot. Xfce does not
+reconsider a lid that was already closed when the charger is later unplugged.
 
 ## Keep Awake
 

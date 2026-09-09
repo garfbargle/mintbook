@@ -221,6 +221,10 @@ boot. Install it and retire the failed rebind hook with:
 sudo bin/input-install
 ```
 
+`bin/daily-install` also sets both Xfce lid actions to Suspend. This matters on
+external power: Xfce does not reconsider a lid that was already closed when the
+charger is later unplugged.
+
 The selected mode is visible between brackets:
 
 ```bash
@@ -282,11 +286,15 @@ append-only `history.jsonl`. `armed.json` exists only while armed (or after an
 expiry). `daily-install --revert` removes the command but deliberately retains
 the measurements.
 
-Validation on 2026-09-08 covers clean, failed, deep and s2idle resume fixtures,
+Validation covers clean, failed, deep and s2idle resume fixtures,
 charger transitions, a rising battery gauge, journal filtering, kernel timing and
-report formatting. The complete 34-test suite passes. The first live capture found
+report formatting. The complete 35-test suite passes. The first live capture found
 the deep-sleep failure above and persisted it across the required reboot. A second
-capture is armed for the first s2idle cycle.
+capture remains armed for the first s2idle cycle. The 2026-09-08/09 overnight lid
+close did not exercise it: the laptop was on external power, Xfce's AC lid action
+was absent, and the journal contains no suspend entry. The machine stayed awake and
+warm until morning. Both lid actions are now installed as Suspend, with their prior
+values included in `daily-install --revert`.
 
 ### Ruled out
 

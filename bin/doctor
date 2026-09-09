@@ -217,6 +217,13 @@ if [ "$SLEEP_MODE" = s2idle ]; then
 else
   bad "sleep mode" "${SLEEP_MODE:-unknown} — deep sleep kills Apple SPI input"
 fi
+LID_AC=$(xfconf-query -c xfce4-power-manager -p /xfce4-power-manager/lid-action-on-ac 2>/dev/null)
+LID_BAT=$(xfconf-query -c xfce4-power-manager -p /xfce4-power-manager/lid-action-on-battery 2>/dev/null)
+if [ "$LID_AC" = 1 ] && [ "$LID_BAT" = 1 ]; then
+  ok "lid suspend" "battery + external power"
+else
+  bad "lid suspend" "battery=${LID_BAT:-unset}, external power=${LID_AC:-unset} — closed lid may stay awake"
+fi
 if grep -qF 'Name="Apple SPI Touchpad"' /proc/bus/input/devices 2>/dev/null; then
   ok "touchpad present" "input survived this boot"
 else

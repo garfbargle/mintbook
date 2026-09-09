@@ -20,6 +20,10 @@ SCRIPTS = ('spotlight', 'spotlight-actions', 'keep-awake', 'screenshot', 'screen
 PLUGINS = ('65-awake', '75-health')
 UNIT = 'mintbook-health.timer'
 KEYS = {'<Super>Left': 'left', '<Super>Right': 'right', '<Super>Down': 'restore'}
+SETTINGS = (
+    ('xfce4-power-manager', '/xfce4-power-manager/lid-action-on-ac', 'uint', '1'),
+    ('xfce4-power-manager', '/xfce4-power-manager/lid-action-on-battery', 'uint', '1'),
+)
 
 
 def run(*argv, check=True):
@@ -44,24 +48,34 @@ def snapshot():
         known = {entry['path'] for entry in data['files']}
         added = [(source, dest) for source, dest in targets()
                  if str(dest) not in known]
-        if not added:
+        settings = data.setdefault('settings', {})
+        added_settings = []
+        for channel, prop, _kind, _value in SETTINGS:
+            key = channel + '\n' + prop
+            if key not in settings:
+                result = run('xfconf-query', '-c', channel, '-p', prop, check=False)
+                settings[key] = result.stdout.rstrip('\n') if result.returncode == 0 else None
+                added_settings.append(key)
+        if not added and not added_settings:
             return data
-        backup = (HOME / '.local/state/mintbook' /
-                  ('daily-added-' + time.strftime('%Y%m%d-%H%M%S') + '-'
-                   + str(time.time_ns() % 1000000000)))
-        backup.mkdir(parents=True)
-        for i, (_source, dest) in enumerate(added):
-            entry = dict(path=str(dest), backup=None)
-            if dest.exists() or dest.is_symlink():
-                copy = backup / str(i)
-                shutil.copy2(dest, copy, follow_symlinks=False)
-                entry['backup'] = str(copy)
-            data['files'].append(entry)
+        if added:
+            backup = (HOME / '.local/state/mintbook' /
+                      ('daily-added-' + time.strftime('%Y%m%d-%H%M%S') + '-'
+                       + str(time.time_ns() % 1000000000)))
+            backup.mkdir(parents=True)
+            for i, (_source, dest) in enumerate(added):
+                entry = dict(path=str(dest), backup=None)
+                if dest.exists() or dest.is_symlink():
+                    copy = backup / str(i)
+                    shutil.copy2(dest, copy, follow_symlinks=False)
+                    entry['backup'] = str(copy)
+                data['files'].append(entry)
         SAVED.write_text(json.dumps(data, indent=2))
         return data
     backup = HOME / '.local/state/mintbook' / ('daily-before-' + time.strftime('%Y%m%d-%H%M%S') + '-' + str(time.time_ns() % 1000000000))
     backup.mkdir(parents=True)
-    data = dict(files=[], keys={}, timer=run('systemctl', '--user', 'is-enabled', UNIT, check=False).returncode == 0)
+    data = dict(files=[], keys={}, settings={},
+                timer=run('systemctl', '--user', 'is-enabled', UNIT, check=False).returncode == 0)
     for i, (_, dest) in enumerate(targets()):
         entry = dict(path=str(dest), backup=None)
         if dest.exists() or dest.is_symlink():
@@ -74,6 +88,10 @@ def snapshot():
             prop = f'/{kind}/custom/{key}'
             result = run('xfconf-query', '-c', 'xfce4-keyboard-shortcuts', '-p', prop, check=False)
             data['keys'][prop] = result.stdout.rstrip('\n') if result.returncode == 0 else None
+    for channel, prop, _kind, _value in SETTINGS:
+        result = run('xfconf-query', '-c', channel, '-p', prop, check=False)
+        data['settings'][channel + '\n' + prop] = (result.stdout.rstrip('\n')
+                                                    if result.returncode == 0 else None)
     SAVED.parent.mkdir(parents=True, exist_ok=True)
     SAVED.write_text(json.dumps(data, indent=2))
     return data
@@ -92,6 +110,12 @@ def restore():
         run('xfconf-query', '-c', 'xfce4-keyboard-shortcuts', '-p', prop, '-r', check=False)
         if value is not None:
             run('xfconf-query', '-c', 'xfce4-keyboard-shortcuts', '-p', prop, '-n', '-t', 'string', '-s', value)
+    kinds = {channel + '\n' + prop: kind for channel, prop, kind, _value in SETTINGS}
+    for key, value in data.get('settings', {}).items():
+        channel, prop = key.split('\n', 1)
+        run('xfconf-query', '-c', channel, '-p', prop, '-r', check=False)
+        if value is not None:
+            run('xfconf-query', '-c', channel, '-p', prop, '-n', '-t', kinds[key], '-s', value)
     run('systemctl', '--user', 'daemon-reload')
     if data['timer']:
         run('systemctl', '--user', 'enable', '--now', UNIT)
@@ -120,6 +144,10 @@ def install():
         run('xfconf-query', '-c', 'xfce4-keyboard-shortcuts', '-p', prop, '-r', check=False)
         run('xfconf-query', '-c', 'xfce4-keyboard-shortcuts', '-p', prop, '-n', '-t', 'string',
             '-s', shlex.quote(str(BIN / 'window-place')) + ' ' + mode)
+    for channel, prop, kind, value in SETTINGS:
+        current = run('xfconf-query', '-c', channel, '-p', prop, check=False)
+        args = ('-s', value) if current.returncode == 0 else ('-n', '-t', kind, '-s', value)
+        run('xfconf-query', '-c', channel, '-p', prop, *args)
     run('systemctl', '--user', 'daemon-reload')
     run('systemctl', '--user', 'enable', '--now', UNIT)
     print('Installed. Cmd+Space searches apps and actions; Cmd+Left/Right places windows; Cmd+Down restores.')

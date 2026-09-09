@@ -103,6 +103,7 @@ class DailyTests(unittest.TestCase):
             with (patch.object(installer, 'HOME', base),
                   patch.object(installer, 'SAVED', saved),
                   patch.object(installer, 'KEYS', {}),
+                  patch.object(installer, 'SETTINGS', ()),
                   patch.object(installer, 'targets', return_value=[(base / 'source', destination)])):
                 data = installer.snapshot()
             self.assertEqual(len(data['files']), 1)
@@ -112,9 +113,25 @@ class DailyTests(unittest.TestCase):
             with (patch.object(installer, 'HOME', base),
                   patch.object(installer, 'SAVED', saved),
                   patch.object(installer, 'KEYS', {}),
+                  patch.object(installer, 'SETTINGS', ()),
                   patch.object(installer, 'targets', return_value=[(base / 'source', destination)])):
                 again = installer.snapshot()
             self.assertEqual(again['files'], data['files'])
+
+    def test_installer_extends_old_snapshot_for_new_settings(self):
+        installer = load('daily-install')
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            saved = base / 'daily-install.json'
+            saved.write_text(json.dumps(dict(files=[], keys={}, timer=False)))
+            missing = NS(returncode=1, stdout='')
+            setting = ('power', '/lid-on-ac', 'uint', '1')
+            with (patch.object(installer, 'SAVED', saved),
+                  patch.object(installer, 'SETTINGS', (setting,)),
+                  patch.object(installer, 'targets', return_value=[]),
+                  patch.object(installer, 'run', return_value=missing)):
+                data = installer.snapshot()
+            self.assertEqual(data['settings'], {'power\n/lid-on-ac': None})
 
     def test_writes_coalesce_until_previous_finishes(self):
         Panel = panel_class()
