@@ -60,6 +60,28 @@ class DailyTests(unittest.TestCase):
         self.assertEqual([r['status'] for r in rows], ['ok', 'fail'])
         self.assertEqual(rows[1]['detail'], 'reinstall hook')
 
+    def test_health_rows_carry_the_section_they_were_printed_under(self):
+        health = load('mintbook-health')
+        rows = health.parse('section\tKernel\t\nok\twifi\tworking\n'
+                            'section\tAudio\t\nfail\tinput\treinstall hook\n')
+        self.assertEqual([r['section'] for r in rows], ['Kernel', 'Audio'])
+        self.assertEqual([r['status'] for r in rows], ['ok', 'fail'])
+
+    def test_health_reads_the_repair_command_out_of_the_detail(self):
+        health = load('mintbook-health')
+        def fix(status, label, detail):
+            return health.remedy(dict(status=status, label=label, detail=detail))
+        self.assertEqual(fix('fail', 'live policy', 'reset; pkexec bin/power-install'),
+                         'pkexec bin/power-install')
+        self.assertEqual(fix('warn', 'trimmable services', 'cups — /home/a/bin/service-trim --check'),
+                         '/home/a/bin/service-trim --check')
+        self.assertEqual(fix('warn', 'firefox video prefs', 'run bin/firefox-video (see docs)'),
+                         'bin/firefox-video')
+        # A path that merely contains "bin" is not a command, and a passing
+        # check is never offered a repair.
+        self.assertEqual(fix('fail', 'apply script', '/usr/local/sbin/mintbook-power-apply'), '')
+        self.assertEqual(fix('ok', 'live policy', 'pkexec bin/power-install'), '')
+
     def test_health_skips_unchanged_kernel_and_duplicate_failures(self):
         health = load('mintbook-health')
         with tempfile.TemporaryDirectory() as directory:

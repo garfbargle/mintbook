@@ -12,7 +12,13 @@ PASS=0 WARN=0 FAIL=0
 FORMAT=${1:-}
 case "$FORMAT" in ''|--tsv) ;; *) echo 'usage: doctor [--tsv]' >&2; exit 2 ;; esac
 
-section() { if [ "$FORMAT" != --tsv ]; then printf '\n\033[1m%s\033[0m\n' "$1"; fi; }
+# The section a check belongs to is structure, not decoration: the desktop
+# view groups by it, so --tsv carries it too rather than making a reader guess
+# from the label.
+section() {
+  if [ "$FORMAT" = --tsv ]; then printf 'section\t%s\t\n' "$1"
+  else printf '\n\033[1m%s\033[0m\n' "$1"; fi
+}
 record() {
   local detail=${3-}
   detail=${detail//$'\n'/ }; detail=${detail//$'\t'/ }
