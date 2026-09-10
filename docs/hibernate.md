@@ -340,9 +340,29 @@ It died very early. Compare how far each attempt got:
 | 10:33, worked | `Filesystems sync: 0.062 seconds` |
 | 11:01, wedged | nothing |
 
-That sync line is logged *after* the sync returns, and journald was still
+~~That sync line is logged *after* the sync returns, and journald was still
 running to record it in the working case. Its absence points at the pre-hibernate
-filesystem sync never completing.
+filesystem sync never completing.~~
+
+**Retracted 2026-09-10 evening — the comparison above cannot localise
+anything.** journald does not record `Filesystems sync` before the freeze even
+when hibernation *works*. From the 12:50 AC cycle, which succeeded, with
+journald's own receive time next to the kernel's printk time:
+
+```
+journald received   printk     message
+12:50:35.954        3564.315   PM: hibernation: hibernation entry
+12:51:36.670        3564.409   Filesystems sync: 0.039 seconds       <- a minute later, after resume
+12:51:36.740        3564.409   Freezing user space processes
+12:51:37.191        3577.304   PM: hibernation: hibernation exit
+```
+
+The sync finished 94 ms after entry, and journald did not pick up the line
+until the machine was back. `entry` is the last line journald reliably catches
+before userspace freezes. So a failed run that ends at `entry` looks exactly
+the same as a working run would if you cut the power at that moment. Its
+absence says only that the machine never *resumed*. It says nothing about
+whether the hang came before the sync, during the image write, or at power-off.
 
 ### Every attempt, and what they add up to
 
