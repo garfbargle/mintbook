@@ -1,19 +1,16 @@
 # Hibernation
 
-**Status 2026-09-10: one combination works — `systemctl hibernate` from the
-desktop, on AC. Everything else has failed at least once.**
+**Status 2026-09-10: works on AC, never yet completed on battery.**
 
-- **Proven:** X + AC, save and restore, Apple SPI keyboard included. See "The
-  cycle that worked".
-- **Save hangs** when invoked from X **on battery** (2 of 2). It does not hang
-  from a text console on battery, so this is an X-plus-battery interaction, not
-  either one alone.
-- **Restore has succeeded once and failed once.** The failure was from tty2 on
-  battery: "restoring image", then a black screen. Whether the kernel hung or
-  merely lost the display is **not yet established**.
-- The lid is therefore back on plain `suspend`. Overnight unplugged is **not**
-  solved: s2idle still costs ~1.8 W, about 11 hours. Plug in overnight, or
-  hibernate by hand on AC.
+- **On AC, 5 for 5** — three saves, two restores, from both X and a text
+  console, Apple SPI keyboard intact. `systemctl hibernate` on AC is reliable.
+- **On battery, 0 for 3.** From X it hangs on the save; from a text console it
+  saves and then hangs on the restore. The active VT changes *where* it fails,
+  not whether. The mechanism is not established.
+- **The overnight case is therefore not solved.** `suspend-then-hibernate`
+  hibernates from s2idle with X active, on battery — the exact combination that
+  hangs. The lid is back on plain `suspend` at ~1.8 W, about eleven hours, so
+  unplugged overnight is still unsafe. Plug in, or hibernate by hand on AC.
 
 Also worth keeping: `resume=PARTUUID=` is silently ignored (see "The third
 trap"), and the first attempt destroyed its own image.
@@ -307,73 +304,10 @@ That sync line is logged *after* the sync returns, and journald was still
 running to record it in the working case. Its absence points at the pre-hibernate
 filesystem sync never completing.
 
-### Retracted: it is not simply "battery"
+### Every attempt, and what they add up to
 
-The section below concluded the power source was the discriminator. A later
-test from a **text console** disproves that: on battery, from tty2, the image
-saved perfectly. Keep reading for the corrected matrix in "What the TTY test
-showed". The battery correlation was real but incomplete — it takes X *and*
-battery together to hang the save.
-
-### Isolated: it is the power source, not the timing
-
-Two candidates came out of that test — that the hibernate began 70 ms after an
-s2idle resume with storage still re-initialising, or that it was on battery
-rather than AC. `systemctl hibernate` from a settled desktop **on battery**
-separates them, and it was run at 11:30:11.
-
-It wedged identically. No `Filesystems sync` line, no image, and a forced power
-cycle. **The s2idle-wake timing is not the cause** and the settle-delay hook
-proposed for it is not the fix.
-
-The record so far:
-
-| when | power | result |
-|---|---|---|
-| 09:50 | AC | image written (resume failed separately, `PARTUUID`) |
-| 10:33 | AC | **worked end to end** |
-| 11:01 | battery | wedged before the sync |
-| 11:30 | battery | wedged before the sync |
-
-Two for two on AC, nothing on battery.
-
-### Where it hangs, and what is ruled out
-
-Both failures stop between `PM: hibernation: hibernation entry` and
-`Filesystems sync`. In `hibernate()` that window holds exactly two things:
-`pm_prepare_console()`, which switches away from Xorg's VT, and the
-`PM_HIBERNATION_PREPARE` notifier chain.
-
-Ruled out by inspection:
-
-- **`mintbook-power`** only writes `max_perf_pct` and `energy_perf_bias`. It
-  touches no disk, no PCI link state. It had also already reasserted
-  `max_perf_pct=100` at 11:19:52, so the battery cap was not even in effect.
-- **NVMe runtime PM**: `power/control` is `on` and `runtime_status` is
-  `active`. The drive is not being suspended underneath the sync.
-
-So the correlation with the power source is solid and the mechanism is not.
-Naming battery as the *cause* on n=2 would be overreading it; what is certain
-is that hibernation is unreliable in exactly the state the feature exists to
-serve.
-
-## What the TTY test showed
-
-Run 2026-09-10 11:49 from tty2, on battery, with `pm_debug_messages=1`,
-`console_suspend=N` and console loglevel 8 so the transition printed to screen
-instead of dying with the journal.
-
-**The image saved.** The screen showed the sequence through "saving image" and
-the machine powered off — the first successful save on battery, and the thing
-that retires the battery-only explanation.
-
-**The restore then failed.** On the power button the screen showed the boot
-text and "restoring image", then went black and stayed black. A second power
-press produced an ordinary cold boot with `PM: Image not found (code -22)`, the
-image having been consumed by the attempt, and journald reporting
-`corrupted or uncleanly shut down`.
-
-### Every attempt, in one table
+Six cycles on 2026-09-10. Two variables moved: which VT was active when
+hibernation started, and whether the charger was in.
 
 | time | invoked from | power | save | restore |
 |---|---|---|---|---|
@@ -381,68 +315,72 @@ image having been consumed by the attempt, and journald reporting
 | 10:33 | X | AC | OK | **OK** |
 | 11:01 | X, 70 ms post-s2idle | battery | hang | — |
 | 11:30 | X | battery | hang | — |
-| 11:49 | **tty2** | battery | **OK** | hang, black screen |
+| 11:49 | tty2 | battery | **OK** | hang, black screen |
+| 12:50 | tty2 | AC | **OK** | **OK** |
 
-Reading it honestly:
+**On AC nothing has ever failed** — three saves, two restores. **On battery
+nothing has ever fully succeeded.** The active VT does not decide whether it
+fails, only where:
 
-- **The save hang needs X and battery together.** X+AC saved twice, tty+battery
-  saved once, X+battery hung twice. Neither variable alone accounts for it, so
-  the earlier "AC-only feature" framing was wrong.
-- **The restore has only ever succeeded once**, and that was the X+AC run. It
-  has one failure, from tty+battery. One of each is not a pattern yet.
-- The save-side window (`pm_prepare_console()` and the
-  `PM_HIBERNATION_PREPARE` notifiers) is consistent with a VT switch away from
-  Xorg going wrong, and something about the battery state making it go wrong.
-  i915 exposes no `enable_psr`/`enable_fbc`/`enable_dc` parameters on this
-  kernel, so that guess could not be checked directly.
+- **X + battery** hangs on the save, before `Filesystems sync` ever returns.
+- **tty + battery** saves cleanly and then hangs on the restore, after
+  "restoring image", with a black screen.
 
-### Not yet known: hang, or live machine with a dead display?
+Two earlier conclusions in this file were wrong and are left above with their
+retractions: that the s2idle-wake timing mattered (killed by 11:30), and that
+the power source alone was the discriminator (killed by 11:49). The corrected
+statement is narrower: **battery is present in every failure, and no single
+other variable is.**
 
-The restore going black is **not** proof the kernel stopped. A completed resume
-with a dead panel looks identical from the chair. The journal cannot settle it
-either — nothing was written after `hibernation entry`, but the machine was
-powered off again quickly, possibly before journald flushed.
+### Where each side hangs
 
-Distinguishing them changes everything. A dead display is a graphics problem
-with ordinary workarounds; a hung restore is much worse. The test is to let the
-black screen sit for two minutes, then **short-press** the power button once:
-if the system is alive, logind handles that event and shuts down cleanly, and
-the journal survives to prove it.
+The save-side failures stop between `PM: hibernation: hibernation entry` and
+`Filesystems sync`. That window holds exactly `pm_prepare_console()`, which
+switches away from Xorg's VT, and the `PM_HIBERNATION_PREPARE` notifier chain.
+Starting from a text console skips the interesting half of that, and starting
+from a text console is exactly what fixed the save — but only far enough to
+reach the next failure.
 
-### The next single-variable test
+The restore-side failure is one observation, so it is not yet a pattern. It is
+also **not proof the kernel stopped**: a completed resume with a dead panel is
+indistinguishable from the chair, and the machine was powered off again before
+journald could flush. Letting the black screen sit two minutes and then
+short-pressing power would decide it, since a live system shuts down cleanly on
+that event and leaves a journal behind.
 
-Hibernate from **tty2 on AC**. That is the 11:49 run with only the power source
-changed, and it separates the two readings of the restore failure:
+### Ruled out by inspection
 
-- restore works → the restore problem is battery-linked
-- restore fails → the restore problem is tty-linked, and the X+AC success at
-  10:33 was the outlier
+- **`mintbook-power`** writes only `max_perf_pct` and `energy_perf_bias`. At the
+  11:01 failure it had already applied `profile=balanced max_perf_pct=100
+  epb=8`, which is what AC gets, and it hung anyway.
+- **NVMe runtime PM**: `power/control=on`, `runtime_status=active`.
+- **Audio codec runtime PM**: `snd_hda_intel power_save=0`.
+- **No TLP and no laptop-mode-tools** are installed, so nothing else is
+  retuning the machine when the charger comes out.
+- i915 exposes no `enable_psr`/`enable_fbc`/`enable_dc` on this kernel, so the
+  most obvious remaining suspect could not be checked directly.
 
-### The earlier diagnostic, now spent
+So the mechanism behind the battery correlation is **not established**. What is
+established is the shape of it, at 5 successes on AC and 0 clean cycles on
+battery.
 
-Hibernate from a text console rather than from X:
+### What this means for the feature
 
-```
-Ctrl+Alt+F2, log in, then: sudo systemctl hibernate
-```
+The case hibernation was built for is the overnight one, and overnight the
+machine is on battery. `suspend-then-hibernate` wakes from s2idle with X still
+the active VT and hibernates from there — precisely the X + battery combination
+that hangs, twice out of two.
 
-Either outcome is informative. If it works, `pm_prepare_console()` switching
-away from Xorg is the hang and the fix is in that direction. If it wedges, the
-last kernel message stays on the screen instead of being lost with the journal,
-which is the one thing no amount of log reading can recover.
-`echo 1 > /sys/power/pm_debug_messages` first makes that message more specific.
-`/sys/power/pm_test` is also available (`core processors platform devices
-freezer`) for running the machinery without writing an image.
+**So the overnight problem is not solved.** What does work, reliably, is
+`systemctl hibernate` on AC.
 
 ### Current state
 
 `HandleLidSwitch` is back to plain `suspend` and `HibernateDelaySec` to 30min.
-A lid close gets s2idle at ~1.8 W — the known cost, not a hang, because a
-machine wedged with the lid shut draws ~10 W and is strictly worse.
-
-**This means the overnight case is not solved.** ~1.8 W is about 11 hours from
-full, so unplugged overnight remains unsafe. Plug in, or hibernate manually on
-AC, which is proven.
+A lid close costs the known ~1.8 W rather than risking a hang, because a machine
+wedged with the lid shut draws ~10 W and is strictly worse. At ~1.8 W a full
+charge is about eleven hours, so **unplugged overnight is still unsafe**. Plug
+in, or hibernate by hand on AC before closing the lid.
 
 ## The command line
 
