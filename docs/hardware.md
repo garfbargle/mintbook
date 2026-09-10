@@ -153,6 +153,12 @@ throttle stalls; at 75 it holds ~1.75 GHz and finishes more chunks. `avg MHz` is
 *higher* at 100 while work is lower — the reported frequency is hiding stalled
 execution, which is why this table has a work column and the ones above do not.
 
+> **Scope check, September 10:** that result belongs to the four-worker awk
+> workload. A [two-worker source-compilation comparison](measurements/2026-09-10-workload.md)
+> found medians of 3.019 corpus passes/s on Balanced and 2.993 on Sustained,
+> with overlapping runs and the same 94.4 C mean temperature. Long work does
+> not universally benefit from the cap; power defaults were left unchanged.
+
 This is a real trade-off, not a free win: the sprint is useful for short interactive
 bursts (app launch, page render) that finish before they hit the wall. A blanket AC
 cap would trade that away to speed up long compiles, so it is **not the default** —

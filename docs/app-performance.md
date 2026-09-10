@@ -141,6 +141,9 @@ still matched the AC default after testing.
 
 ## Cursor crash and bounded diagnostics — September 9–10
 
+The [source-compilation profile comparison](measurements/2026-09-10-workload.md)
+also completed: no measurable Sustained advantage, so power defaults are retained.
+
 At about 19:18 on September 9, Cursor used about 93% of one logical CPU in a
 31.65-second observation while package temperature averaged 94.1 C. This was
 changing application activity, not an idle baseline. An earlier sampler's

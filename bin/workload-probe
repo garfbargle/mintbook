@@ -1,0 +1,152 @@
+#!/usr/bin/python3
+"""Compare installed power profiles with Mintbook source compilation, without executing it.
+
+Temporarily stops turbo-budget so a capped arm stays capped; restores the entry
+profile and service state on exit. Run from a transient user service to avoid
+inheriting any GUI app's focus priority. Writes raw JSON to the supplied path.
+"""
+import argparse
+import json
+import multiprocessing as mp
+import os
+from pathlib import Path
+import signal
+import statistics
+import subprocess
+import time
+
+ROOT = Path(__file__).resolve().parents[1]
+CAP = Path('/sys/devices/system/cpu/intel_pstate/max_perf_pct')
+WANT = Path('/run/mintbook-power/want')
+TURBO = 'mintbook-turbo-budget.service'
+PROFILES = {'balanced': 100, 'performance': 75, 'power-saver': 70}
+
+
+def command(*args):
+    return subprocess.run(args, capture_output=True, text=True, check=True).stdout.strip()
+
+
+def profile(name):
+    WANT.write_text(name + '\n')
+    for _ in range(50):
+        if int(CAP.read_text()) == PROFILES[name] and command('powerprofilesctl', 'get') == name:
+            return
+        time.sleep(.1)
+    raise RuntimeError(f'Profile {name} did not land')
+
+
+def sources():
+    paths = sorted((ROOT / 'bin').iterdir()) + sorted((ROOT / 'tests').glob('*.py'))
+    rows = []
+    for path in paths:
+        if path.is_file():
+            body = path.read_bytes()
+            if path.suffix == '.py' or b'python3' in body.split(b'\n', 1)[0]:
+                compile(body, str(path), 'exec')
+                rows.append((str(path), body))
+    return rows
+
+
+def compile_all(rows):
+    for name, body in rows:
+        compile(body, name, 'exec')
+
+
+def worker(rows, cpu, count, stop):
+    os.sched_setaffinity(0, {cpu})
+    while not stop.is_set():
+        compile_all(rows)
+        with count.get_lock():
+            count.value += 1
+
+
+def sample(temp):
+    return {'time': time.monotonic(), 'cap': int(CAP.read_text()),
+            'package_c': int(temp.read_text()) / 1000,
+            'cpu': [int(v) for v in Path('/proc/stat').read_text().splitlines()[0].split()[1:9]],
+            'cpu_pressure': Path('/proc/pressure/cpu').read_text().strip(),
+            'load': os.getloadavg(), 'nice': os.getpriority(os.PRIO_PROCESS, 0)}
+
+
+def package_sensor():
+    return next(p.with_name(p.name.replace('_label', '_input'))
+                for p in Path('/sys/class/hwmon').glob('hwmon*/temp*_label')
+                if p.read_text().strip() == 'Package id 0')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('output', type=Path)
+    args = parser.parse_args()
+    rows = sources()
+    temp = package_sensor()
+    original = command('powerprofilesctl', 'get')
+    turbo_active = subprocess.run(['systemctl', '--user', 'is-active', '--quiet', TURBO]).returncode == 0
+    result = {'date': command('date', '--iso-8601=seconds'), 'original_profile': original,
+              'turbo_was_active': turbo_active, 'source_files': len(rows),
+              'source_bytes': sum(len(s) for _, s in rows), 'burst': [], 'sustained': []}
+    stop = mp.Event()
+    children = []
+    def interrupted(_sig, _frame):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, interrupted)
+    try:
+        command('systemctl', '--user', 'stop', TURBO)
+        for name in ['balanced', 'performance', 'power-saver', 'power-saver', 'performance', 'balanced'] * 2:
+            profile(name)
+            time.sleep(1.5)
+            before = sample(temp)
+            start = time.monotonic()
+            compile_all(rows)
+            row = {'profile': name, 'elapsed_ms': (time.monotonic() - start) * 1000,
+                   'before': before, 'after': sample(temp)}
+            result['burst'].append(row)
+            print(f"burst {name}: {row['elapsed_ms']:.1f} ms", flush=True)
+        count = mp.Value('i', 0)
+        children = [mp.Process(target=worker, args=(rows, cpu, count, stop)) for cpu in (0, 1)]
+        for child in children:
+            child.start()
+        for name in ['balanced', 'performance', 'performance', 'balanced',
+                     'performance', 'balanced', 'balanced', 'performance']:
+            profile(name)
+            time.sleep(10)  # thermal settling, with the same two workers running
+            n0, start = count.value, time.monotonic()
+            readings = [sample(temp)]
+            while time.monotonic() - start < 20:
+                time.sleep(1)
+                if not all(child.is_alive() for child in children):
+                    raise RuntimeError('A compilation worker exited early')
+                readings.append(sample(temp))
+            elapsed = time.monotonic() - start
+            row = {'profile': name, 'work_per_s': (count.value - n0) / elapsed,
+                   'elapsed_s': elapsed, 'samples': readings,
+                   'caps_valid': all(r['cap'] == PROFILES[name] for r in readings)}
+            result['sustained'].append(row)
+            args.output.write_text(json.dumps(result, indent=2) + '\n')
+            print(f"sustained {name}: {row['work_per_s']:.3f} corpus passes/s; caps valid={row['caps_valid']}", flush=True)
+    finally:
+        stop.set()
+        for child in children:
+            child.join(timeout=5)
+            if child.is_alive():
+                child.terminate()
+                child.join()
+        try:
+            profile(original)
+        finally:
+            if turbo_active:
+                command('systemctl', '--user', 'start', TURBO)
+        result['restored_profile'] = command('powerprofilesctl', 'get')
+        result['restored_cap'] = int(CAP.read_text())
+        result['turbo_active_after'] = subprocess.run(['systemctl', '--user', 'is-active', '--quiet', TURBO]).returncode == 0
+        args.output.write_text(json.dumps(result, indent=2) + '\n')
+        print('Restored entry profile and turbo service.', flush=True)
+    for kind, key in [('burst', 'elapsed_ms'), ('sustained', 'work_per_s')]:
+        for name in PROFILES:
+            values = [r[key] for r in result[kind] if r['profile'] == name]
+            if values:
+                print(f'{kind} {name}: median {statistics.median(values):.3f}, range {min(values):.3f}–{max(values):.3f}')
+
+
+if __name__ == '__main__':
+    main()
