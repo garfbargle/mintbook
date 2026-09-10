@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# hibernate-check - can this machine actually hibernate, and will a closed lid
+# get there? Read-only, no sudo. See docs/hibernate.md.
+set -uo pipefail
+
+ok=0; bad=0
+say() { # $1=good/bad $2=label $3=detail
+  if [ "$1" = good ]; then ok=$((ok+1)); printf '  \033[32mok\033[0m   %-24s %s\n' "$2" "$3"
+  else                     bad=$((bad+1)); printf '  \033[31mBAD\033[0m  %-24s %s\n' "$2" "$3"; fi
+}
+
+echo "hibernation target"
+swapfile=$(swapon --show=NAME,SIZE,PRIO --noheadings 2>/dev/null | grep -v zram || true)
+if [ -n "$swapfile" ]; then
+  say good "disk swap" "$(echo "$swapfile" | tr -s ' ' | tr '\n' '|')"
+else
+  say bad "disk swap" "none - only zram, which cannot hold an image"
+fi
+
+ram_kb=$(awk '/^MemTotal:/{print $2}' /proc/meminfo)
+swap_kb=$(awk '$1!~/zram/ && NR>1 {s+=$3} END{print s+0}' /proc/swaps)
+if [ "$swap_kb" -ge "$ram_kb" ]; then
+  say good "swap vs RAM" "$((swap_kb/1024)) MiB swap for $((ram_kb/1024)) MiB RAM"
+else
+  say bad "swap vs RAM" "$((swap_kb/1024)) MiB swap for $((ram_kb/1024)) MiB RAM - image may not fit"
+fi
+
+# The kernel only knows where to resume from if resume= was on the command line
+# at boot. /sys/power/resume reads 0:0 when it was not.
+resume=$(cat /sys/power/resume 2>/dev/null)
+if [ "$resume" != "0:0" ] && [ -n "$resume" ]; then
+  say good "kernel resume device" "$resume"
+else
+  say bad "kernel resume device" "0:0 - resume= was not on the cmdline this boot"
+fi
+# The form matters, not just the presence. initramfs-tools' init rewrites only
+# UUID= into a real /dev/disk/by-uuid path; the resume script then does
+# `readlink -f "$resume"` on whatever it was handed. PARTUUID= and LABEL=
+# survive that as literal strings, the sysfs lookup misses, and the script
+# exits without a word -- the image is written at hibernate and simply ignored
+# at boot. Measured here on 2026-09-10, which cost a session.
+cmdline_resume=$(sed 's/.*[[:space:]]\(resume=[^ ]*\).*/\1/;t;d' /proc/cmdline)
+case "$cmdline_resume" in
+  '')            say bad  "cmdline resume=" "absent - check GRUB_CMDLINE_LINUX_DEFAULT, then reboot" ;;
+  resume=UUID=*) say good "cmdline resume=" "$cmdline_resume" ;;
+  resume=/dev/*) say good "cmdline resume=" "$cmdline_resume (device path)" ;;
+  *)             say bad  "cmdline resume=" "$cmdline_resume - initramfs resolves only UUID= or /dev/*" ;;
+esac
+grep -q 'resume_offset=' /proc/cmdline \
+  && say good "cmdline resume_offset" "$(sed 's/.*\(resume_offset=[^ ]*\).*/\1/' /proc/cmdline)" \
+  || say bad "cmdline resume_offset" "absent - a swap file needs one"
+
+# Show the settings, not the file: it carries a comment block explaining the
+# expected "no matching swap device" warning, and that is not a status line.
+rconf=$(grep -hE '^(RESUME|resume_offset)=' /etc/initramfs-tools/conf.d/resume 2>/dev/null | paste -sd' ')
+[ -n "$rconf" ] \
+  && say good "initramfs RESUME" "$rconf" \
+  || say bad "initramfs RESUME" "missing - the initramfs will not look for an image"
+
+echo
+echo "systemd"
+# These are logind Manager methods, not manager properties: `systemctl show -p
+# CanHibernate` silently returns nothing, which reads as a failure even when
+# hibernation works. Ask logind itself.
+logind_can() { # $1 = method name
+  busctl call org.freedesktop.login1 /org/freedesktop/login1 \
+      org.freedesktop.login1.Manager "$1" 2>/dev/null | sed -n 's/^s "\(.*\)"$/\1/p'
+}
+canhib=$(logind_can CanHibernate)
+# These four answers mean different things and only one of them is about the
+# hardware. "no" is polkit's verdict, not the kernel's -- Ubuntu ships a rule
+# disabling hibernate for everyone, which reads exactly like a broken setup.
+case "$canhib" in
+  yes)       say good "CanHibernate" "yes" ;;
+  na)        say bad  "CanHibernate" "na - no swap large enough, or no resume device" ;;
+  no)        say bad  "CanHibernate" "no - polkit refuses; see 10-mintbook-hibernate.rules" ;;
+  challenge) say bad  "CanHibernate" "challenge - polkit wants authentication" ;;
+  *)         say bad  "CanHibernate" "${canhib:-unknown}" ;;
+esac
+cansth=$(logind_can CanSuspendThenHibernate)
+[ "$cansth" = yes ] && say good "CanSuspendThenHibernate" "yes" \
+                    || say bad "CanSuspendThenHibernate" "${cansth:-unknown}"
+delay=$(systemd-analyze cat-config systemd/sleep.conf 2>/dev/null \
+          | grep -iE '^HibernateDelaySec' | tail -1)
+[ -n "$delay" ] && say good "HibernateDelaySec" "${delay}" \
+                || say bad "HibernateDelaySec" "unset - falls back to the systemd default"
+
+echo
+echo "the lid"
+# Two independent owners. logind's setting is inert while xfce4-power-manager
+# holds the handle-lid-switch inhibitor, and that is the default.
+lid=$(loginctl show-session 2>/dev/null | sed -n 's/^HandleLidSwitch=//p')
+[ "$lid" = suspend-then-hibernate ] \
+  && say good "logind HandleLidSwitch" "$lid" \
+  || say bad "logind HandleLidSwitch" "${lid:-unknown} - want suspend-then-hibernate"
+
+xf=$(xfconf-query -c xfce4-power-manager -p /xfce4-power-manager/logind-handle-lid-switch 2>/dev/null)
+if [ "$xf" = true ]; then
+  say good "xfce defers to logind" "logind-handle-lid-switch=true"
+else
+  say bad "xfce defers to logind" "logind-handle-lid-switch=${xf:-unset} - xfce is still suspending the lid itself"
+fi
+if loginctl show-session 2>/dev/null | grep -q 'BlockInhibited=.*handle-lid-switch'; then
+  say bad "lid inhibitor" "something still holds handle-lid-switch"
+else
+  say good "lid inhibitor" "clear"
+fi
+
+echo
+echo "sleep mode (unchanged by hibernation, still needed for the suspend leg)"
+mode=$(sed -n 's/.*\[\([^]]*\)\].*/\1/p' /sys/power/mem_sleep 2>/dev/null)
+[ "$mode" = s2idle ] && say good "mem_sleep" "s2idle - deep S3 kills Apple SPI input" \
+                     || say bad "mem_sleep" "${mode:-unknown} - want s2idle"
+
+echo
+echo "last hibernation seen in the journal"
+last=$(journalctl -k --no-pager 2>/dev/null | grep -E 'PM: hibernation entry|PM: hibernation exit|Image saved' | tail -3)
+[ -n "$last" ] && printf '%s\n' "$last" | sed 's/^/  /' || echo "  (none yet)"
+
+echo
+if [ "$bad" -eq 0 ]; then
+  echo "$ok checks passed. Hibernation is wired up."
+else
+  echo "$ok passed, $bad need attention. See docs/hibernate.md."
+fi

@@ -214,6 +214,12 @@ endpoint. Suspend-to-idle freezes userspace and preserves the session without
 taking that firmware path. It costs more battery during long sleeps, but it keeps
 ordinary lid suspend usable and avoids a forced reboot after every wake.
 
+**That cost has now been measured, and it is severe: ~1.8 W against deep S3's
+~0.08 W.** The machine went to sleep at 54% on 2026-09-09 and was flat by
+morning. s2idle is still the right mode for the suspend itself — this is not a
+reason to go back to S3 — but it cannot be left to run all night on its own.
+[`hibernate.md`](hibernate.md) escalates it to hibernation after 30 minutes.
+
 [`mintbook-s2idle.service`](../config/systemd/mintbook-s2idle.service) selects it at
 boot. Install it and retire the failed rebind hook with:
 
@@ -240,8 +246,18 @@ or write `deep` to `/sys/power/mem_sleep`.
 Deep S3 and the old recovery are conclusively failed. A controlled 25-second
 s2idle cycle on 2026-09-09 returned the keyboard and trackpad, logged a successful
 `modeswitch done.`, and had zero Apple SPI timeouts. Wi-Fi reconnected in 5.5
-seconds; Bluetooth and PipeWire were present. Several longer cycles are still
-needed to measure the battery tradeoff.
+seconds; Bluetooth and PipeWire were present.
+
+The battery tradeoff was measured on 2026-09-09, by accident: ~1.8 W in s2idle
+against 0.06-0.14 W across four deep-S3 sleeps, a ~20x regression that flattens
+a full charge in about ten hours. Recorded with the drain table in
+[`hibernate.md`](hibernate.md). Input survives s2idle, so the mode stays; the
+overnight case is now handled by `suspend-then-hibernate` instead.
+
+Still unmeasured: whether the keyboard and trackpad survive a resume **from
+hibernation**. The reasoning says yes, because that resume is a cold boot and
+`applespi` re-probes over PIO, but that is the same class of reasoning that got
+the battery cost wrong. Run `bin/input-check` right after the first one.
 
 ### The sleep black box
 

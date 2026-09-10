@@ -1,0 +1,192 @@
+#!/usr/bin/env bash
+# hibernate-install — give the MacBook8,1 a hibernation target and escalate lid
+# suspends to it. Must be run as root. See docs/hibernate.md.
+#
+# Does not reboot and does not hibernate. Everything takes effect immediately,
+# including /sys/power/resume; the command line is what carries it over a
+# reboot. Re-runnable: an existing swap file is kept and resume= is rewritten
+# rather than appended twice.
+set -euo pipefail
+
+# The first extent's physical start, in filesystem blocks. A wrong value here
+# does not fail: it resumes from whatever happens to live at that offset. Kept
+# as a filter over stdin so tests/test_hibernate_install.py can feed it real
+# filefrag output without needing root or a swap file.
+#   bin/hibernate-install --offset-from-filefrag < fixture
+offset_from_filefrag() {
+  # Do not index by whitespace column: filefrag pads to a fixed width and the
+  # columns run together once the offsets get wide enough
+  # ("32767:1234567.."), which silently shifts $4 onto the length field.
+  # Reduce the line to its numbers instead; the order is stable.
+  #   logical_start logical_end physical_start physical_end length [expected]
+  awk '/^[[:space:]]*0:/ {
+         line = $0
+         sub(/^[[:space:]]*0:/, "", line)
+         gsub(/[^0-9]+/, " ", line)
+         if (split(line, f, " ") >= 3) { print f[3]; exit }
+       }'
+}
+
+if [ "${1:-}" = --offset-from-filefrag ]; then
+  offset_from_filefrag
+  exit 0
+fi
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "run as root: sudo $0" >&2
+  exit 1
+fi
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SWAP=/swapfile
+SWAP_MIB=8192
+SLEEP_SRC="$ROOT/config/systemd/mintbook-hibernate.conf"
+SLEEP_DST=/etc/systemd/sleep.conf.d/20-mintbook-hibernate.conf
+LID_SRC="$ROOT/config/systemd/mintbook-lid.conf"
+LID_DST=/etc/systemd/logind.conf.d/20-mintbook-lid.conf
+POLKIT_SRC="$ROOT/config/polkit/10-mintbook-hibernate.rules"
+POLKIT_DST=/etc/polkit-1/rules.d/10-mintbook-hibernate.rules
+GRUB=/etc/default/grub
+RESUME_CONF=/etc/initramfs-tools/conf.d/resume
+
+for f in "$SLEEP_SRC" "$LID_SRC" "$POLKIT_SRC"; do
+  [ -f "$f" ] || { echo "missing $f" >&2; exit 1; }
+done
+
+# resume_offset is counted in PAGE_SIZE units but filefrag reports filesystem
+# blocks. They are both 4096 here; if that ever stops being true the offset
+# would be silently wrong and the resume would read garbage, so refuse instead.
+page=$(getconf PAGE_SIZE)
+fsblock=$(stat -f -c %S /)
+if [ "$page" != "$fsblock" ]; then
+  echo "page size $page != fs block size $fsblock — resume_offset would be wrong" >&2
+  exit 1
+fi
+
+fstype=$(findmnt -no FSTYPE /)
+if [ "$fstype" != ext4 ]; then
+  echo "root is $fstype; this script only computes a safe offset for ext4" >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------- swap file
+if [ -f "$SWAP" ]; then
+  echo "==> $SWAP already present ($(du -h "$SWAP" | cut -f1))"
+else
+  avail=$(df --output=avail -m / | tail -1)
+  if [ "$avail" -lt $((SWAP_MIB + 2048)) ]; then
+    echo "only ${avail} MiB free on /; need ${SWAP_MIB} MiB plus headroom" >&2
+    exit 1
+  fi
+  echo "==> $SWAP (${SWAP_MIB} MiB)"
+  # dd, not fallocate: mkswap rejects a file whose extents are still unwritten,
+  # and a swap file must never be sparse.
+  dd if=/dev/zero of="$SWAP" bs=1M count="$SWAP_MIB" status=progress
+  chmod 600 "$SWAP"
+  mkswap "$SWAP"
+fi
+
+# zram stays the first choice for ordinary paging at priority 100. This file is
+# the hibernation target, and wants to be the last place a live page lands.
+if ! swapon --show=NAME --noheadings | grep -qx "$SWAP"; then
+  echo "==> swapon $SWAP"
+  swapon --priority -2 "$SWAP"
+fi
+if ! grep -q "^$SWAP[[:space:]]" /etc/fstab; then
+  echo "==> /etc/fstab"
+  cp -a /etc/fstab "/etc/fstab.bak-hibernate-$(date +%Y%m%d-%H%M%S)"
+  printf '%s none swap sw,pri=-2 0 0\n' "$SWAP" >> /etc/fstab
+fi
+
+# ------------------------------------------------------------ resume target
+src=$(findmnt -no SOURCE /)
+# Filesystem UUID, deliberately NOT PARTUUID, even though root= uses PARTUUID
+# here. root= is parsed by the kernel, which understands both. resume= is acted
+# on by /usr/share/initramfs-tools/scripts/local-premount/resume, and that
+# script resolves the device then throws the result away:
+#   local_device_setup "${resume}" ...   # resolves correctly
+#   DEV=$(readlink -f "$resume")         # ...then re-reads the ORIGINAL string
+# init only rewrites UUID= into a real /dev/disk/by-uuid path, so PARTUUID=
+# survives to readlink as a literal, the sysfs lookup misses, and the script
+# exits 1 without logging a thing. Measured on 2026-09-10: the image was
+# written, nothing resumed, and swapon then rewrote the signature over it.
+fsuuid=$(blkid -s UUID -o value "$src")
+[ -n "$fsuuid" ] || { echo "no filesystem UUID for $src" >&2; exit 1; }
+
+offset=$(filefrag -v "$SWAP" | offset_from_filefrag)
+case "$offset" in
+  ''|*[!0-9]*) echo "could not read a numeric resume_offset from filefrag" >&2; exit 1 ;;
+  0) echo "resume_offset came back 0, which is never right for a swap file" >&2; exit 1 ;;
+esac
+echo "==> resume=UUID=$fsuuid resume_offset=$offset"
+
+echo "==> $RESUME_CONF"
+install -dm755 "$(dirname "$RESUME_CONF")"
+{
+  echo "# Fallback for the kernel command line, which OpenCore supplies from"
+  echo "# /etc/default/grub. The build-time warning \"no matching swap device\" is"
+  echo "# expected: RESUME names the ext4 partition that HOLDS the swap file, so"
+  echo "# it is correctly not of type swap. See docs/hibernate.md."
+  printf 'RESUME=UUID=%s\n' "$fsuuid"
+  printf 'resume_offset=%s\n' "$offset"
+} > "$RESUME_CONF"
+
+# Tell the running kernel too, so hibernation works before the first reboot
+# rather than only after it. Offset first: writing resume triggers a resume
+# attempt, which must already know where in the file to look. With no image
+# present that attempt fails harmlessly ("PM: Image not found") and only the
+# setting sticks.
+devno=$(lsblk -no MAJ:MIN "$src" | tr -d ' ')
+if [ "$(cat /sys/power/resume)" = 0:0 ] && [ -n "$devno" ]; then
+  echo "==> /sys/power/resume $devno (this boot)"
+  echo "$offset" > /sys/power/resume_offset
+  echo "$devno" > /sys/power/resume
+fi
+
+# ---------------------------------------------------------------- cmdline
+# OpenCore's OpenLinuxBoot reads GRUB_CMDLINE_LINUX_DEFAULT straight out of this
+# file and boots the kernel EFISTUB. update-grub is a no-op here; do not add it.
+# See docs/boot.md.
+echo "==> $GRUB"
+cp -a "$GRUB" "$GRUB.bak-hibernate-$(date +%Y%m%d-%H%M%S)"
+current=$(sed -n 's/^GRUB_CMDLINE_LINUX_DEFAULT="\(.*\)"$/\1/p' "$GRUB")
+cleaned=$(printf '%s' "$current" | sed -E 's/[[:space:]]*\bresume(_offset)?=[^[:space:]]*//g')
+updated=$(printf '%s resume=UUID=%s resume_offset=%s' "$cleaned" "$fsuuid" "$offset" \
+            | sed -E 's/^[[:space:]]+//; s/[[:space:]]+/ /g')
+sed -i "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"$updated\"|" "$GRUB"
+grep GRUB_CMDLINE_LINUX_DEFAULT "$GRUB"
+
+echo "==> update-initramfs"
+update-initramfs -u
+
+# ---------------------------------------------------------------- systemd
+echo "==> $SLEEP_DST"
+install -dm755 "$(dirname "$SLEEP_DST")"
+install -m644 "$SLEEP_SRC" "$SLEEP_DST"
+
+echo "==> $LID_DST"
+install -dm755 "$(dirname "$LID_DST")"
+install -m644 "$LID_SRC" "$LID_DST"
+
+# Ubuntu ships a rule returning NO for every hibernate action, for everyone.
+# Without this, logind reports CanHibernate="no" however good the swap is.
+echo "==> $POLKIT_DST"
+install -dm755 "$(dirname "$POLKIT_DST")"
+install -m644 "$POLKIT_SRC" "$POLKIT_DST"
+
+systemctl daemon-reload
+# reload, not restart: restarting logind takes the graphical session with it.
+systemctl reload systemd-logind
+
+echo
+echo "swap:        $(swapon --show=NAME,SIZE,PRIO --noheadings | tr '\n' '|')"
+echo "resume:      $(cat /sys/power/resume) offset $(cat /sys/power/resume_offset)"
+echo "             (live now; the cmdline makes it survive a reboot)"
+echo
+echo "still to do, as your user, or logind never sees the lid at all:"
+echo "  xfconf-query -c xfce4-power-manager -p /xfce4-power-manager/logind-handle-lid-switch -s true"
+echo
+echo "then reboot, and verify with: bin/hibernate-check"
+echo
+echo "undo: swapoff $SWAP && rm $SWAP $SLEEP_DST $LID_DST $POLKIT_DST $RESUME_CONF"
+echo "      restore $GRUB.bak-hibernate-* and /etc/fstab.bak-hibernate-*, update-initramfs -u"

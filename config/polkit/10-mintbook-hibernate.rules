@@ -1,0 +1,29 @@
+/* Undo Ubuntu's blanket hibernate ban for the local sudo user.
+ *
+ * /usr/share/polkit-1/rules.d/com.ubuntu.desktop.rules ships a rule commented
+ * "Disable hibernate by default in Ubuntu" that returns NO for every hibernate
+ * action, for everyone, regardless of allow_active. It is why logind answered
+ * CanHibernate="no" here even with a valid swap file and resume device -- "no"
+ * is polkit's answer, not a hardware verdict, and it is easy to misread as a
+ * broken setup.
+ *
+ * This file is 10-* so it sorts ahead of com.ubuntu.desktop.rules: polkit
+ * evaluates rules in lexical filename order and stops at the first rule that
+ * returns a result.
+ *
+ * There is no separate suspend-then-hibernate action -- logind authorises that
+ * operation against the hibernate actions below, so this covers `systemctl
+ * hibernate`. The lid path does not consult polkit at all; logind acts on its
+ * own behalf there.
+ *
+ * Undo: delete this file. polkit reloads it on its own.
+ */
+polkit.addRule(function(action, subject) {
+    if ((action.id == "org.freedesktop.login1.hibernate" ||
+         action.id == "org.freedesktop.login1.hibernate-multiple-sessions" ||
+         action.id == "org.freedesktop.login1.handle-hibernate-key" ||
+         action.id == "org.freedesktop.upower.hibernate") &&
+        subject.local && subject.active && subject.isInGroup("sudo")) {
+        return polkit.Result.YES;
+    }
+});
