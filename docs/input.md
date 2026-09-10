@@ -272,7 +272,11 @@ hibernate resume is, and why that path keeps input. It is an inference, but it
 means no host-side reset is left to try: deep S3 is closed on this machine.
 
 Incidentally, Wi-Fi and SSH survived deep S3, which is how the run could be
-driven at all.
+driven at all. SSH (`openssh-server`, socket-activated on this
+release) was installed only for that run and disabled afterwards — both
+`ssh.socket` and `ssh.service` — so nothing listens on port 22. To repeat the
+run: `sudo systemctl enable --now ssh.socket`, then disable it again. It accepts
+passwords from the whole LAN while it is on.
 
 | level | what it resets | status |
 |---|---|---|
