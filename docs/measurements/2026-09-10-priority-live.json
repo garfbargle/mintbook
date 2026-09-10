@@ -1,0 +1,24 @@
+{
+  "before": {
+    "time": 874.579755719,
+    "updated": 1789050861.987092,
+    "focused": 2789,
+    "managed_threads": 682,
+    "NRestarts": "0",
+    "MemoryCurrent": "11972608",
+    "CPUUsageNSec": "1883473000"
+  },
+  "after": {
+    "time": 886.602997491,
+    "updated": 1789050861.987092,
+    "focused": 2789,
+    "managed_threads": 682,
+    "NRestarts": "0",
+    "MemoryCurrent": "11972608",
+    "CPUUsageNSec": "1883473000"
+  },
+  "cpu_ms": 0.0,
+  "same_event_state": true,
+  "check": "Foreground normal priority; background +5; desktop rendering -5.\nService: state present\nother   firefox-bin        pid=1690 threads=236 nice=5,19\nother   python3            pid=2304 threads=5 nice=5\nfocused claude-desktop     pid=2789 threads=188 nice=0,19\nother   ChatGPT            pid=3302 threads=249 nice=5,19\n",
+  "desktop": "Xorg           pid 1018    nice -5\nxfwm4          pid 1506    nice -5\nxfsettingsd    pid 1515    nice 0\nxfdesktop      pid 1530    nice 0\nplank          pid 1720    nice 0\nxfce4-panel    pid 1519    nice 0\n"
+}

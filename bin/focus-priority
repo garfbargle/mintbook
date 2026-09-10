@@ -1,129 +1,288 @@
-#!/usr/bin/env bash
-# focus-priority — give the machine to the window you are looking at.
-#
-# systemd already puts each application in its own cgroup scope
-# (app-com.anthropic.Claude-49554.scope). This follows _NET_ACTIVE_WINDOW,
-# resolves the focused window to its scope, and raises that scope's CPU weight
-# and memory protection while lowering everyone else's.
-#
-# On two cores, background Electron renderers competing with the foreground one
-# is the most-felt contention on this machine. A cgroup is the right unit here:
-# the focused window's PID is one process, but its renderers, its GPU process
-# and its helpers are all in the same scope, so weighting the scope weights the
-# whole application without having to enumerate it.
-#
-# No root. No polling: xprop -spy blocks until the focus actually changes, so
-# this costs nothing between windows.
-#
-#   focus-priority --check      what is available and what is set right now
-#   focus-priority --undo       clear everything this has set
-#   focus-priority              run in the foreground
-#
-# See docs/feel.md.
-set -uo pipefail
+#!/usr/bin/python3
+"""Follow the focused application's real process tree, on X focus events.
 
-FOCUS_WEIGHT=${FOCUS_WEIGHT:-400}     # cgroup cpu.weight for the focused app (default 100)
-BG_WEIGHT=${BG_WEIGHT:-50}            # ...and for everything else
-FOCUS_LOW=${FOCUS_LOW:-536870912}     # memory.low: 512M the focused app keeps under pressure
+--check is read-only. Installed as the desktop user with CAP_SYS_NICE so
+background priorities can be restored. Only this user's ordinary scheduler
+threads are touched. No polling, cgroup moves, CPU caps or memory promises.
+"""
+import argparse
+import json
+import os
+from pathlib import Path
+import pwd
+import re
+import select
+import signal
+import subprocess
+import sys
+import time
 
-APPSLICE=/sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/app.slice
+USER = pwd.getpwuid(os.getuid()).pw_name
+STATE = Path('/run') / ('mintbook-focus-priority-' + str(os.getuid())) / 'state.json'
+BACKGROUND = 5
+XPROP = '/usr/bin/xprop'
 
-scopes() { find "$APPSLICE" -mindepth 1 -maxdepth 1 -name 'app-*.scope' -type d 2>/dev/null; }
 
-# cpu.weight does not exist on an application scope until the cpu controller is
-# enabled in app.slice's subtree_control, and systemd only does that when a unit
-# inside app.slice asks for it — which no desktop-launched scope does. The
-# subtree is delegated to this user, so we can enable it ourselves. Idempotent,
-# and neutral: every scope simply gains the default weight of 100.
-ensure_cpu() {
-  grep -qw cpu "$APPSLICE/cgroup.subtree_control" && return 0
-  grep -qw cpu "$APPSLICE/cgroup.controllers" || return 1
-  echo "+cpu" > "$APPSLICE/cgroup.subtree_control" 2>/dev/null
-}
+def read(path):
+    try:
+        return Path(path).read_text()
+    except OSError:
+        return ''
 
-have() { [ -w "$1/$2" ]; }
 
-set_knob() {                          # set_knob DIR FILE VALUE
-  have "$1" "$2" || return 1
-  echo "$3" > "$1/$2" 2>/dev/null || return 1
-}
+def stat_fields(path):
+    text = Path(path).read_text()
+    end = text.rindex(')')
+    fields = text[end + 2:].split()
+    return {'parent': int(fields[1]), 'nice': int(fields[16]),
+            'start': int(fields[19]), 'name': text[text.index('(') + 1:end]}
 
-scope_of_pid() {                      # scope_of_pid PID -> cgroup dir, or empty
-  local line
-  read -r line < "/proc/$1/cgroup" 2>/dev/null || return 1
-  line=${line#0::}
-  case "$line" in
-    */app-*.scope) echo "/sys/fs/cgroup$line" ;;
-    *) return 1 ;;
-  esac
-}
 
-focused_pid() {                       # -> pid of the active window's owner
-  local win pid
-  win=$(xprop -root _NET_ACTIVE_WINDOW 2>/dev/null) || return 1
-  # "window id # 0x5400004, 0x0" — two ids, and the one that matters is the
-  # first. Taking the last field yields 0x0 and silently resolves nothing.
-  win=${win#*\# }
-  win=${win%%,*}
-  case "$win" in 0x0|'') return 1 ;; esac
-  pid=$(xprop -id "$win" _NET_WM_PID 2>/dev/null) || return 1
-  pid=${pid##* }
-  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
-  echo "$pid"
-}
+def snapshot(roots=None, previous=None):
+    previous = previous or {}
+    processes, threads = {}, {}
+    for path in Path('/proc').glob('[0-9]*'):
+        try:
+            if path.stat().st_uid != os.getuid():
+                continue
+            pid = int(path.name)
+            processes[pid] = stat_fields(path / 'stat')
+        except (OSError, ValueError):
+            continue
+    formerly_managed = {row.get('pid') for row in previous.values()}
+    for pid, process in processes.items():
+        if roots is not None and owner(pid, roots, processes) is None and pid not in formerly_managed:
+            continue
+        try:
+            for task in (Path('/proc') / str(pid) / 'task').iterdir():
+                try:
+                    tid = int(task.name)
+                    nice = os.getpriority(os.PRIO_PROCESS, tid)
+                    old = previous.get(str(tid))
+                    if (old and old.get('pid') == pid and
+                            old.get('process_start') == process['start'] and
+                            nice == old['applied'] and not old.get('external')):
+                        # Reading every task/stat cost half a second here.
+                        # Reuse identity while unchanged; revalidate at every
+                        # actual write so a recycled TID can never be adjusted.
+                        start = old['start']
+                    else:
+                        start = stat_fields(task / 'stat')['start']
+                    if os.sched_getscheduler(tid) in (os.SCHED_OTHER, os.SCHED_BATCH):
+                        threads[tid] = {'nice': nice, 'start': start, 'pid': pid}
+                except (OSError, ValueError):
+                    continue
+        except (OSError, ValueError):
+            continue
+    return processes, threads
 
-apply() {                             # apply FOCUSED_SCOPE
-  local focused=$1 s
-  for s in $(scopes); do
-    if [ "$s" = "$focused" ]; then
-      set_knob "$s" cpu.weight  "$FOCUS_WEIGHT" || true
-      set_knob "$s" memory.low  "$FOCUS_LOW"    || true
-    else
-      set_knob "$s" cpu.weight  "$BG_WEIGHT"    || true
-      set_knob "$s" memory.low  0               || true
-    fi
-  done
-}
 
-case "${1:-}" in
-  --check)
-    echo "app.slice:       $APPSLICE"
-    ensure_cpu || true
-    echo "cpu.weight:      $(grep -qw cpu "$APPSLICE/cgroup.subtree_control" 2>/dev/null && echo 'enabled on app scopes' || echo 'NOT available')"
-    echo "io controller:   $(grep -qw io "$APPSLICE/cgroup.controllers" 2>/dev/null && echo yes || echo 'no — needs +io at the system level, and io.weight needs BFQ')"
-    printf '\n%-52s %-10s %s\n' SCOPE cpu.weight memory.low
-    for s in $(scopes); do
-      printf '%-52s %-10s %s\n' "$(basename "$s")" \
-        "$(cat "$s/cpu.weight" 2>/dev/null || echo -)" \
-        "$(cat "$s/memory.low" 2>/dev/null || echo -)"
-    done
-    exit 0 ;;
-  --undo)
-    for s in $(scopes); do
-      set_knob "$s" cpu.weight 100 || true
-      set_knob "$s" memory.low 0   || true
-    done
-    echo "cleared"; exit 0 ;;
-  "") ;;
-  *) echo "usage: $0 [--check|--undo]" >&2; exit 2 ;;
-esac
+def ancestors(pid, processes):
+    seen = set()
+    while pid in processes and pid not in seen:
+        seen.add(pid)
+        yield pid
+        pid = processes[pid]['parent']
 
-command -v xprop >/dev/null || { echo "needs xprop (x11-utils)" >&2; exit 1; }
-[ -n "${DISPLAY:-}" ] || { echo "needs an X display" >&2; exit 1; }
-[ -d "$APPSLICE" ] || { echo "no app.slice at $APPSLICE" >&2; exit 1; }
 
-trap '"$0" --undo >/dev/null 2>&1' EXIT TERM INT
+def owner(pid, roots, processes):
+    # Outermost window-owning process also owns nested utility windows.
+    matches = [p for p in ancestors(pid, processes) if p in roots]
+    return matches[-1] if matches else None
 
-ensure_cpu || echo "warning: cpu.weight is not available on app scopes; memory.low only" >&2
-echo "focus-priority: weighting the active window's scope $FOCUS_WEIGHT against $BG_WEIGHT"
-last=""
-apply "$(scope_of_pid "$(focused_pid || echo 1)" 2>/dev/null || echo none)"
 
-# Blocks until the focus changes. One xprop, for the life of the session.
-xprop -root -spy _NET_ACTIVE_WINDOW 2>/dev/null | while read -r _; do
-  pid=$(focused_pid) || continue
-  scope=$(scope_of_pid "$pid") || continue
-  [ "$scope" = "$last" ] && continue
-  last=$scope
-  apply "$scope"
-done
+def xprop(*args):
+    try:
+        return subprocess.run([XPROP, *args], capture_output=True, text=True,
+                              timeout=3, check=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ''
+
+
+def windows():
+    root = xprop('-root', '_NET_ACTIVE_WINDOW', '_NET_CLIENT_LIST')
+    active, clients = None, []
+    for line in root.splitlines():
+        ids = re.findall(r'0x[0-9a-fA-F]+', line)
+        if line.startswith('_NET_ACTIVE_WINDOW') and ids:
+            active = ids[0]
+        elif line.startswith('_NET_CLIENT_LIST'):
+            clients = ids
+    roots, focused = set(), None
+    for win in set(clients + ([active] if active and active != '0x0' else [])):
+        value = xprop('-id', win, '_NET_WM_PID', '_NET_WM_WINDOW_TYPE')
+        if any(k in value for k in ('_TYPE_DOCK', '_TYPE_DESKTOP', '_TYPE_NOTIFICATION')):
+            continue
+        match = re.search(r'_NET_WM_PID\(CARDINAL\) = (\d+)', value)
+        if match:
+            pid = int(match[1])
+            if win in clients:
+                roots.add(pid)
+            if win == active:
+                focused = pid
+    return roots, focused
+
+
+def policy(processes, threads, roots, focused, previous):
+    """Pure policy: preserve explicit thread priorities and PID identities."""
+    focused = owner(focused, roots, processes)
+    changes, records = [], {}
+    for tid, thread in threads.items():
+        old = previous.get(str(tid))
+        if old and old['start'] != thread['start']:
+            old = None
+        app = owner(thread['pid'], roots, processes)
+        if old and (old.get('external') or thread['nice'] != old['applied']):
+            # A user or another scheduler changed it: stop owning this identity.
+            if app is not None:
+                records[str(tid)] = {**old, 'external': True}
+            continue
+        if app is None:
+            if old and thread['nice'] != old['restore']:
+                changes.append((tid, thread['start'], old['restore']))
+            continue
+        if old:
+            base, restore = old['base'], old['restore']
+        else:
+            base = restore = thread['nice']
+            # Children born under our background adjustment inherit it.
+            for parent in ancestors(thread['pid'], processes):
+                inherited = previous.get(str(parent))
+                parent_now = threads.get(parent)
+                if (inherited and parent_now and
+                        inherited['start'] == parent_now['start'] and
+                        not inherited.get('external') and
+                        thread['nice'] == inherited['applied']):
+                    base = restore = inherited['base']
+                    break
+            # Old desktop-nice leaked -5 from launchers; retain other deliberate
+            # negative priorities, including audio and compositor helpers.
+            if base < 0 and base != -5:
+                continue
+            base = max(0, base)
+        target = min(19, base + BACKGROUND) if focused is not None and app != focused else base
+        records[str(tid)] = {'start': thread['start'], 'base': base,
+                            'restore': restore, 'applied': target, 'pid': thread['pid'],
+                            'process_start': processes[thread['pid']].get('start')}
+        if thread['nice'] != target:
+            changes.append((tid, thread['start'], target))
+    return changes, records
+
+
+def change(tid, start, nice):
+    path = Path('/proc') / str(tid)
+    try:
+        if path.stat().st_uid != os.getuid() or stat_fields(path / 'stat')['start'] != start:
+            return False
+        os.setpriority(os.PRIO_PROCESS, tid, nice)
+        return True
+    except (FileNotFoundError, ProcessLookupError):
+        return False
+
+
+def save(records, **details):
+    STATE.parent.mkdir(parents=True, exist_ok=True)
+    temporary = STATE.with_suffix('.tmp')
+    temporary.write_text(json.dumps({'threads': records, **details}))
+    temporary.replace(STATE)
+
+
+def load():
+    try:
+        return json.loads(STATE.read_text()).get('threads', {})
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def recovery_records(previous, records, threads):
+    """Keep both sides of an interrupted batch eligible for undo."""
+    pending = {**previous, **records}
+    for tid, row in pending.items():
+        current = threads.get(int(tid))
+        if current and current['start'] == row['start']:
+            pending[tid] = {**row, 'before': current['nice']}
+    return pending
+
+
+def restore():
+    failed = {}
+    for tid, row in load().items():
+        if row.get('external'):
+            continue
+        try:
+            if os.getpriority(os.PRIO_PROCESS, int(tid)) in (row['applied'], row.get('before')):
+                change(int(tid), row['start'], row['restore'])
+        except ProcessLookupError:
+            pass
+        except OSError:
+            failed[tid] = row
+    if failed:
+        save(failed, error='Could not restore all thread priorities')
+        return 1
+    STATE.unlink(missing_ok=True)
+    return 0
+
+
+def check():
+    roots, focus = windows()
+    procs, threads = snapshot(roots, load())
+    focused = owner(focus, roots, procs)
+    print('Foreground normal priority; background +5; desktop rendering -5.')
+    print('Service: ' + ('state present' if STATE.exists() else 'not managing priorities'))
+    for root in sorted({owner(p, roots, procs) for p in roots} - {None}):
+        values = [t['nice'] for t in threads.values() if owner(t['pid'], roots, procs) == root]
+        print(f"{'focused' if root == focused else 'other':7} {procs[root]['name']:18} "
+              f"pid={root} threads={len(values)} nice={','.join(map(str, sorted(set(values))))}")
+    return 0
+
+
+def run():
+    caps = re.search(r'^CapEff:\s*([0-9a-f]+)', read('/proc/self/status'), re.M)
+    if not caps or not int(caps[1], 16) & (1 << 23):
+        print('Install with bin/priority-install; CAP_SYS_NICE is required.', file=sys.stderr)
+        return 1
+    if restore():
+        return 1
+    previous = {}
+    watcher = subprocess.Popen([XPROP, '-root', '-spy', '_NET_ACTIVE_WINDOW', '_NET_CLIENT_LIST'],
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    def stop(_signum, _frame):
+        raise SystemExit(0)
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+    try:
+        while watcher.poll() is None:
+            select.select([watcher.stdout], [], [], None)
+            if not os.read(watcher.stdout.fileno(), 65536):
+                break
+            # Coalesce window creation and focus changes; no periodic wakeups.
+            while select.select([watcher.stdout], [], [], 0.08)[0]:
+                if not os.read(watcher.stdout.fileno(), 65536):
+                    break
+            roots, focused = windows()
+            processes, threads = snapshot(roots, previous)
+            changes, records = policy(processes, threads, roots, focused, previous)
+            # Save undo before writes, including recovery after a crash.
+            save(recovery_records(previous, records, threads), updated=time.time(), focused=focused)
+            for tid, start, nice in changes:
+                if not change(tid, start, nice):
+                    records.pop(str(tid), None)
+            save(records, updated=time.time(), focused=focused)
+            previous = records
+    finally:
+        watcher.terminate()
+        try:
+            watcher.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            watcher.kill()
+            watcher.wait()
+        restore()
+    return 1  # X went away; systemd retries after the next login.
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--check', action='store_true')
+    parser.add_argument('--undo', action='store_true')
+    args = parser.parse_args()
+    sys.exit(check() if args.check else restore() if args.undo else run())

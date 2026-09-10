@@ -10,7 +10,10 @@
 set -euo pipefail
 
 NICE=${NICE:--5}
-PROCS=(Xorg xfwm4 xfsettingsd xfdesktop plank xfce4-panel)
+PROCS=(Xorg xfwm4)
+# Launchers pass their nice value to applications. Boosting these gave browser
+# renderers the same priority as the compositor, defeating the separation.
+LAUNCHERS=(xfsettingsd xfdesktop plank xfce4-panel)
 
 mode=apply
 case "${1:-}" in
@@ -25,7 +28,9 @@ if [ "$mode" != check ] && [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-for p in "${PROCS[@]}"; do
+for p in "${PROCS[@]}" "${LAUNCHERS[@]}"; do
+  target=$NICE
+  case "$p" in xfsettingsd|xfdesktop|plank|xfce4-panel) target=0 ;; esac
   mapfile -t pids < <(pgrep -x "$p" || true)
   if [ ${#pids[@]} -eq 0 ]; then
     printf '%-14s %s\n' "$p" "not running"
@@ -36,8 +41,8 @@ for p in "${PROCS[@]}"; do
     if [ "$mode" = check ]; then
       printf '%-14s pid %-7s nice %s\n' "$p" "$pid" "$cur"
     else
-      renice -n "$NICE" -p "$pid" >/dev/null
-      printf '%-14s pid %-7s nice %s -> %s\n' "$p" "$pid" "$cur" "$NICE"
+      renice -n "$target" -p "$pid" >/dev/null
+      printf '%-14s pid %-7s nice %s -> %s\n' "$p" "$pid" "$cur" "$target"
     fi
   done
 done

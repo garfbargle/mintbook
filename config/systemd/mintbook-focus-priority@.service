@@ -1,0 +1,29 @@
+[Unit]
+Description=Mintbook foreground application priority for user %i
+BindsTo=user@%i.service
+After=user@%i.service graphical.target
+
+[Service]
+Type=simple
+User=%i
+EnvironmentFile=/etc/mintbook/priority-%i.env
+ExecStart=/usr/bin/python3 -I /usr/local/libexec/mintbook-focus-priority
+ExecStopPost=/usr/bin/python3 -I /usr/local/libexec/mintbook-focus-priority --undo
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=mintbook-focus-priority-%i
+RuntimeDirectoryPreserve=restart
+UMask=0077
+CapabilityBoundingSet=CAP_SYS_NICE
+AmbientCapabilities=CAP_SYS_NICE
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=user@%i.service

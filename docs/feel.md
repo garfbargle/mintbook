@@ -91,7 +91,7 @@ All read-only or self-restoring, and none need root.
 | [`bin/pixel-budget`](../bin/pixel-budget) | Compositor cost of the Retina panel. Rearranges windows |
 | [`bin/quiet-timers`](../bin/quiet-timers) | `--check` lists every maintenance unit and what it is set to |
 | [`bin/desktop-nice`](../bin/desktop-nice) | `--check` lists the desktop's nice values |
-| [`bin/focus-priority`](../bin/focus-priority) | `--check` lists app scopes and their weights |
+| [`bin/focus-priority`](../bin/focus-priority) | `--check` lists real app trees and thread priorities |
 | [`bin/warm-cache`](../bin/warm-cache) | `--check` lists what would be read, and free memory |
 | [`bin/turbo-budget`](../bin/turbo-budget) | `--check` reports the cap and whether the budget is armed |
 | [`bin/runaway-watch`](../bin/runaway-watch) | `--check` lists orphaned processes and what they are burning |
@@ -301,7 +301,13 @@ temperature over a real session. The sprints are short and the chassis was
 already reaching 95 C under any sustained load, but that is an argument, not a
 number.
 
-### 4. Nice the things you look at — **measured, built, needs one root command**
+### 4. Nice the things you look at — **corrected 2026-09-10**
+
+> The timer was subsequently installed. Its original list boosted launchers,
+> which passed -5 to apps and weakened the intended separation. The installed
+> correction retains -5 only for Xorg/xfwm4 and restores launchers to 0.
+> [priority.md](priority.md) describes the current implementation and undo.
+> The experiment and installation notes below describe the original proposal.
 
 `Xorg`, `xfwm4`, `xfsettingsd`, `xfdesktop`, `xfce4-panel` and `plank` all run
 at nice **0**, competing on two cores with whatever else is running. Everything
@@ -338,7 +344,14 @@ sudo systemctl daemon-reload && sudo systemctl enable --now mintbook-desktop-nic
 This makes the machine slower at work in order to keep it responsive while
 working. That is the right trade for a laptop, and it is a trade, not a win.
 
-### 5. Focus-follows-priority — **built, running**
+### 5. Focus-follows-priority — **superseded 2026-09-09**
+
+> The live CPU controller was absent, and Electron renderer/GPU children were
+> outside the main-process scopes. The following is the historical design,
+> not a description of effective scheduling. [priority.md](priority.md) records
+> the replacement, its measured contention benefit, costs and installation.
+> The former memory protection was not established either: ancestor protection
+> was zero. Do not reinstall the old user unit.
 
 systemd puts each application in its own cgroup scope.
 [`bin/focus-priority`](../bin/focus-priority) follows `_NET_ACTIVE_WINDOW`,

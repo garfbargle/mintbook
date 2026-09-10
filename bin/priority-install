@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Install the event-driven app priority service and correct launcher inheritance.
+# Root is needed for CAP_SYS_NICE. No applications are restarted.
+# --revert restores prior desktop-nice files and ordinary app priorities;
+# the retired, ineffective user focus service stays disabled.
+# --no-snapshot uses file backups only when the user declines Timeshift.
+set -euo pipefail
+ROOT=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+if [ "$(id -u)" -ne 0 ]; then
+  echo "run: pkexec $ROOT/bin/priority-install ${1:-}" >&2
+  exit 1
+fi
+uid=${PKEXEC_UID:-${SUDO_UID:-1000}}
+user=$(getent passwd "$uid" | cut -d: -f1)
+user_home=$(getent passwd "$uid" | cut -d: -f6)
+[ -n "$user" ] && [ "$uid" -ge 1000 ] || { echo 'Need the desktop user'; exit 1; }
+unit="mintbook-focus-priority@$uid.service"
+backup="/var/lib/mintbook-priority/$user"
+files=(/usr/local/libexec/mintbook-focus-priority
+       /usr/local/sbin/mintbook-desktop-nice
+       /etc/systemd/system/mintbook-focus-priority@.service
+       "/etc/mintbook/priority-$uid.env")
+userctl() { runuser -u "$user" -- env XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" systemctl --user "$@"; }
+if [ "${1:-}" = --revert ]; then
+  [ -e "$backup/complete" ] || { echo 'No installation backup'; exit 1; }
+  systemctl disable --now "$unit"
+  for path in "${files[@]}"; do
+    rm -f "$path"
+    if [ -e "$backup$path" ] || [ -L "$backup$path" ]; then cp -a "$backup$path" "$path"; fi
+  done
+  systemctl daemon-reload
+  systemctl start mintbook-desktop-nice.service
+  echo 'Restored previous desktop tuning; application focus scheduling is off.'
+  exit 0
+fi
+[ $# -eq 0 ] || [ "${1:-}" = --no-snapshot ] || { echo 'usage: priority-install [--revert|--no-snapshot]'; exit 2; }
+for path in bin/focus-priority bin/desktop-nice config/systemd/mintbook-focus-priority@.service; do
+  [ -f "$ROOT/$path" ] || { echo "Missing $path"; exit 1; }
+done
+if [ ! -e "$backup/complete" ]; then
+  if [ "${1:-}" != --no-snapshot ]; then
+    timeshift --create --comments 'before mintbook application priority' --scripted
+  fi
+  install -dm700 "$backup"
+  for path in "${files[@]}"; do
+    if [ -e "$path" ] || [ -L "$path" ]; then cp -a --parents "$path" "$backup"; fi
+  done
+  touch "$backup/complete"
+fi
+userctl disable --now mintbook-focus-priority.service || true
+systemctl stop "$unit" 2>/dev/null || true
+install -dm755 /usr/local/libexec /etc/mintbook
+install -m755 "$ROOT/bin/focus-priority" /usr/local/libexec/mintbook-focus-priority
+install -m755 "$ROOT/bin/desktop-nice" /usr/local/sbin/mintbook-desktop-nice
+install -m644 "$ROOT/config/systemd/mintbook-focus-priority@.service" /etc/systemd/system/
+# The X session exports DISPLAY; Xauthority on this LightDM machine is per-user.
+display=$(userctl show-environment | sed -n 's/^DISPLAY=//p' | head -1)
+display=${display:-:0}
+[[ "$display" =~ ^:[0-9]+(\.[0-9]+)?$ ]] || { echo "Unsupported DISPLAY: $display"; exit 1; }
+python3 - "$display" "$user_home/.Xauthority" "/etc/mintbook/priority-$uid.env" <<'PY'
+import json, pathlib, sys
+pathlib.Path(sys.argv[3]).write_text('DISPLAY=' + json.dumps(sys.argv[1]) + '\nXAUTHORITY=' + json.dumps(sys.argv[2]) + '\n')
+PY
+# Clear only the exact values used by the retired direct-cgroup writer.
+for group in /sys/fs/cgroup/user.slice/user-"$uid".slice/user@"$uid".service/app.slice/app-*.scope; do
+  [ -d "$group" ] || continue
+  [ "$(cat "$group/memory.low" 2>/dev/null || true)" != 536870912 ] || echo 0 > "$group/memory.low"
+  case "$(cat "$group/cpu.weight" 2>/dev/null || true)" in 50|400) echo 100 > "$group/cpu.weight" ;; esac
+done
+systemctl daemon-reload
+systemctl start mintbook-desktop-nice.service
+systemctl enable --now "$unit"
+systemctl --no-pager --full status "$unit"
+echo "Undo: pkexec $ROOT/bin/priority-install --revert"
