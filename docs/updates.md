@@ -291,6 +291,14 @@ What it does **not** fix, because it cannot:
 - **Flatpak.** Nothing on this disk changes when flathub gains a new version,
   so there is nothing to watch. The six-hour timer is still the only thing
   that asks, which is exactly why that half is timestamped separately.
+- **A rebuild that lands while the check is running.** systemd drops it: the
+  path unit stops watching for as long as the service it triggered is active,
+  and `PathChanged` has no condition to re-evaluate when it re-arms, so the
+  change that happened in between is simply gone. Verified rather than assumed
+  — two renames two seconds apart, one run. It matters because `apt update`
+  rebuilds the cache more than once, and the trigger tends to come from the
+  first of them, so the answer can be computed from a cache apt has not
+  finished writing. The next refresh, or the timer, corrects it.
 - **An install done outside the popup.** dpkg's status file is deliberately
   not watched — it changes once per package, and a count recomputed between
   two halves of one dpkg run is not a count worth reading — so after
@@ -434,3 +442,25 @@ only reason this was worth doing at all.
   which is why nothing had ever mentioned it. That is the check working, not
   the popup failing — but it does mean the amber line is a thing you will see
   and have to decide about rather than a rare event.
+
+  It was Cursor's, and the key was never missing. `cursor`'s postinst installs
+  it at `/usr/share/keyrings/anysphere.gpg` — fingerprint `380FF4BC DC34A4BD
+  92A35653 42A1772E 62E492D6`, and checking it against the signature on the
+  repo's own `Release.gpg` says it is the key that signs the thing — and then
+  writes a source line that does not point at it. The postinst emits a deb822
+  `.sources` carrying `Signed-By:` only where `apt modernize-sources` exists;
+  this machine is apt 2.8.3, so it took the legacy branch and wrote a bare
+  `deb [arch=amd64,arm64] …`, while deliberately no longer dropping the key in
+  `/etc/apt/trusted.gpg.d`. Key present, key unused, repo refused since
+  1 September. One edit to `/etc/apt/sources.list.d/cursor.list` fixes it:
+
+  ```
+  deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/anysphere.gpg] https://downloads.cursor.com/aptrepo stable main
+  ```
+
+  and one line through `debconf-set-selections` — `cursor
+  cursor/add-cursor-repo boolean false` — keeps it fixed, because the postinst
+  rewrites that file on every Cursor upgrade unless the debconf answer tells it
+  not to. `signed-by=` rather than putting the key back in `trusted.gpg.d`: the
+  old location would also work, and would trust that key for every source on
+  the machine.
