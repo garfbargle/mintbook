@@ -259,11 +259,40 @@ the bytes it is moving are coming from disk or from cache, the files it has
 open, its command line and working directory. Escape or the back chevron
 returns to the list. `Activity Monitor…` is still there for the full table.
 
-Colours are keyed to the kernel `comm`, so Firefox stays blue as its rank
-moves. The chart is stacked as *share of the machine* (the same unit as the
-header percentage); the list shows cores, which is the Activity Monitor number
-and the one that answers "is this pegging a core?". Pressure stall (`/proc/pressure`)
-and swap join the subtitle only when they are actually happening.
+**Colours come from each app's own icon.** Firefox's band is Firefox orange,
+not whatever a hash of `firefox-bin` came to. `bin/mintbook_appcolor.py` walks
+`comm` → `.desktop` → `Icon=` → the icon theme, renders that file at 64px, and
+lets every one of the 4096 pixels vote for a 15° hue bucket weighted by
+saturation × value — a full pass, not a random sample, because it costs ~10 ms
+and is repeatable. Only the winning hue and its mean saturation are cached, in
+`~/.cache/mintbook/app-colors.json`; lightness belongs to the *appearance*, so
+one base paints a darker orange on pearl and a lighter one on slate and
+switching appearance re-reads no icons at all.
+
+The walk runs **after the first frame**, in an idle callback. Six icons is
+~100 ms, which is half the popup's time to screen; an app that has never been
+seen keeps a fallback colour for one frame and is decoded once, ever. Hits and
+misses are both written back, and the whole file is dropped when an
+applications directory or the icon theme changes — which is what makes
+remembering a miss safe when an app is installed later.
+
+> **Plenty of apps have no colour to take.** ChatGPT, Cursor and most terminals
+> ship black-and-white marks. The sampler refuses them — a winning hue under
+> 0.35 mean saturation, or under a tenth of the visible pixels carrying any
+> colour at all, is antialiasing, not a brand — and those names fall back to
+> the old hashed palette, which is distinct but arbitrary. A grey band would be
+> honest and invisible. Two apps whose icons genuinely share a hue are not
+> spread apart either; the second only moves a shade along, and the legend dot,
+> the name and the hover are the tiebreak.
+
+The chart is stacked as *share of the machine*, and **the list now reads in
+that same unit**: `26%`, not `1.0`. Cores are the Activity Monitor number and
+answer "is this pegging a core?", but at one decimal every quiet process
+rounded to the same `0.0`, and a bare `1.0` reads like a score out of ten. Rows
+sort by that percentage, keep a tenth below 10%, and print cores in the
+sub-line only when a process is actually holding one — and under the percentage
+in the detail view. Pressure stall (`/proc/pressure`) and swap join the
+subtitle only when they are actually happening.
 
 Install with [`bin/cpu-install`](../bin/cpu-install); `--revert` deletes
 `~/.local/bin/cpu-menu` and `panel-cpu` falls back to `gnome-system-monitor` on
@@ -271,7 +300,11 @@ its own. `bin/doctor` checks for it, and says nothing when it is not installed.
 
 The helpers live in [`bin/mintbook_cpu.py`](../bin/mintbook_cpu.py) so the
 collector and the popup share one format, and so the format can be tested
-without opening a Gtk window.
+without opening a Gtk window. The icon colours are separate, in
+[`bin/mintbook_appcolor.py`](../bin/mintbook_appcolor.py), which imports Gtk
+*inside* the two functions that need it: `panel-cpu` runs every two seconds and
+must never pay for that import, and the sampler is then testable on a buffer of
+bytes with no display at all (`tests/test_app_colors.py`).
 
 ### Temperature (`plugin-17`, genmon)
 

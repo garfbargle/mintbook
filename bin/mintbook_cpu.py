@@ -63,8 +63,10 @@ ROLES = (
     ('--type=crashpad-handler', 'Crashpad'),
 )
 
-# Distinct on both glass appearances. Identity is the comm, so Firefox stays
-# blue across samples even as its rank moves.
+# The fallback palette, for an app whose icon has no colour to take (a
+# black-and-white mark) and for the kernel, which has no icon at all. Distinct
+# on both glass appearances, and keyed to the name, so a process keeps its
+# colour as its rank moves. bin/mintbook_appcolor.py is the first choice.
 SWATCHES_LIGHT = (
     (0, 122, 255),
     (175, 82, 222),
@@ -120,9 +122,36 @@ def color_index(name, n=None):
     return value % n
 
 
-def swatch(name, dark=False):
+def swatch_slot(slot, dark=False):
     palette = SWATCHES_DARK if dark else SWATCHES_LIGHT
-    return palette[color_index(name, len(palette))]
+    return palette[slot % len(palette)]
+
+
+def swatch(name, dark=False):
+    return swatch_slot(color_index(name, len(SWATCHES_LIGHT)), dark)
+
+
+def fallback_slots(names, n=None):
+    """A palette slot each for the names with no icon colour of their own.
+
+    The hash alone put ChatGPT and codex on the same teal, which is fine when
+    every band is hashed and confusing next to bands that mean something. A
+    name whose slot is taken probes forward to the next free one. Sorted by
+    name, not by rank, so a slot does not move when the ranking does.
+    """
+    n = n or len(SWATCHES_LIGHT)
+    used = set()
+    out = {}
+    for name in sorted(names):
+        slot = color_index(name, n)
+        for step in range(n):
+            probe = (slot + step) % n
+            if probe not in used:
+                slot = probe
+                break
+        used.add(slot)
+        out[name] = slot
+    return out
 
 
 def pretty(comm, cmdline=''):
@@ -166,6 +195,23 @@ def human(value, per_s=False):
 def cores(share, ncpu=None):
     """`share` is percent of the machine; this is how many cores that is."""
     return share / 100.0 * (ncpu or NCPU)
+
+
+def pct_label(share):
+    """Share of the machine, at the precision that share deserves.
+
+    The process list used to print cores — `1.0`, `0.0` — which is the Activity
+    Monitor number but reads like a score out of ten, and rounds every quiet
+    process to the same nothing. A percentage is the unit the header and the
+    chart already use, and a tenth of a percent is the smallest thing worth
+    printing on a 4-thread machine.
+    """
+    share = max(0.0, float(share))
+    if share >= 9.95:
+        return f'{share:.0f}%'
+    if share < 0.05:
+        return '0%'
+    return f'{share:.1f}%'
 
 
 def encode_sample(sample):

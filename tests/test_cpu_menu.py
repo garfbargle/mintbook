@@ -148,5 +148,37 @@ class CpuHistoryTests(unittest.TestCase):
                          'last 30s')
 
 
+class ReadingTests(unittest.TestCase):
+    """The number on a process row is the thing people actually read."""
+
+    def test_a_busy_process_is_a_whole_percent(self):
+        self.assertEqual(cpu.pct_label(26.4), '26%')
+        self.assertEqual(cpu.pct_label(9.96), '10%')
+
+    def test_a_quiet_one_keeps_a_tenth(self):
+        self.assertEqual(cpu.pct_label(1.04), '1.0%')
+        self.assertEqual(cpu.pct_label(0.41), '0.4%')
+
+    def test_nothing_is_nothing(self):
+        self.assertEqual(cpu.pct_label(0), '0%')
+        self.assertEqual(cpu.pct_label(-3), '0%')
+
+    def test_two_hashed_names_do_not_share_a_swatch(self):
+        names = ['ChatGPT', 'codex', 'X server', 'Cursor', 'kswapd0']
+        slots = cpu.fallback_slots(names)
+        self.assertEqual(len(set(slots.values())), len(names))
+
+    def test_a_slot_does_not_move_when_the_ranking_does(self):
+        names = ['ChatGPT', 'codex', 'X server']
+        self.assertEqual(cpu.fallback_slots(names),
+                         cpu.fallback_slots(list(reversed(names))))
+
+    def test_more_names_than_swatches_still_answers(self):
+        names = [f'proc{i}' for i in range(len(cpu.SWATCHES_LIGHT) + 3)]
+        slots = cpu.fallback_slots(names)
+        self.assertEqual(len(slots), len(names))
+        self.assertTrue(all(0 <= v < len(cpu.SWATCHES_LIGHT) for v in slots.values()))
+
+
 if __name__ == '__main__':
     unittest.main()

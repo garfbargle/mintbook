@@ -22,6 +22,7 @@ import time
 T0 = time.monotonic()
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import mintbook_appcolor as appcolor                               # noqa: E402
 import mintbook_cpu as mcpu                                         # noqa: E402
 
 HOME = os.path.expanduser('~')
@@ -168,7 +169,7 @@ def fade_mask(cr, x, w):
     return mask
 
 
-def stacked_chart(cr, samples, keys, x, y, w, h, dark, fg, hot_key=None):
+def stacked_chart(cr, samples, keys, x, y, w, h, color_of, fg, hot_key=None):
     """Process bands stacked as share of the machine, idle left as glass."""
     if len(samples) < 2:
         return False
@@ -190,7 +191,7 @@ def stacked_chart(cr, samples, keys, x, y, w, h, dark, fg, hot_key=None):
 
     add(fg, other, None)
     for key in ranked:
-        add(mcpu.swatch(key, dark), series.get(key, [0] * n), key)
+        add(color_of(key), series.get(key, [0] * n), key)
 
     cr.save()
     cr.push_group()
@@ -320,7 +321,7 @@ class ChartRow(Row):
         text(cr, '0', gx, gy + gh + 2, 7.5, self.c['fg'], .28, tnum=True)
         names = [name for _pid, name in p.legend]
         drew = stacked_chart(cr, p.samples, names, gx, gy, gw, gh,
-                             p.dark, self.c['fg'], p.hot_key)
+                             p.color_for, self.c['fg'], p.hot_key)
         if not drew:
             text(cr, 'Collecting history…', 15, gy + gh / 2 - 8, 9.5,
                  self.c['fg'], .35)
@@ -356,7 +357,6 @@ class ProcessRow(Row):
         if not self.procs:
             text(cr, 'Quiet', 15, self.LEAD + 4, 10.5, self.c['fg'], .4)
             return
-        dark = self.panel.dark
         for i, proc in enumerate(self.procs):
             y = self.LEAD + i * self.LINE
             hot = self.hit == proc['i']
@@ -364,14 +364,14 @@ class ProcessRow(Row):
                 rrect(cr, 6, y - 2, w - 12, self.LINE - 2, 8)
                 rgba(cr, self.c['fg'], .06)
                 cr.fill()
-            color = mcpu.swatch(proc['n'], dark)
+            color = self.panel.color_for(proc['n'])
             cr.arc(22, y + 10, 4.2, 0, 2 * math.pi)
             rgba(cr, color, .95)
             cr.fill()
-            text(cr, proc['label'], 34, y - 1, 10.5, self.c['fg'],
-                 .94 if hot else .88, 'bold', width=w - 118)
-            text(cr, f"{mcpu.cores(proc['s']):.1f}", 0, y - 1, 11,
-                 self.c['fg'], .55 if not hot else .8, 'bold', 'right',
+            text(cr, proc['label'], 34, y - 2, 10.5, self.c['fg'],
+                 .94 if hot else .88, 'bold', width=w - 126)
+            text(cr, mcpu.pct_label(proc['s']), 0, y - 4, 15,
+                 self.c['fg'], .72 if not hot else .95, 'bold', 'right',
                  w - 15, tnum=True)
             sub = proc['sub']
             text(cr, sub or 'idle', 34, y + 16, 8.7, self.c['fg'], .4,
@@ -420,7 +420,7 @@ class BackRow(Row):
         hot = self.hit is not None
         text(cr, '', 0, 0, 1, self.c['fg'], 0)
         chevron(cr, 12, 14, self.c['fg'], .7 if hot else .45, flip=True)
-        color = mcpu.swatch(mcpu.pretty(d.get('comm', ''), ''), self.panel.dark)
+        color = self.panel.color_for(mcpu.pretty(d.get('comm', ''), ''))
         cr.arc(36, 14, 5, 0, 2 * math.pi)
         rgba(cr, color)
         cr.fill()
@@ -452,7 +452,7 @@ class DetailChartRow(Row):
         p = self.panel
         self.card(cr, w, self.h)
         d = p.detail or {}
-        color = mcpu.swatch(mcpu.pretty(d.get('comm', ''), ''), p.dark)
+        color = p.color_for(mcpu.pretty(d.get('comm', ''), ''))
         values = p.pid_series
         gx, gy, gw, gh = 14, 10, w - 28, 54
         if len(values) > 1:
@@ -544,6 +544,9 @@ class Menu:
         self.geo = None
         self.x = self.y = 0
         self.gdk_win = None
+        self.icon_sig = appcolor.signature(theme=appcolor.icon_theme_name())
+        self.icon_bases = appcolor.read_cache(sig=self.icon_sig)
+        self.color_job = None
         self.load()
         self.rows = []
         self.rebuild(initial=True)
@@ -584,6 +587,7 @@ class Menu:
         box.pack_start(self.area, False, False, 0)
         win.add(box)
         win.show_all()
+        self.want_colors()
         GLib.timeout_add(1000, self.tick)
 
     def load(self):
@@ -608,11 +612,87 @@ class Menu:
             dt = self.samples[-1].get('d', 0) if self.samples else 0
             sub = self.proc_sub(row, dt)
             self.procs.append({**row, 'label': label, 'sub': sub})
+        # The percentage is the headline now, so the list reads down it. The
+        # legend still *chooses* the names over the whole window; this only
+        # orders them, and the sample behind it only moves every PROC_EVERY.
+        self.procs.sort(key=lambda row: -float(row.get('s') or 0))
+        self.assign_colors()
         if self.selected:
             self.detail = mcpu.inspect(self.selected, prev=self.detail)
 
+    def assign_colors(self):
+        """Which names take a palette slot, and which share a hue.
+
+        Both fall out of the set of names on screen, so both are settled once
+        per load rather than per draw. `fallback_slots` keeps two hashed names
+        off the same swatch; the shade step keeps two apps that resolve to the
+        same icon — `claude` in a terminal and the Claude app — off the same
+        orange.
+        """
+        self.fallbacks = mcpu.fallback_slots(
+            [row['n'] for row in self.procs if not self.icon_bases.get(row['n'])])
+        steps = {}
+        seen = {}
+        for row in sorted(self.procs, key=lambda row: row['n']):
+            base = self.icon_bases.get(row['n'])
+            if not base:
+                continue
+            hue = round(base[0], 2)
+            steps[row['n']] = seen.get(hue, 0)
+            seen[hue] = steps[row['n']] + 1
+        self.shades = steps
+
+    def color_for(self, name):
+        """An app's own icon colour; a palette slot when it has none."""
+        own = appcolor.tint(self.icon_bases.get(name), self.dark,
+                            self.shades.get(name, 0))
+        if own:
+            return own
+        slot = self.fallbacks.get(name)
+        if slot is None:
+            return mcpu.swatch(name, self.dark)
+        return mcpu.swatch_slot(slot, self.dark)
+
+    def want_colors(self):
+        """Queue the icon walk if any name on screen is still uncoloured."""
+        if self.color_job is not None:
+            return
+        if any(proc.get('n') not in self.icon_bases for proc in self.procs):
+            self.color_job = GLib.idle_add(self.resolve_colors)
+
+    def resolve_colors(self):
+        """Read icons for names we have never seen — after the window is up.
+
+        Decoding six icons is ~100 ms, which is most of the popup's budget, so
+        the first frame paints from the cache and a new app keeps the hash
+        swatch for one frame. Answers are written back, hits and misses alike,
+        so this runs once per app and never again.
+        """
+        self.color_job = None
+        wants = []
+        for proc in self.procs:
+            key = proc.get('n')
+            if not key or key in self.icon_bases:
+                continue
+            pid = proc.get('i')
+            wants.append((key, proc.get('comm') or key, key,
+                          mcpu.readlink_of(pid, 'exe') if pid else ''))
+        if not wants:
+            return False
+        bases, found = appcolor.resolve(wants, self.icon_bases)
+        if found:
+            self.icon_bases = bases
+            self.assign_colors()
+            appcolor.write_cache(bases, sig=self.icon_sig)
+            self.area.queue_draw()
+        return False
+
     def proc_sub(self, row, dt):
         bits = []
+        held = mcpu.cores(row.get('s') or 0)
+        if held >= 0.85:
+            # The one thing a percentage hides: whether a core is pegged.
+            bits.append(f'{held:.1f} cores')
         rss = row.get('m') or 0
         if rss:
             bits.append(mcpu.human(rss))
@@ -681,9 +761,10 @@ class Menu:
             cache_note = 'mostly page cache, not disk'
         elif d.get('read_s', 0) >= 50_000:
             cache_note = 'physical disk reads'
+        pct = cpu_n / mcpu.NCPU * 100 if live else share
         lines = [
-            ('CPU', f'{cpu_n:.2f} cores',
-             f'{share:.0f}% of the machine' if share else ''),
+            ('CPU', mcpu.pct_label(pct) + ' of the machine',
+             f'{cpu_n:.2f} of {mcpu.NCPU} cores'),
             ('Memory', mcpu.human(d.get('rss') or 0),
              (mcpu.human(d.get('vsize') or 0) + ' virtual') if d.get('vsize') else ''),
             ('Read', mcpu.human(d.get('read_s') or 0, True),
@@ -723,6 +804,7 @@ class Menu:
             self.rebuild()
         else:
             self.area.queue_draw()
+        self.want_colors()
         return True
 
     def open_process(self, pid):
