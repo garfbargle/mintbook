@@ -338,6 +338,28 @@ gone the survivors are killed and the pair is started again. A failed attempt
 is not retried for 30 s, so a panel that is still coming up is not hunted once
 every two seconds.
 
+**Handler cleanup, 2026-09-10:** the installed xdotool left every asynchronous
+`exec` handler as a zombie. On September 9, the two watchers had accumulated
+102 exited Python processes. They used no resident memory or CPU, but remained
+in `/proc` for every process scan. Each watcher now uses `exec --sync` to reap
+its handler. `cpu-install` stops the old watchers before replacing the helper;
+`cpu-hover stop` verifies their command lines and excludes the panel PID.
+
+The installed pair had zero remaining children after ten enter/leave cycles,
+and again after four more. Both runs are retained in
+[the initial probe](measurements/2026-09-10-hover.json) and
+[the settled probe](measurements/2026-09-10-hover-settled.json). Pointer movement
+by the user overlapped the probes, and the first ran during snapshot copying:
+their flag timing is not a valid latency benchmark. No CPU or battery saving is
+claimed. The improvement is that exited handlers no longer accumulate.
+Undo remains `bin/cpu-install --revert`.
+
+An interpreter-startup experiment on September 9 also tried Python `-S`:
+normal/`-S` CPU medians were 85.6/86.2 ms for a render, 121.4/115.0 ms with a
+process scan, and 83.3/83.6 ms for a hover render (12 observations per arm).
+There was no consistent gain, so normal Python startup was retained. Those are
+session observations; the temporary raw file did not survive the reboot.
+
 > **The silhouette changes, not just the colour.** The bands come from the
 > 6 s process history, not the 2 s trace, so the hovered line is smoother and
 > its spikes are lower — hovering redraws the line as well as colouring it.

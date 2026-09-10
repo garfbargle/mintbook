@@ -13,18 +13,19 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 BIN="$HOME/.local/bin"
 
-nudge() {   # re-run every genmon widget now, rather than at its next tick
+nudge() {   # re-run the first genmon widget (the sparkline) now
   # The event matches on the plugin *name*: plugin-19:refresh, which this used
   # to send, was delivered to nothing and returned FALSE. bin/cpu-hover has
-  # the targeted version for the once-a-hover case; here, once, all of them is
-  # fine. See docs/desktop.md.
+  # the same working event. Only the first matching widget handles it.
+  # See docs/desktop.md.
   [ -n "${DISPLAY:-}" ] || return 0
   xfce4-panel --plugin-event=genmon:refresh:bool:true >/dev/null 2>&1 || true
 }
 
 if [ "${1:-}" = --revert ]; then
   echo "==> removing the menu"
-  for f in cpu-menu cpu-hover; do
+  "$ROOT/bin/cpu-hover" stop
+  for f in cpu-menu; do
     P=$(cat "$HOME/.cache/mintbook/$f.pid" 2>/dev/null || true)
     [ -n "$P" ] && kill "$P" 2>/dev/null || true
   done
@@ -41,6 +42,7 @@ fi
 
 echo "==> $BIN"
 install -dm755 "$BIN"
+"$ROOT/bin/cpu-hover" stop
 for f in panel-cpu cpu-menu cpu-hover mintbook_cpu.py mintbook_appcolor.py mintbook_keys.py; do
   rm -f "$BIN/$f"
   install -m755 "$ROOT/bin/$f" "$BIN/$f"

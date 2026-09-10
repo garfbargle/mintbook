@@ -1,0 +1,57 @@
+{
+  "date": "2026-09-10T08:33:14-06:00",
+  "moves": [
+    {
+      "inside": true,
+      "correct_flag": true,
+      "latency_ms": 224,
+      "pointer": "X=1640\nY=25\nSCREEN=0\nWINDOW=14680067"
+    },
+    {
+      "inside": false,
+      "correct_flag": true,
+      "latency_ms": 412,
+      "pointer": "X=1751\nY=0\nSCREEN=0\nWINDOW=14680067"
+    },
+    {
+      "inside": true,
+      "correct_flag": true,
+      "latency_ms": 333,
+      "pointer": "X=1656\nY=198\nSCREEN=0\nWINDOW=96468996"
+    },
+    {
+      "inside": false,
+      "correct_flag": true,
+      "latency_ms": 18,
+      "pointer": "X=1640\nY=85\nSCREEN=0\nWINDOW=96468996"
+    },
+    {
+      "inside": true,
+      "correct_flag": true,
+      "latency_ms": 24,
+      "pointer": "X=1640\nY=25\nSCREEN=0\nWINDOW=14680067"
+    },
+    {
+      "inside": false,
+      "correct_flag": true,
+      "latency_ms": 371,
+      "pointer": "X=1640\nY=85\nSCREEN=0\nWINDOW=96468996"
+    },
+    {
+      "inside": true,
+      "correct_flag": true,
+      "latency_ms": 183,
+      "pointer": "X=1640\nY=25\nSCREEN=0\nWINDOW=14680067"
+    },
+    {
+      "inside": false,
+      "correct_flag": true,
+      "latency_ms": 188,
+      "pointer": "X=1640\nY=85\nSCREEN=0\nWINDOW=96468996"
+    }
+  ],
+  "remaining_children": {
+    "9153": [],
+    "9154": []
+  }
+}

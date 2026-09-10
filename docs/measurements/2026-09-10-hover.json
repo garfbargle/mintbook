@@ -1,0 +1,78 @@
+{
+  "date": "2026-09-10T08:30:29-06:00",
+  "cycles": 10,
+  "before_children": {
+    "9153": [],
+    "9154": []
+  },
+  "after_children": {
+    "9153": [],
+    "9154": []
+  },
+  "flags": [
+    {
+      "on": true,
+      "after_leave": true
+    },
+    {
+      "on": false,
+      "after_leave": false
+    },
+    {
+      "on": false,
+      "after_leave": false
+    },
+    {
+      "on": true,
+      "after_leave": true
+    },
+    {
+      "on": false,
+      "after_leave": true
+    },
+    {
+      "on": false,
+      "after_leave": true
+    },
+    {
+      "on": false,
+      "after_leave": false
+    },
+    {
+      "on": true,
+      "after_leave": true
+    },
+    {
+      "on": true,
+      "after_leave": false
+    },
+    {
+      "on": true,
+      "after_leave": false
+    }
+  ],
+  "watchers": {
+    "9153": [
+      "xdotool",
+      "behave",
+      "23068675",
+      "mouse-enter",
+      "exec",
+      "--sync",
+      "/home/cobo/.local/bin/cpu-hover",
+      "on",
+      ""
+    ],
+    "9154": [
+      "xdotool",
+      "behave",
+      "23068675",
+      "mouse-leave",
+      "exec",
+      "--sync",
+      "/home/cobo/.local/bin/cpu-hover",
+      "off",
+      ""
+    ]
+  }
+}

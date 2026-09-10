@@ -10,6 +10,7 @@ blocked on the X socket costing nothing until the pointer arrives.
 
     cpu-hover watch     find the window and hand it to xdotool
     cpu-hover on|off    the pointer arrived, or left
+    cpu-hover stop      retire the verified watchers before reinstalling
 
 It takes *two* xdotool processes, one per event. `behave`'s `exec` takes the
 whole rest of the command line, so chaining a second `behave` after it does
@@ -30,6 +31,7 @@ bin/panel-cpu starts this and restarts it, so there is no autostart entry to
 install and nothing to clean up when the panel restarts. See docs/desktop.md.
 """
 import os
+import signal
 import subprocess
 import sys
 
@@ -201,12 +203,39 @@ def watch():
         return 1
     watchers = []
     for event, action in (('mouse-enter', 'on'), ('mouse-leave', 'off')):
+        # Without --sync, this xdotool version never reaps its exited handlers.
+        # Each watcher waits only for its own short handler, then blocks on X.
         child = subprocess.Popen(
-            ['xdotool', 'behave', str(window), event, 'exec', SELF, action],
+            ['xdotool', 'behave', str(window), event, 'exec', '--sync', SELF, action],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         watchers.append(child.pid)
     with open(PIDFILE, 'w') as handle:
         handle.write(' '.join(str(p) for p in watchers) + f'\n{panel}\n')
+    return 0
+
+
+def stop():
+    """Retire only the two verified watchers, also releasing their zombies."""
+    try:
+        with open(PIDFILE) as handle:
+            pids = [int(p) for p in handle.readline().split()]
+    except (OSError, ValueError):
+        pids = []
+    expected = {os.path.realpath(SELF), os.path.realpath(f'{HOME}/.local/bin/cpu-hover')}
+    for pid in pids:
+        try:
+            with open(f'/proc/{pid}/cmdline', 'rb') as handle:
+                args = handle.read().decode().split('\0')
+            if (os.path.basename(args[0]) == 'xdotool' and 'behave' in args and
+                    any(os.path.realpath(a) in expected for a in args if a.startswith('/'))):
+                os.kill(pid, signal.SIGTERM)
+        except (OSError, UnicodeError):
+            pass
+    for path in (PIDFILE, HOVER):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
     return 0
 
 
@@ -218,6 +247,8 @@ def main():
         leave(plugin_id())
     elif action == 'watch':
         return watch()
+    elif action == 'stop':
+        return stop()
     else:
         print(__doc__.strip(), file=sys.stderr)
         return 2

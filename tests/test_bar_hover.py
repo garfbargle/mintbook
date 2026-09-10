@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch, mock_open
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -102,6 +103,26 @@ class WindowTests(unittest.TestCase):
 
 
 class WatcherTests(unittest.TestCase):
+    def test_stop_checks_identity_and_ignores_the_panel_pid(self):
+        files = {hover.PIDFILE: '10 11 12\n13\n',
+                 '/proc/10/cmdline': b'\0'.join([b'/usr/bin/xdotool', b'behave', b'123', b'exec', hover.SELF.encode(), b'on']),
+                 '/proc/11/cmdline': b'\0'.join([b'/usr/bin/xdotool', b'behave', b'123', b'exec', b'/another/task']),
+                 '/proc/12/cmdline': b'/usr/bin/python3\0unrelated\0'}
+        def opened(path, *args, **kwargs):
+            return mock_open(read_data=files[path])(path, *args, **kwargs)
+        with patch('builtins.open', side_effect=opened), \
+                patch.object(hover.os, 'kill') as kill, \
+                patch.object(hover.os, 'remove'):
+            self.assertEqual(hover.stop(), 0)
+        kill.assert_called_once_with(10, hover.signal.SIGTERM)
+
+    def test_stop_tolerates_a_stale_pidfile(self):
+        with patch('builtins.open', side_effect=FileNotFoundError), \
+                patch.object(hover.os, 'kill') as kill, \
+                patch.object(hover.os, 'remove', side_effect=FileNotFoundError):
+            self.assertEqual(hover.stop(), 0)
+        kill.assert_not_called()
+
     def test_the_plugin_is_found_by_its_command_not_a_number(self):
         with tempfile.TemporaryDirectory() as d:
             Path(d, 'genmon-17.rc').write_text('Command=/x/panel-temp\n')
