@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# applespi-reset — try progressively harder ways to revive the MacBook8,1 Apple
+# SPI keyboard/trackpad after an ACPI S3 resume. Must be run as root.
+# See docs/input.md.
+#
+#   applespi-reset            # report state only, change nothing
+#   applespi-reset slave      # rebind spi-APP000D:00 on applespi
+#   applespi-reset controller # unbind/rebind 0000:00:15.4 on pxa2xx_spi_pci
+#   applespi-reset remove     # PCI remove + rescan of 0000:00:15.4
+#   applespi-reset escalate   # slave, then controller, then remove; stop when input returns
+#
+# Why the levels differ. The 2026-09-08 experiment rebound only the SPI *slave*
+# and failed, and docs/input.md explains why: applespi re-probes, checks SIST,
+# sees that firmware still calls SPI enabled, and skips SIEN(1) and its recovery
+# delay. That test never reset the SPI *controller*, so "rebinding does not
+# work" was only ever established for the narrowest of the three levels here.
+#
+# Nothing is persistent. Every level is a live experiment on the device you are
+# typing on: run it over SSH, not from the built-in keyboard.
+set -uo pipefail
+
+CTRL_BDF=0000:00:15.4
+CTRL_DRV=/sys/bus/pci/drivers/pxa2xx_spi_pci
+SLAVE=spi-APP000D:00
+SLAVE_DRV=/sys/bus/spi/drivers/applespi
+SETTLE=3
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "run as root: sudo $0 ${1:-}" >&2
+  exit 1
+fi
+
+have_input() {
+  grep -qF 'Name="Apple SPI Keyboard"' /proc/bus/input/devices 2>/dev/null &&
+  grep -qF 'Name="Apple SPI Touchpad"' /proc/bus/input/devices 2>/dev/null
+}
+
+timeouts() {
+  journalctl -b -k --no-pager 2>/dev/null | grep -c "SPI transfer timed out"
+}
+
+report() { # $1 = label
+  local kbd pad
+  grep -qF 'Name="Apple SPI Keyboard"' /proc/bus/input/devices 2>/dev/null \
+    && kbd=present || kbd=MISSING
+  grep -qF 'Name="Apple SPI Touchpad"' /proc/bus/input/devices 2>/dev/null \
+    && pad=present || pad=MISSING
+  printf '%-12s keyboard=%-8s touchpad=%-8s spi_timeouts=%s\n' \
+    "$1" "$kbd" "$pad" "$(timeouts)"
+}
+
+# Each write can wedge on a dead endpoint, so none of them get to block forever.
+write_to() { # $1 = value, $2 = file
+  timeout 10 bash -c "echo '$1' > '$2'" 2>/dev/null
+}
+
+level_slave() {
+  echo "==> slave: rebind $SLAVE on applespi"
+  [ -e "$SLAVE_DRV/$SLAVE" ] && write_to "$SLAVE" "$SLAVE_DRV/unbind"
+  sleep 1
+  write_to "$SLAVE" "$SLAVE_DRV/bind"
+  sleep "$SETTLE"
+}
+
+level_controller() {
+  echo "==> controller: unbind/rebind $CTRL_BDF on pxa2xx_spi_pci"
+  # Tears down the SPI master and every child, so applespi is created fresh
+  # rather than re-probed against a controller that was never reset.
+  [ -e "$CTRL_DRV/$CTRL_BDF" ] && write_to "$CTRL_BDF" "$CTRL_DRV/unbind"
+  sleep 1
+  write_to "$CTRL_BDF" "$CTRL_DRV/bind"
+  sleep "$SETTLE"
+}
+
+level_remove() {
+  echo "==> remove: PCI remove + rescan of $CTRL_BDF"
+  # The closest thing to a cold probe short of a reboot: the device disappears
+  # from the bus and is re-enumerated, so config space is rewritten too.
+  write_to 1 "/sys/bus/pci/devices/$CTRL_BDF/remove"
+  sleep 2
+  write_to 1 /sys/bus/pci/rescan
+  sleep "$SETTLE"
+}
+
+report "before"
+
+case "${1:-}" in
+  '')          exit 0 ;;
+  slave)       level_slave ;;
+  controller)  level_controller ;;
+  remove)      level_remove ;;
+  escalate)
+    for lvl in slave controller remove; do
+      "level_$lvl"
+      report "after-$lvl"
+      if have_input; then
+        echo
+        echo "input is back after: $lvl"
+        exit 0
+      fi
+    done
+    echo
+    echo "input still missing after all three levels."
+    exit 1
+    ;;
+  *) echo "usage: $0 [slave|controller|remove|escalate]" >&2; exit 2 ;;
+esac
+
+report "after"
+have_input && { echo; echo "input is present."; exit 0; }
+echo
+echo "input still missing."
+exit 1

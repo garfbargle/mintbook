@@ -207,6 +207,35 @@ still lists "Resume on MacBook8,1" under what does not work.
 The automatic rebind hook and script are removed by the current installer. They
 were useful as a hypothesis and are now measured evidence against that hypothesis.
 
+**But note exactly how narrow that evidence is.** The script rebound
+`spi-APP000D:00` — the SPI **slave** — and nothing else:
+
+```sh
+DEV=spi-APP000D:00
+echo "$DEV" > "$DRV/unbind"; echo "$DEV" > "$DRV/bind"
+```
+
+The SPI **controller**, `0000:00:15.4` on `pxa2xx_spi_pci`, was never reset. The
+paragraph above is its own argument for why that matters: if the driver skips
+`SIEN(1)` because firmware still reports SPI enabled, then re-probing the slave
+against a controller that was never torn down is the one variant guaranteed not
+to help. So "rebinding does not work" is established for the narrowest of the
+three possible levels, and the other two are untested:
+
+| level | what it resets | status |
+|---|---|---|
+| slave | `spi-APP000D:00` on `applespi` | failed, 2026-09-08 |
+| controller | `0000:00:15.4` on `pxa2xx_spi_pci` — tears down the SPI master and every child | **untested** |
+| remove | PCI remove + bus rescan, so config space is rewritten too | **untested** |
+
+[`bin/applespi-reset`](../bin/applespi-reset) runs any one of them, or
+`escalate` to try all three in order and stop when input returns. It reports
+keyboard/touchpad presence and the SPI timeout count around each step.
+
+Run it over SSH. Every level is a live experiment on the keyboard you would
+otherwise be typing on, and the whole point is that input is already dead when
+you need it.
+
 ### The fix: avoid the broken S3 path
 
 This machine exposes `s2idle [deep]`. Deep enters ACPI S3 and breaks the Apple SPI
@@ -243,7 +272,10 @@ or write `deep` to `/sys/power/mem_sleep`.
 
 ### Verification status
 
-Deep S3 and the old recovery are conclusively failed. A controlled 25-second
+Deep S3 breaks input, and slave-level rebind recovery is conclusively failed.
+Controller-level and PCI-remove recovery are **untested** — see "The failed
+recovery experiment" for why that distinction was missed the first time.
+A controlled 25-second
 s2idle cycle on 2026-09-09 returned the keyboard and trackpad, logged a successful
 `modeswitch done.`, and had zero Apple SPI timeouts. Wi-Fi reconnected in 5.5
 seconds; Bluetooth and PipeWire were present.
