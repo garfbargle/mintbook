@@ -103,6 +103,11 @@ for 12.02 seconds, systemd's cumulative CPU accounting did not increase at all;
 memory stayed about 11.4 MiB and restart count stayed zero.
 [Live observations](measurements/2026-09-10-priority-live.json).
 
+An orderly stop then restored all 667 still-existing checked threads to their
+recorded original priorities; three others had exited. There were zero mismatches,
+the undo state was removed, and restarting the service recreated its state and
+resumed management. [Undo check](measurements/2026-09-10-priority-undo.json).
+
 This verifies effective priorities and idle cost. It does not measure browser
 page completion, input-to-photon latency, or throughput of whole app trees in
 different scheduler cgroups. Threads born after a focus event inherit their
