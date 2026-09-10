@@ -1,14 +1,19 @@
 # Hibernation
 
-**Status 2026-09-10: verified working, including the Apple SPI keyboard.**
+**Status 2026-09-10: works on AC, hangs the machine on battery. Not usable
+for the case it was built for.**
 
-A full cycle was observed at 10:33:51–10:35:44: image written, machine powered
-off in ACPI S4, resumed on the power button into the same session, with the
-built-in keyboard and trackpad alive. That was the one thing the whole design
-rested on, and it holds. Details in "The cycle that worked".
+- On AC it is proven end to end, Apple SPI keyboard included — see "The cycle
+  that worked".
+- On battery it has wedged **twice out of two**, both times before the
+  pre-hibernate filesystem sync, both times needing a forced power cycle. See
+  "The lid escalation fires, and then wedges".
+- The lid is therefore back on plain `suspend`. Overnight unplugged is **not**
+  solved: s2idle still costs ~1.8 W, about 11 hours. Plug in overnight, or
+  hibernate by hand on AC.
 
-Getting there cost two failures worth keeping: `resume=PARTUUID=` is silently
-ignored (see "The third trap"), and the first attempt destroyed its own image.
+Also worth keeping: `resume=PARTUUID=` is silently ignored (see "The third
+trap"), and the first attempt destroyed its own image.
 
 ## Why this exists
 
@@ -299,33 +304,73 @@ That sync line is logged *after* the sync returns, and journald was still
 running to record it in the working case. Its absence points at the pre-hibernate
 filesystem sync never completing.
 
-### Two differences, not yet isolated
+### Isolated: it is the power source, not the timing
 
-Honest limitation: the working cycle and the wedged one differ in **two** ways,
-and this test cannot say which one matters.
+Two candidates came out of that test — that the hibernate began 70 ms after an
+s2idle resume with storage still re-initialising, or that it was on battery
+rather than AC. `systemctl hibernate` from a settled desktop **on battery**
+separates them, and it was run at 11:30:11.
 
-1. **Timing.** The wedged hibernate began 70 ms after an s2idle resume —
-   `PM: suspend exit` at 11:01:13.616, `hibernation entry` at 11:01:13.686.
-   Storage had just re-initialised (`nvme nvme0: 1/0/0 default/read/poll
-   queues`), `efivarfs` was still resyncing, and `facetimehd` logged
-   `Failed to lock S2 PLL` in the same window. A sync to a disk that came back
-   one tick ago is a plausible way to hang. The 10:33 cycle ran from a settled
-   desktop.
-2. **Power source.** The wedged one was on **battery**; the working one was on
-   **AC**. Unplugging also made `mintbook-power` reapply a profile twice, at
-   10:59:08 and 10:59:11, seconds before the lid closed.
+It wedged identically. No `Filesystems sync` line, no image, and a forced power
+cycle. **The s2idle-wake timing is not the cause** and the settle-delay hook
+proposed for it is not the fix.
 
-The single-variable test that separates them is `systemctl hibernate` from a
-settled desktop **on battery**. If that works, timing is the cause and the fix
-is a settle delay in a `/usr/lib/systemd/system-sleep/` hook before the
-hibernate leg. If it wedges, the power profile is implicated instead.
+The record so far:
+
+| when | power | result |
+|---|---|---|
+| 09:50 | AC | image written (resume failed separately, `PARTUUID`) |
+| 10:33 | AC | **worked end to end** |
+| 11:01 | battery | wedged before the sync |
+| 11:30 | battery | wedged before the sync |
+
+Two for two on AC, nothing on battery.
+
+### Where it hangs, and what is ruled out
+
+Both failures stop between `PM: hibernation: hibernation entry` and
+`Filesystems sync`. In `hibernate()` that window holds exactly two things:
+`pm_prepare_console()`, which switches away from Xorg's VT, and the
+`PM_HIBERNATION_PREPARE` notifier chain.
+
+Ruled out by inspection:
+
+- **`mintbook-power`** only writes `max_perf_pct` and `energy_perf_bias`. It
+  touches no disk, no PCI link state. It had also already reasserted
+  `max_perf_pct=100` at 11:19:52, so the battery cap was not even in effect.
+- **NVMe runtime PM**: `power/control` is `on` and `runtime_status` is
+  `active`. The drive is not being suspended underneath the sync.
+
+So the correlation with the power source is solid and the mechanism is not.
+Naming battery as the *cause* on n=2 would be overreading it; what is certain
+is that hibernation is unreliable in exactly the state the feature exists to
+serve.
+
+### The next diagnostic, when there is appetite for it
+
+Hibernate from a text console rather than from X:
+
+```
+Ctrl+Alt+F2, log in, then: sudo systemctl hibernate
+```
+
+Either outcome is informative. If it works, `pm_prepare_console()` switching
+away from Xorg is the hang and the fix is in that direction. If it wedges, the
+last kernel message stays on the screen instead of being lost with the journal,
+which is the one thing no amount of log reading can recover.
+`echo 1 > /sys/power/pm_debug_messages` first makes that message more specific.
+`/sys/power/pm_test` is also available (`core processors platform devices
+freezer`) for running the machinery without writing an image.
 
 ### Current state
 
-`HandleLidSwitch` is back to plain `suspend` until this is resolved. A lid close
-gets s2idle at ~1.8 W — the known cost, not a hang. **On battery that is roughly
-11 hours from a full charge, so it is still not safe overnight unplugged.**
-Manual `systemctl hibernate` remains proven on AC.
+`HandleLidSwitch` is back to plain `suspend` and `HibernateDelaySec` to 30min.
+A lid close gets s2idle at ~1.8 W — the known cost, not a hang, because a
+machine wedged with the lid shut draws ~10 W and is strictly worse.
+
+**This means the overnight case is not solved.** ~1.8 W is about 11 hours from
+full, so unplugged overnight remains unsafe. Plug in, or hibernate manually on
+AC, which is proven.
 
 ## The command line
 
