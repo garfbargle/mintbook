@@ -6,7 +6,7 @@ problems:
 | | |
 |---|---|
 | Dead at boot | **Fixed.** `dw_dmac_pci` is blacklisted, so SPI always uses PIO. |
-| Dead after sleep | **Fixed with s2idle.** A controlled 2026-09-08 deep cycle captured 47 timeouts and a failed reprobe; a 2026-09-09 s2idle cycle returned both devices with zero timeouts. |
+| Dead after sleep | **Fixed with s2idle.** Deep S3 kills input; slave, controller, and PCI-remove recovery all failed on 2026-09-10. A 2026-09-09 s2idle cycle returned both devices with zero timeouts. |
 | Palm / typing | **Quirk installed.** Disable-while-typing was a no-op until the keyboard was marked internal. **Log out once** for Xorg to reload it. |
 
 `bin/input-check` reports all three. `sudo bin/input-install` copies the quirk and
@@ -129,7 +129,7 @@ devices present, and `dw_dmac_pci not loaded`.
 
 ## 2. Dead keyboard and trackpad after deep sleep
 
-**Every suspend this machine has ever taken has killed input. Two for two.**
+**Every measured deep suspend this machine has ever taken has killed input.**
 
 This is *not* the boot race coming back, and that matters: the reflex is to blame
 DMA again, and the blacklist is not the problem.
@@ -207,33 +207,54 @@ still lists "Resume on MacBook8,1" under what does not work.
 The automatic rebind hook and script are removed by the current installer. They
 were useful as a hypothesis and are now measured evidence against that hypothesis.
 
-**But note exactly how narrow that evidence is.** The script rebound
-`spi-APP000D:00` — the SPI **slave** — and nothing else:
+**The 2026-09-08 evidence was narrow.** That script rebound `spi-APP000D:00` —
+the SPI **slave** — and nothing else:
 
 ```sh
 DEV=spi-APP000D:00
 echo "$DEV" > "$DRV/unbind"; echo "$DEV" > "$DRV/bind"
 ```
 
-The SPI **controller**, `0000:00:15.4` on `pxa2xx_spi_pci`, was never reset. The
-paragraph above is its own argument for why that matters: if the driver skips
-`SIEN(1)` because firmware still reports SPI enabled, then re-probing the slave
-against a controller that was never torn down is the one variant guaranteed not
-to help. So "rebinding does not work" is established for the narrowest of the
-three possible levels, and the other two are untested:
+The SPI **controller**, `0000:00:15.4` on `pxa2xx_spi_pci`, was never reset. If
+the driver skips `SIEN(1)` because firmware still reports SPI enabled, re-probing
+the slave against a controller that was never torn down is the one variant
+guaranteed not to help. That left two harder levels untested until 2026-09-10.
+
+The 2026-09-10 cycle closed them. SSH from another machine on the LAN, kernel
+7.0.0-31-generic, `mem_sleep` switched to `deep`, then `systemctl suspend`. The
+kernel logged `PM: suspend entry (deep)` at 14:25:59 and `PM: suspend exit` at
+14:26:10 (~11 s). Before sleep both devices were present with zero SPI timeouts.
+On wake both names were still in `/proc/bus/input/devices`, but applespi was
+already timing out (129, then 175 within seconds; `modeswitch` since wake: 0).
+Device names registering is not liveness — the same tell as a bad boot.
+
+Then `sudo bin/applespi-reset escalate`:
+
+```
+before            keyboard=present   touchpad=present   spi_timeouts=1411
+==> slave: rebind spi-APP000D:00 on applespi
+after-slave       keyboard=present   touchpad=MISSING   spi_timeouts=1427
+==> controller: unbind/rebind 0000:00:15.4 on pxa2xx_spi_pci
+after-controller  keyboard=present   touchpad=MISSING   spi_timeouts=1443
+==> remove: PCI remove + rescan of 0000:00:15.4
+after-remove      keyboard=present   touchpad=MISSING   spi_timeouts=1459
+
+input still missing after all three levels.
+```
+
+Timeouts climbed ~16 per level. The touchpad vanished after the slave rebind and
+never returned; the keyboard name stayed registered and dead. `escalate` kept
+going because `have_input` requires both names. `mem_sleep` was restored to
+`[s2idle] deep`. Reboot required.
 
 | level | what it resets | status |
 |---|---|---|
-| slave | `spi-APP000D:00` on `applespi` | failed, 2026-09-08 |
-| controller | `0000:00:15.4` on `pxa2xx_spi_pci` — tears down the SPI master and every child | **untested** |
-| remove | PCI remove + bus rescan, so config space is rewritten too | **untested** |
+| slave | `spi-APP000D:00` on `applespi` | failed, 2026-09-08 and 2026-09-10 |
+| controller | `0000:00:15.4` on `pxa2xx_spi_pci` — tears down the SPI master and every child | failed, 2026-09-10 |
+| remove | PCI remove + bus rescan, so config space is rewritten too | failed, 2026-09-10 |
 
-[`bin/applespi-reset`](../bin/applespi-reset) runs any one of them, or
-`escalate` to try all three in order and stop when input returns. It reports
-keyboard/touchpad presence and the SPI timeout count around each step.
-
-Run it over SSH. Every level is a live experiment on the keyboard you would
-otherwise be typing on, and the whole point is that input is already dead when
+[`bin/applespi-reset`](../bin/applespi-reset) remains so the measurement can be
+repeated. It is not a resume fix. Run it over SSH: input is already dead when
 you need it.
 
 ### The fix: avoid the broken S3 path
@@ -272,13 +293,11 @@ or write `deep` to `/sys/power/mem_sleep`.
 
 ### Verification status
 
-Deep S3 breaks input, and slave-level rebind recovery is conclusively failed.
-Controller-level and PCI-remove recovery are **untested** — see "The failed
-recovery experiment" for why that distinction was missed the first time.
-A controlled 25-second
-s2idle cycle on 2026-09-09 returned the keyboard and trackpad, logged a successful
-`modeswitch done.`, and had zero Apple SPI timeouts. Wi-Fi reconnected in 5.5
-seconds; Bluetooth and PipeWire were present.
+Deep S3 breaks input. Slave, controller, and PCI-remove recovery are all
+conclusively failed — see "The failed recovery experiment". A controlled
+25-second s2idle cycle on 2026-09-09 returned the keyboard and trackpad, logged
+a successful `modeswitch done.`, and had zero Apple SPI timeouts. Wi-Fi
+reconnected in 5.5 seconds; Bluetooth and PipeWire were present.
 
 The battery tradeoff was measured on 2026-09-09, by accident: ~1.8 W in s2idle
 against 0.06-0.14 W across four deep-S3 sleeps, a ~20x regression that flattens
@@ -289,9 +308,9 @@ overnight case is now handled by `suspend-then-hibernate` instead.
 Input also survives a resume **from hibernation**, measured 2026-09-10. The
 resume emits the same two lines a cold boot does — `Received corrupted packet
 (crc mismatch)` then `modeswitch done.` — with **zero** SPI timeouts after it,
-against deep S3's 47 and a failed rebind. So this machine now has one sleep
-mode that keeps input and one that keeps the battery, and
-[`hibernate.md`](hibernate.md) chains them.
+against deep S3's timeouts and a failed escalate (slave, controller, and
+PCI-remove). So this machine now has one sleep mode that keeps input and one
+that keeps the battery, and [`hibernate.md`](hibernate.md) chains them.
 
 ### The sleep black box
 

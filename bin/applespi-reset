@@ -10,10 +10,10 @@
 #   applespi-reset escalate   # slave, then controller, then remove; stop when input returns
 #
 # Why the levels differ. The 2026-09-08 experiment rebound only the SPI *slave*
-# and failed, and docs/input.md explains why: applespi re-probes, checks SIST,
-# sees that firmware still calls SPI enabled, and skips SIEN(1) and its recovery
-# delay. That test never reset the SPI *controller*, so "rebinding does not
-# work" was only ever established for the narrowest of the three levels here.
+# and failed. The 2026-09-10 escalate run then reset the controller
+# (pxa2xx_spi_pci 0000:00:15.4) and did a PCI remove + rescan; all three levels
+# failed. See docs/input.md. The tool remains so the measurement can be
+# repeated; it is not a resume fix.
 #
 # Nothing is persistent. Every level is a live experiment on the device you are
 # typing on: run it over SSH, not from the built-in keyboard.
