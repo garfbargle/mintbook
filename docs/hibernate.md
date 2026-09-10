@@ -266,6 +266,67 @@ which took about 3 seconds to paint on this cycle.
 "The keyboard didn't come back, I had to press power" is the expected
 experience, not a failure.
 
+## The lid escalation fires, and then wedges
+
+**2026-09-10, `HibernateDelaySec=2min`, on battery, lid closed.** Every link in
+the chain fired, and the last one hung the machine.
+
+```
+10:59:11  kernel: PM: suspend entry (s2idle)                    <- lid
+11:01:13  kernel: PM: suspend exit                              <- RTC wake, 2min on the nose
+11:01:13  systemd-sleep: System returned from sleep operation 'suspend-then-hibernate'.
+11:01:13  systemd-sleep: Performing sleep operation 'hibernate'...
+11:01:13  kernel: PM: hibernation: hibernation entry
+          <nothing, ever>
+11:18:26  <cold boot, new boot id, PM: Image not found (code -22)>
+```
+
+So the escalation itself is **not** the problem. The RTC alarm woke the machine
+at exactly two minutes and systemd correctly moved to the hibernate leg.
+
+No image was written. The next boot's `swapon` said nothing about suspend data
+— it just added ordinary swap — where the 09:50 failure had reported
+`software suspend data detected`. The machine needed a power cycle.
+
+It died very early. Compare how far each attempt got:
+
+| | after `hibernation entry` |
+|---|---|
+| 10:33, worked | `Filesystems sync: 0.062 seconds` |
+| 11:01, wedged | nothing |
+
+That sync line is logged *after* the sync returns, and journald was still
+running to record it in the working case. Its absence points at the pre-hibernate
+filesystem sync never completing.
+
+### Two differences, not yet isolated
+
+Honest limitation: the working cycle and the wedged one differ in **two** ways,
+and this test cannot say which one matters.
+
+1. **Timing.** The wedged hibernate began 70 ms after an s2idle resume —
+   `PM: suspend exit` at 11:01:13.616, `hibernation entry` at 11:01:13.686.
+   Storage had just re-initialised (`nvme nvme0: 1/0/0 default/read/poll
+   queues`), `efivarfs` was still resyncing, and `facetimehd` logged
+   `Failed to lock S2 PLL` in the same window. A sync to a disk that came back
+   one tick ago is a plausible way to hang. The 10:33 cycle ran from a settled
+   desktop.
+2. **Power source.** The wedged one was on **battery**; the working one was on
+   **AC**. Unplugging also made `mintbook-power` reapply a profile twice, at
+   10:59:08 and 10:59:11, seconds before the lid closed.
+
+The single-variable test that separates them is `systemctl hibernate` from a
+settled desktop **on battery**. If that works, timing is the cause and the fix
+is a settle delay in a `/usr/lib/systemd/system-sleep/` hook before the
+hibernate leg. If it wedges, the power profile is implicated instead.
+
+### Current state
+
+`HandleLidSwitch` is back to plain `suspend` until this is resolved. A lid close
+gets s2idle at ~1.8 W — the known cost, not a hang. **On battery that is roughly
+11 hours from a full charge, so it is still not safe overnight unplugged.**
+Manual `systemctl hibernate` remains proven on AC.
+
 ## The command line
 
 OpenCore's OpenLinuxBoot reads `GRUB_CMDLINE_LINUX_DEFAULT` out of
