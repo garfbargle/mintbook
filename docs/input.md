@@ -247,6 +247,33 @@ never returned; the keyboard name stayed registered and dead. `escalate` kept
 going because `have_input` requires both names. `mem_sleep` was restored to
 `[s2idle] deep`. Reboot required.
 
+**All three levels were real tests, not no-ops.** With the timeout spam filtered
+out of the kernel log, each one visibly took effect:
+
+```
+14:31:01  input: Apple SPI Keyboard ... input17                       <- slave rebind
+14:31:06  pxa2xx_spi_pci 0000:00:15.4: no DMA channels available, using PIO
+14:31:06  input: Apple SPI Keyboard ... input18                       <- controller re-probed
+14:31:11  pci 0000:00:15.4: [8086:9ce6] type 00 class 0x0c8000       <- re-enumerated
+14:31:11  pci 0000:00:15.4: BAR 0 [mem 0x90000000-0x90000fff]: assigned
+14:31:11  input: Apple SPI Keyboard ... input19
+```
+
+The PCI remove genuinely took the controller off the bus: it came back with a
+freshly assigned BAR at `0x90000000`, where it had lived at `0xc181a000`. Every
+level re-registered the keyboard node. None registered the touchpad, and there
+was not one `modeswitch done.` after the wake.
+
+That localises the wedge. Driver binding, SPI master, PCI config space and BAR
+mapping were all rebuilt from nothing, and the endpoint stayed dead. What is
+left is the device end of the link. That is consistent with firmware-side
+initialisation that only a full boot repeats — which is exactly what a
+hibernate resume is, and why that path keeps input. It is an inference, but it
+means no host-side reset is left to try: deep S3 is closed on this machine.
+
+Incidentally, Wi-Fi and SSH survived deep S3, which is how the run could be
+driven at all.
+
 | level | what it resets | status |
 |---|---|---|
 | slave | `spi-APP000D:00` on `applespi` | failed, 2026-09-08 and 2026-09-10 |
@@ -302,15 +329,17 @@ reconnected in 5.5 seconds; Bluetooth and PipeWire were present.
 The battery tradeoff was measured on 2026-09-09, by accident: ~1.8 W in s2idle
 against 0.06-0.14 W across four deep-S3 sleeps, a ~20x regression that flattens
 a full charge in about ten hours. Recorded with the drain table in
-[`hibernate.md`](hibernate.md). Input survives s2idle, so the mode stays; the
-overnight case is now handled by `suspend-then-hibernate` instead.
+[`hibernate.md`](hibernate.md). Input survives s2idle, so the mode stays. The
+overnight case is **not** handled: `suspend-then-hibernate` hangs on battery
+(see [`hibernate.md`](hibernate.md)), so the lid stays on plain s2idle.
 
 Input also survives a resume **from hibernation**, measured 2026-09-10. The
 resume emits the same two lines a cold boot does — `Received corrupted packet
 (crc mismatch)` then `modeswitch done.` — with **zero** SPI timeouts after it,
 against deep S3's timeouts and a failed escalate (slave, controller, and
-PCI-remove). So this machine now has one sleep mode that keeps input and one
-that keeps the battery, and [`hibernate.md`](hibernate.md) chains them.
+PCI-remove). So hibernation keeps both input and the battery — but only on AC so far. On
+battery it has not completed a cycle, so [`hibernate.md`](hibernate.md) cannot
+chain the two yet.
 
 ### The sleep black box
 
