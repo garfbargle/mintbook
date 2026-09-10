@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Bound crash diagnostics; retain the replaced file for --revert.
+# See docs/app-performance.md. No apps or services are restarted.
+set -euo pipefail
+ROOT=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+[ "$(id -u)" -eq 0 ] || { echo "run: pkexec $ROOT/bin/coredump-install ${1:-}"; exit 1; }
+target=/etc/systemd/coredump.conf.d/60-mintbook.conf
+backup=/var/lib/mintbook-coredump
+case "${1:-}" in
+  --revert)
+    [ -f "$backup/complete" ] || { echo 'No installation backup'; exit 1; }
+    rm -f "$target"
+    [ ! -e "$backup/original" ] || cp -a "$backup/original" "$target"
+    echo 'Restored previous coredump limits.'
+    exit 0 ;;
+  '') ;;
+  *) echo 'usage: coredump-install [--revert]'; exit 2 ;;
+esac
+if [ ! -f "$backup/complete" ]; then
+  install -dm700 "$backup"
+  if [ -e "$target" ] || [ -L "$target" ]; then cp -a "$target" "$backup/original"; fi
+  touch "$backup/complete"
+fi
+install -dm755 "$(dirname "$target")"
+install -m644 "$ROOT/config/systemd/coredump-mintbook.conf" "$target"
+systemd-analyze cat-config systemd/coredump.conf
+echo "Undo: pkexec $ROOT/bin/coredump-install --revert"

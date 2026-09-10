@@ -18,7 +18,8 @@ overhead. Keep future comparisons within one workload and interleave settings.
   The short version: no Chromium can reach this GPU's H.264 decoder, Firefox can,
   and hardware H.264 encode is broken at the driver level. Do not re-open any of it.
 - Subsequent candidates are a fresh real-workload Sustained-profile comparison,
-  remaining panel overhead, and sleep recovery. Those were not changed here.
+  remaining panel overhead, and sleep recovery. The September 9–10 follow-up
+  below and in [priority.md](priority.md) records further work; sleep is unchanged.
 - Preserve the distinction between reduced CPU overhead, task completion speed,
   and battery life. Only the first was measured in this experiment.
 
@@ -137,3 +138,37 @@ Validation: CLI help and duration validation; live inactive-session rejection;
 four valid active-desktop samples with process-role output and charging watts
 correctly omitted. GPU acceleration was preserved and the live power policy
 still matched the AC default after testing.
+
+## Cursor crash and bounded diagnostics — September 9–10
+
+At about 19:18 on September 9, Cursor used about 93% of one logical CPU in a
+31.65-second observation while package temperature averaged 94.1 C. This was
+changing application activity, not an idle baseline. An earlier sampler's
+waited-child deltas were invalid when children exited; its huge percentages
+must not be used. The corrected observation's temporary raw file was lost at
+reboot, so it is a session observation, not a retained benchmark.
+
+The system journal confirms that PID 135987, Cursor's utility
+`node.mojom.NodeService`, aborted with SIGABRT at 19:18:25. At 19:21:21,
+systemd-coredump logged `Cannot store coredump of 135987 (cursor): No space left
+on device`. It then recorded the termination without a core. Application logs
+show cancellation/exit around that time, but no diagnostic stack establishing
+why the Node utility aborted. No Cursor recurrence appeared before the next
+morning's check; Cursor was closed. Forty-two leftover sandbox helpers observed
+that evening were idle (about 95 MiB summed RSS), so they were not killed.
+
+The actionable fault is the expensive failed dump. This 64-bit system used the
+32 GiB processing/storage defaults, larger than its available disk space at
+the time. `bin/coredump-install` now installs a drop-in limiting processing and
+individual stored cores to 256 MiB, with a 512 MiB retention budget. Small cores
+and crash journal records remain useful; large cores lose their full diagnostic
+data. This bounds the cost of a crash, not its cause. It does not establish a
+faster healthy Cursor session.
+
+The installed configuration was read back with `systemd-analyze cat-config
+systemd/coredump.conf` and checked against the installed manual and
+[systemd 255's documentation](https://github.com/systemd/systemd/blob/v255/man/coredump.conf.xml).
+No application was crashed to test it. Existing core files were not manually
+deleted. `KeepFree` retains its existing default. The file has its own original
+backup; undo is `pkexec bin/coredump-install --revert`. This installation did not
+start another Timeshift snapshot after the user cancelled snapshot creation.
