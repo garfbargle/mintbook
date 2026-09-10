@@ -30,7 +30,7 @@ bin/control-install --revert # put the old indicators back
 | on the bar | why |
 |---|---|
 | systray, xapp | not ours; apps put themselves there |
-| CPU sparkline | a reading — you look at it, you do not set it |
+| CPU sparkline | a reading — you look at it; click for the story, like battery |
 | temperature | same |
 | Wi-Fi | macOS keeps it out, and a dead network is worth seeing without a click |
 | Bluetooth | *since 2026-09-07* — same: "is the speaker connected" is a reading |
@@ -49,7 +49,8 @@ bin/control-install --revert # put the old indicators back
 | Power profile | `plugin-22` genmon, and `bin/power-menu`'s popup |
 
 The rule the split follows: **a reading stays, a switch moves.** You do not
-click a temperature.
+click a temperature. CPU is the battery-shaped exception: the sparkline stays
+on the bar, and the click opens the story of which processes made it.
 
 Doctor, Updates and Keep Awake used to be Control Center tiles. They are not
 hardware controls, and the first two are mostly things to read. They now share

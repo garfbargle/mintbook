@@ -359,6 +359,18 @@ if [ -e "$HOME/.config/mintbook/battery.conf" ]; then
     warn "battery sample rate" "${BGAP}s apart, but SAMPLE_EVERY=$BSE wants ${BWANT}s"
   fi
 fi
+# The CPU popup, only once it has been installed — bin/panel-cpu falls back
+# to gnome-system-monitor without it, so its absence is not a fault.
+if [ -e "$HOME/.local/bin/cpu-menu" ]; then
+  check "cpu indicator" "bin/panel-cpu" have "$HOME/.local/bin/panel-cpu"
+  check "cpu menu" "bin/cpu-menu" have "$HOME/.local/bin/cpu-menu"
+  check "cpu helpers" "bin/mintbook_cpu.py" have "$HOME/.local/bin/mintbook_cpu.py"
+  if grep -q 'cpu-menu' "$HOME/.local/bin/panel-cpu" 2>/dev/null; then
+    ok "cpu click target" "the sparkline opens the menu"
+  else
+    warn "cpu click target" "panel-cpu is older than the menu — run bin/cpu-install"
+  fi
+fi
 # The Wi-Fi popup, only once it has been installed — bin/panel-wifi falls back
 # to nm-connection-editor without it, so its absence is not a fault.
 if [ -e "$HOME/.local/bin/wifi-menu" ]; then

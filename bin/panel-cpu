@@ -16,8 +16,14 @@ state file, so the sparkline keeps its 2 s resolution and the process table
 costs a third of what it did. The tooltip's CPU header stays live every tick;
 only the per-process rows can be up to PROC_EVERY ticks old, and nothing reads
 them until the pointer is over the plugin anyway. See docs/desktop.md.
+
+That same walk now also writes cpu.stack: the top processes' share of the
+machine, RSS, and the I/O they did in the interval. The glass menu behind
+the click paints those samples as a stacked chart. I/O is opened only for
+the top N, not for every pid — the walk's cost stays the /proc/stat pass.
 """
 import os, sys
+import time
 
 W, H      = 92, 36          # canvas; height sits inside the 52px bar
 HIST      = 46              # samples retained
@@ -27,6 +33,17 @@ PROC_EVERY = 3              # walk /proc every Nth tick (2 s tick -> every 6 s)
 FADE      = 0.16            # fraction of width faded at each edge
 NCPU      = os.cpu_count() or 1
 CLK       = os.sysconf('SC_CLK_TCK')
+PAGE      = os.sysconf('SC_PAGESIZE') or 4096
+TOP_N     = 8
+MENU      = os.path.expanduser('~/.local/bin/cpu-menu')
+
+
+def cpu_lib():
+    """Imported only on the process-walk tick. mintbook_cpu is ~8 ms of
+    python3 startup, and two of every three ticks never touch it."""
+    sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+    import mintbook_cpu
+    return mintbook_cpu
 
 def read_state():
     """total, idle, history, tick counter and the cached top-5 rows.
@@ -42,31 +59,38 @@ def read_state():
         top   = []
         for fld in parts[4].split('\x1e'):
             if not fld: continue
-            v, name = fld.split('\x1f', 1)
-            top.append((float(v), name))
+            bits = fld.split('\x1f')
+            v = float(bits[0])
+            name = bits[1] if len(bits) > 1 else ''
+            pid = int(bits[2]) if len(bits) > 2 and bits[2].isdigit() else 0
+            top.append((v, name, pid))
         return total, idle, hist, tick, top
     except Exception:
         return None, None, [], -1, []
 
 
 def read_procs():
-    """The process table, and the /proc/stat total it was taken against.
+    """The process table, and the /proc/stat totals it was taken against.
 
     Its own file because it is ~200 lines and only rewritten every
     PROC_EVERY ticks — keeping it here is what makes that saving real.
+    Line 0 is `total idle` so the stacked sample's busy % covers the same
+    interval as the per-process shares. Older files were total-only.
     """
     try:
         with open(PROCS) as f:
             parts = f.read().split('\n')
-        proc_total = int(parts[0])
+        head = parts[0].split()
+        proc_total = int(head[0])
+        proc_idle = int(head[1]) if len(head) > 1 else None
         procs = {}
         for ln in parts[1:]:
             if not ln: continue
             pid, t, name = ln.split(' ', 2)
             procs[pid] = (int(t), name)
-        return proc_total, procs
+        return proc_total, proc_idle, procs
     except Exception:
-        return None, {}
+        return None, None, {}
 
 
 def write_atomic(path, text):
@@ -90,7 +114,8 @@ def proc_times():
                 s = f.read()
             name  = s[s.index('(')+1 : s.rindex(')')]
             rest  = s[s.rindex(')')+2:].split()
-            out[pid] = (int(rest[11]) + int(rest[12]), name)   # utime + stime
+            # utime + stime, comm, rss pages — rss is already in this file.
+            out[pid] = (int(rest[11]) + int(rest[12]), name, int(rest[21]))
         except Exception:
             continue
     return out
@@ -165,27 +190,33 @@ def main():
         dt, di = total - ptotal, idle - pidle
         pct = max(0.0, min(100.0, 100.0 * (dt - di) / dt))
 
-    # The tooltip: every process on the machine, every PROC_EVERY ticks. Its
-    # delta is measured against the /proc/stat total stored alongside the
-    # table, not against the previous tick, so the percentages stay correct
-    # over the longer interval.
+    # The tooltip and the stacked history: every process on the machine, every
+    # PROC_EVERY ticks. Deltas are measured against the /proc/stat totals
+    # stored alongside the table, not against the previous tick, so the
+    # percentages stay correct over the longer interval.
     tick = ptick + 1
     if tick % PROC_EVERY == 0:
         procs = proc_times()
-        proc_total, pprocs = read_procs()
+        proc_total, proc_idle, pprocs = read_procs()
         if proc_total is not None and total > proc_total:
             dtp = total - proc_total
-            top = []
-            for pid, (t, name) in procs.items():
+            ranked = []
+            for pid, (t, name, rss) in procs.items():
                 pt = pprocs.get(pid)
                 if not pt: continue
                 d = t - pt[0]
                 if d > 0:
-                    top.append((100.0 * d / dtp * NCPU, name))
-            top.sort(reverse=True)
-            top = top[:5]
-        write_atomic(PROCS, f'{total}\n' +
-                     '\n'.join(f'{p} {t} {n}' for p, (t, n) in procs.items()))
+                    share = 100.0 * d / dtp
+                    ranked.append((share, pid, name, rss))
+            ranked.sort(reverse=True)
+            top = [(share * NCPU, name, pid) for share, pid, name, _rss in ranked[:5]]
+            if proc_idle is not None:
+                busy = max(0.0, min(100.0, 100.0 * (dtp - (idle - proc_idle)) / dtp))
+            else:
+                busy = pct
+            record_stack(ranked[:TOP_N], busy, dtp / (CLK * NCPU))
+        write_atomic(PROCS, f'{total} {idle}\n' +
+                     '\n'.join(f'{p} {t} {n}' for p, (t, n, _rss) in procs.items()))
 
     hist.append(pct)
     hist = hist[-HIST:]
@@ -195,16 +226,49 @@ def main():
                  f'{total}\n{idle}\n'
                  + ','.join(f'{v:.1f}' for v in hist) + '\n'
                  + f'{tick}\n'
-                 + '\x1e'.join(f'{v:.1f}\x1f{n}' for v, n in top) + '\n')
+                 + '\x1e'.join(f'{v:.1f}\x1f{n}\x1f{p}' for v, n, p in top) + '\n')
 
     # Monospace, or the columns will not line up - GTK tooltips otherwise
     # render in a proportional font and space-padding does nothing.
-    rows = ''.join(f'\n{n[:16]:<16}{v:>6.1f}%' for v, n in top)
+    rows = ''.join(f'\n{n[:16]:<16}{v:>6.1f}%' for v, n, _p in top)
     tip = ('<span font_family="monospace">'
            f'{"CPU":<16}{pct:>6.1f}%{rows}</span>')
+    click = MENU if os.access(MENU, os.X_OK) else 'gnome-system-monitor'
     print(f'<img>{out_svg}</img>')
     print(f'<tool>{tip}</tool>')
-    print('<click>gnome-system-monitor</click>')
+    print(f'<click>{click}</click>')
+    print(f'<iconclick>{click}</iconclick>')
+
+
+def record_stack(ranked, busy, wall_dt):
+    """Top-N machine share + the I/O those pids did in this interval.
+
+    /proc/<pid>/io is opened only for the processes already on the chart, not
+    for the whole table. A pid we have not seen before contributes 0 this
+    sample rather than a since-start flood.
+    """
+    mcpu = cpu_lib()
+    prev_io = mcpu.read_io_table()
+    now_io = {}
+    entries = []
+    for share, pid, name, rss in ranked:
+        io = mcpu.pid_io(pid)
+        read_d = write_d = 0
+        if io is not None:
+            now_io[pid] = io
+            old = prev_io.get(pid)
+            if old:
+                read_d = max(0, io[0] - old[0])
+                write_d = max(0, io[1] - old[1])
+        entries.append({
+            'i': int(pid), 'n': name, 's': round(share, 2),
+            'm': int(rss) * PAGE, 'r': int(read_d), 'w': int(write_d),
+        })
+    mcpu.write_io_table(now_io)
+    samples = mcpu.read_stack()
+    samples.append({'t': time.time(), 'b': round(busy, 2),
+                    'd': round(wall_dt, 3), 'p': entries})
+    mcpu.write_stack(samples)
 
 if __name__ == '__main__':
     main()

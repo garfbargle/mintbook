@@ -68,7 +68,7 @@ Control Center is fast, keyboard-friendly, and intentionally small. Behind it
 are eleven simple executables—not a permanent background service. Adding a tile
 takes about twelve lines.
 
-Wi-Fi, Bluetooth, and battery open directly from the bar. Updates appear only
+Wi-Fi, Bluetooth, battery, and CPU open directly from the bar. Updates appear only
 when updates exist, with apt and Flatpak together in one clean list.
 
 <p align="center">

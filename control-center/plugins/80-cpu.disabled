@@ -15,11 +15,14 @@ hist=$(sed -n 3p "$STATE" 2>/dev/null)
 last=${hist##*,}
 [ -n "$hist" ] || { echo 'skip = on'; exit 0; }
 
-# Line 5 is the cached top-5: value\x1fname records joined by \x1e. Only the
-# name fits beside the reading; the bar's tooltip is where the numbers are.
+# Line 5 is the cached top-5: value\x1fname\x1fpid records joined by \x1e.
+# Older files were name-only; NF >= 2 keeps both.
 top=$(sed -n 5p "$STATE" 2>/dev/null \
        | awk -F'\036' '{ print $1 }' \
-       | awk -F'\037' 'NF == 2 { print substr($2, 1, 15) }')
+       | awk -F'\037' 'NF >= 2 { print substr($2, 1, 15) }')
+
+DETAIL=gnome-system-monitor
+[ -x "$HOME/.local/bin/cpu-menu" ] && DETAIL="$HOME/.local/bin/cpu-menu"
 
 cat <<EOF
 kind = meter
@@ -29,5 +32,5 @@ live = 2
 value = ${last%.*}%
 subtitle = $top
 graph = $hist
-detail = gnome-system-monitor
+detail = $DETAIL
 EOF

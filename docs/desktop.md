@@ -206,20 +206,28 @@ version gives:
 - **A tooltip listing the top 5 processes** by CPU. These are *interval* percentages
   computed from `/proc/<pid>/stat` deltas between runs — not `ps`'s since-process-start
   average, which is misleading for a live readout.
-- **Click opens System Monitor.**
+- **Click opens the CPU menu.** [`bin/cpu-menu`](../bin/cpu-menu) is a glass popup
+  like Wi-Fi / battery / System. `Activity Monitor…` in the footer still opens
+  `gnome-system-monitor`. Without the menu installed, the click falls back to
+  System Monitor on its own — the same trick as `panel-wifi`.
 
 The tooltip is wrapped in `<span font_family="monospace">`. This is required, not
 cosmetic: GTK tooltips render in a proportional font, so space-padded columns do not
 line up without it.
 
 State lives in `~/.cache/mintbook/`, written via a temp file and `os.replace`
-so a half-written file is never read. It is **two** files, and the split is the
+so a half-written file is never read. It is **four** files, and the split is the
 point:
 
 - `cpu.state` — previous jiffies, the history, the tick counter and the cached
   top-5 rows. ~320 bytes, rewritten every tick.
-- `cpu.procs` — the per-process time table and the `/proc/stat` total it was
+- `cpu.procs` — the per-process time table and the `/proc/stat` totals it was
   taken against. ~5.6 KB, rewritten every **third** tick (`PROC_EVERY`).
+- `cpu.stack` — JSONL samples of the top 8 processes' *share of the machine*,
+  RSS, and the read/write bytes they did in that interval. The menu paints this
+  as a stacked chart. Rewritten with the process table, not every tick.
+- `cpu.io` — the previous `/proc/<pid>/io` counters for those top pids, so the
+  next sample can store a delta instead of a since-start flood.
 
 The sparkline reads two numbers out of `/proc/stat`, which is cheap. The tooltip
 opens `/proc/<pid>/stat` for every process on the machine, which is not — it was
@@ -230,8 +238,41 @@ interval. The tooltip's `CPU` header is still live every tick; only the
 per-process rows can be up to 6 s old, and nothing reads them until the pointer
 is over the plugin.
 
+I/O is not a second walk of `/proc`. After the ranking, `panel-cpu` opens
+`/proc/<pid>/io` for the eight processes already on the chart. A pid that was
+not in the previous top set contributes 0 this sample rather than dumping its
+lifetime counters onto the first point of the line.
+
 > GTK tooltips are not interactive, so a *button* inside the hover is not possible —
 > hence click-to-open. Task Manager remains on its existing **Ctrl+Shift+Esc** binding.
+
+### CPU menu ([`bin/cpu-menu`](../bin/cpu-menu))
+
+**Since 2026-09-09.** Clicking the sparkline opens a glass popup, not a window.
+Same construction as [`bin/battery-menu`](../bin/battery-menu) and for the same
+reasons ([control-center.md](control-center.md)): cairo on one override-redirect
+window, one `DrawingArea`, a list of rows.
+
+The bar is still the reading. The menu is the story: which processes made the
+line, in colour, over the last few minutes. Hover a row and its band lights up
+in the chart; click it for a deeper look at that pid — live cores, RSS, whether
+the bytes it is moving are coming from disk or from cache, the files it has
+open, its command line and working directory. Escape or the back chevron
+returns to the list. `Activity Monitor…` is still there for the full table.
+
+Colours are keyed to the kernel `comm`, so Firefox stays blue as its rank
+moves. The chart is stacked as *share of the machine* (the same unit as the
+header percentage); the list shows cores, which is the Activity Monitor number
+and the one that answers "is this pegging a core?". Pressure stall (`/proc/pressure`)
+and swap join the subtitle only when they are actually happening.
+
+Install with [`bin/cpu-install`](../bin/cpu-install); `--revert` deletes
+`~/.local/bin/cpu-menu` and `panel-cpu` falls back to `gnome-system-monitor` on
+its own. `bin/doctor` checks for it, and says nothing when it is not installed.
+
+The helpers live in [`bin/mintbook_cpu.py`](../bin/mintbook_cpu.py) so the
+collector and the popup share one format, and so the format can be tested
+without opening a Gtk window.
 
 ### Temperature (`plugin-17`, genmon)
 
