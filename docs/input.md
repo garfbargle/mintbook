@@ -254,10 +254,12 @@ a full charge in about ten hours. Recorded with the drain table in
 [`hibernate.md`](hibernate.md). Input survives s2idle, so the mode stays; the
 overnight case is now handled by `suspend-then-hibernate` instead.
 
-Still unmeasured: whether the keyboard and trackpad survive a resume **from
-hibernation**. The reasoning says yes, because that resume is a cold boot and
-`applespi` re-probes over PIO, but that is the same class of reasoning that got
-the battery cost wrong. Run `bin/input-check` right after the first one.
+Input also survives a resume **from hibernation**, measured 2026-09-10. The
+resume emits the same two lines a cold boot does — `Received corrupted packet
+(crc mismatch)` then `modeswitch done.` — with **zero** SPI timeouts after it,
+against deep S3's 47 and a failed rebind. So this machine now has one sleep
+mode that keeps input and one that keeps the battery, and
+[`hibernate.md`](hibernate.md) chains them.
 
 ### The sleep black box
 

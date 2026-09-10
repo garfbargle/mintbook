@@ -1,19 +1,14 @@
 # Hibernation
 
-**Status 2026-09-10: hibernation writes an image. Resume has failed once and is
-still unverified.**
+**Status 2026-09-10: verified working, including the Apple SPI keyboard.**
 
-- Writing the image **works**. A `systemctl hibernate` at 09:50:58 entered
-  hibernation and powered the machine off with a complete image on `/swapfile`.
-- Resuming **did not happen**. The machine cold-booted with a new boot id and
-  `swapon` then reported `software suspend data detected. Rewriting the swap
-  signature`, destroying the image. One session was lost.
-- The cause was `resume=PARTUUID=`, which initramfs-tools silently ignores. It
-  is fixed (`resume=UUID=`) and the resume path has been replayed by hand
-  end-to-end, but **no successful resume has been observed yet**, so the Apple
-  SPI question below is still open.
+A full cycle was observed at 10:33:51–10:35:44: image written, machine powered
+off in ACPI S4, resumed on the power button into the same session, with the
+built-in keyboard and trackpad alive. That was the one thing the whole design
+rested on, and it holds. Details in "The cycle that worked".
 
-See "The third trap" and "What is still unproven".
+Getting there cost two failures worth keeping: `resume=PARTUUID=` is silently
+ignored (see "The third trap"), and the first attempt destroyed its own image.
 
 ## Why this exists
 
@@ -213,6 +208,64 @@ $ blkid -p -O $((18980864 * 4096)) /dev/nvme0n1p3 -s TYPE -o value
 swap
 ```
 
+## The cycle that worked
+
+2026-09-10, `systemctl hibernate` on boot `3c76e449`:
+
+```
+10:33:51  systemd-logind: The system will hibernate now!
+10:33:51  kernel: PM: hibernation: hibernation entry
+          PM: hibernation: Allocated 1746584 kbytes in 16.88 seconds (103.47 MB/s)
+          ACPI: PM: Preparing to enter system sleep state S4
+          <powered off; woken by the power button>
+          ACPI: PM: Waking up from system sleep state S4
+          applespi spi-APP000D:00: Received corrupted packet (crc mismatch)
+          applespi spi-APP000D:00: modeswitch done.
+10:35:44  kernel: PM: hibernation: hibernation exit
+```
+
+Everything between the entry and the exit carries the same timestamp because
+the journal cannot flush while userspace is frozen; those lines are written
+after the resume.
+
+**The boot id did not change.** `3c76e449` started at 10:11:26, hibernated,
+and is still the running boot — session `c2` came back rather than being
+recreated. That is the signature of a real resume: the restored kernel *is*
+the pre-hibernation kernel. A failed resume looks the opposite, and did on the
+attempt before this one: a new boot id, and `swapon` rewriting the signature.
+
+### The Apple SPI keyboard survives it
+
+This was the open question, and the answer is in two lines that are identical
+to the ones a cold boot produces:
+
+| when | lines |
+|---|---|
+| cold boot, 10:11:27 | `Received corrupted packet (crc mismatch)` → `modeswitch done.` |
+| hibernate resume, 10:35:43 | `Received corrupted packet (crc mismatch)` → `modeswitch done.` |
+
+**Zero** `SPI transfer timed out` after the resume. Compare deep S3 on
+2026-09-08: 47 timeouts, a failed rebind, and a reboot to get input back.
+
+The mechanism is the one the design predicted: resume from disk boots a kernel
+that probes hardware normally before restoring the image, so `applespi` gets
+its working initialisation instead of the S3 path that leaves the endpoint
+wedged. The input devices themselves are not re-created — `input4`/`input5`
+persist from the original boot — the driver simply re-runs its modeswitch and
+succeeds.
+
+### What it looks like from the chair
+
+Worth writing down, because it reads as a fault when it is not: after
+`systemctl hibernate` the machine is **off**. Not asleep. Keys and the
+trackpad do nothing, because there is nothing running to receive them. The
+power button is the only way back, and pressing it resumes rather than cold
+boots. On the way back, light-locker's greeter appears and wants the password,
+which took about 3 seconds to paint on this cycle.
+
+"The keyboard didn't come back, I had to press power" is the expected
+experience, not a failure.
+
 ## The command line
 
 OpenCore's OpenLinuxBoot reads `GRUB_CMDLINE_LINUX_DEFAULT` out of
@@ -261,23 +314,23 @@ it under `sudo` sets the key for root instead, where nothing reads it.
 
 ## What is still unproven
 
-1. **Resume from disk has been attempted once and failed** (see "The third
-   trap"). The cause is understood and fixed, and the script's logic has been
-   replayed by hand against the live config — `readlink` resolves, `MAJMIN`
-   comes out `259:3`, and `blkid` finds the swap area at the offset. But a
-   replay is not a resume. The whole design still rests on an event nobody has
-   observed.
-2. **Whether the Apple SPI keyboard and trackpad come back after a hibernate
-   resume.** The reasoning says yes — resume is a cold boot and `applespi`
-   re-probes over PIO — but reasoning is what predicted the s2idle battery cost
-   too. Verify with `bin/input-check` immediately after the first resume.
-3. **Whether Apple's firmware and OpenCore resume cleanly into an image.** Not
-   tested. If OpenCore's picker interferes, the fallback is a normal cold boot
-   and a lost session, not a broken disk.
-4. **The 30 minute delay is a guess**, not a measurement. At 1.8 W it costs about
-   0.9 Wh per cycle, which is under 3% of the pack. Lower it if that reads high.
+Settled on 2026-09-10 — resume from disk, the Apple SPI keyboard across it, and
+OpenCore resuming into an image are all now observed rather than argued. What
+is left:
 
-Do not record this as working until 1 and 2 have been observed.
+1. **The lid path has never been exercised end to end.** Every cycle so far was
+   a manual `systemctl hibernate`. Nobody has closed the lid, waited past
+   `HibernateDelaySec`, and opened it. The suspend leg and the hibernate leg
+   both work in isolation; the 30-minute escalation between them does not have
+   a single observation behind it.
+2. **The 30 minute delay is a guess**, not a measurement. At 1.8 W it costs about
+   0.9 Wh per cycle, under 3% of the pack. Lower it if that reads high.
+3. **Resume time was not measured cleanly.** Entry to exit was 113 s wall, but
+   that includes the machine sitting powered off waiting for a person to press
+   the button. Only the 16.88 s image allocation is a real number.
+4. **The two deaths on deep S3** (09-05, and 09-06 going 97.8% → flat in 64
+   minutes, which is ~31 W and therefore not consumption) are still unexplained.
+   Unrelated to this work, but not closed.
 
 ## Undo
 
