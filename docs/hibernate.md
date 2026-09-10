@@ -1,11 +1,19 @@
 # Hibernation
 
-**Status: installed and armed 2026-09-10; resume from disk is NOT yet verified.**
-The swap file, the resume device, the polkit rule and the lid handover are all
-live — `CanHibernate` and `CanSuspendThenHibernate` both answer `yes`. Nobody
-has yet hibernated and come back. Until that is done, treat the resume path —
-and especially whether the Apple SPI keyboard survives it — as an untested
-claim. See "What is still unproven" at the bottom.
+**Status 2026-09-10: hibernation writes an image. Resume has failed once and is
+still unverified.**
+
+- Writing the image **works**. A `systemctl hibernate` at 09:50:58 entered
+  hibernation and powered the machine off with a complete image on `/swapfile`.
+- Resuming **did not happen**. The machine cold-booted with a new boot id and
+  `swapon` then reported `software suspend data detected. Rewriting the swap
+  signature`, destroying the image. One session was lost.
+- The cause was `resume=PARTUUID=`, which initramfs-tools silently ignores. It
+  is fixed (`resume=UUID=`) and the resume path has been replayed by hand
+  end-to-end, but **no successful resume has been observed yet**, so the Apple
+  SPI question below is still open.
+
+See "The third trap" and "What is still unproven".
 
 ## Why this exists
 
@@ -145,6 +153,66 @@ that operation against the hibernate actions above.
 `no` as "the swap file is wrong" sends you to fix something that was never
 broken.
 
+## The third trap: `resume=PARTUUID=` is silently ignored
+
+The first real hibernate on 2026-09-10 wrote its image and then failed to come
+back. It left almost no trace, because every failure on this path is silent.
+
+What the journal showed:
+
+```
+09:50:57  systemd-logind: The system will hibernate now!
+09:50:58  kernel: PM: hibernation: hibernation entry
+          <boot ends here>
+09:58:55  <new boot id, no resume, no "PM: Image not found", nothing>
+09:58:55  swapon: /swapfile: software suspend data detected.
+                  Rewriting the swap signature.
+```
+
+That `swapon` line is the proof the image was written correctly — and the act
+that destroyed it. A failed resume is self-erasing: the next boot enables swap,
+finds the image, and overwrites it.
+
+The cause is in `/usr/share/initramfs-tools/scripts/local-premount/resume`:
+
+```sh
+if ! local_device_setup "${resume}" "suspend/resume device" false; then exit 0; fi
+DEV=$(readlink -f "$resume")          # <- the ORIGINAL string, not the resolved device
+DEV=/sys/class/block/${DEV##*/}/dev
+if [ -r "$DEV" ]; then read -r MAJMIN < "$DEV"; fi
+if [ -z "$MAJMIN" ]; then exit 1; fi  # <- no message, no resume
+```
+
+`local_device_setup` resolves `PARTUUID=` correctly, and then the next line
+throws that away and re-reads the raw string. Only `UUID=` survives, because
+`init` rewrites it into a real path before the script runs:
+
+```sh
+case $RESUME in
+UUID=*)
+	RESUME="/dev/disk/by-uuid/${RESUME#UUID=}"
+esac
+```
+
+So `readlink -f PARTUUID=bad575a6-...` yields a nonexistent path, the sysfs
+lookup misses, `MAJMIN` is empty, and the script exits 1 without logging.
+
+**`resume=` must be `UUID=` or a plain `/dev/` path.** `PARTUUID=` and
+`LABEL=` look correct, pass every static check, and do nothing.
+
+The mistake was mine and it is worth naming: `root=PARTUUID=` works on this
+machine, so I matched it. But `root=` is parsed by the **kernel**, which
+understands every form; `resume=` here is acted on by a **shell script** that
+does not. `bin/hibernate-check` now asserts the form, not just the presence.
+
+The offset was never the problem. Probing the raw partition confirms the swap
+header sits exactly where `resume_offset` says:
+
+```
+$ blkid -p -O $((18980864 * 4096)) /dev/nvme0n1p3 -s TYPE -o value
+swap
+```
+
 ## The command line
 
 OpenCore's OpenLinuxBoot reads `GRUB_CMDLINE_LINUX_DEFAULT` out of
@@ -193,8 +261,12 @@ it under `sudo` sets the key for root instead, where nothing reads it.
 
 ## What is still unproven
 
-1. **Resume from disk has never been run on this machine.** The whole design
-   rests on it.
+1. **Resume from disk has been attempted once and failed** (see "The third
+   trap"). The cause is understood and fixed, and the script's logic has been
+   replayed by hand against the live config — `readlink` resolves, `MAJMIN`
+   comes out `259:3`, and `blkid` finds the swap area at the offset. But a
+   replay is not a resume. The whole design still rests on an event nobody has
+   observed.
 2. **Whether the Apple SPI keyboard and trackpad come back after a hibernate
    resume.** The reasoning says yes — resume is a cold boot and `applespi`
    re-probes over PIO — but reasoning is what predicted the s2idle battery cost
