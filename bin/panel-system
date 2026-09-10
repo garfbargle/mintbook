@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Static System indicator with one small, meaningful status badge."""
 import json
-import os
 from pathlib import Path
 
 home = Path.home()
@@ -17,7 +16,7 @@ try:
 except (OSError, ValueError, KeyError, TypeError):
     pass
 
-updates = security = checked = 0
+updates = security = 0
 update_error = ''
 updates_installed = (home / '.config/mintbook/updates.conf').exists()
 try:
@@ -25,11 +24,10 @@ try:
         raise FileNotFoundError
     for line in (home / '.cache/mintbook/updates.state').read_text().splitlines():
         key, sep, value = line.partition(' = ')
-        if sep and key in ('count', 'security', 'checked'):
+        if sep and key in ('count', 'security'):
             try:
                 if key == 'count': updates = int(value)
-                elif key == 'security': security = int(value)
-                else: checked = int(value)
+                else: security = int(value)
             except ValueError: pass
         elif sep and key == 'error': update_error = value.strip()
 except OSError:
@@ -44,11 +42,20 @@ elif updates:
 else:
     icon = 'system.svg'
 
-disk = os.statvfs('/')
-free = disk.f_bavail * disk.f_frsize / 1_000_000_000
-doctor = 'not checked' if not (passed or notes or fail) else f'{passed} passed · {notes} notes · {fail} errors'
-up = ('Update Manager' if not updates_installed else 'check failed' if update_error else f'{updates} waiting' if updates else
-      'up to date' if checked else 'not checked')
 print(f'<click>{menu}</click>\n<iconclick>{menu}</iconclick>')
 print(f'<img>{icons / icon}</img>')
-print(f'<tool>System\nDoctor: {doctor}\nUpdates: {up}\nStorage: {free:.0f} GB free</tool>')
+status = []
+if fail:
+    status.append(f'{fail} error' + ('s' if fail != 1 else ''))
+elif notes:
+    status.append(f'{passed} passed · {notes} notes')
+elif passed:
+    status.append(f'{passed} passed')
+if update_error:
+    status.append('update check failed')
+elif updates:
+    status.append(f'{updates} update' + ('s' if updates != 1 else ''))
+lines = ['System']
+if status:
+    lines.append(' · '.join(status))
+print('<tool>' + '\n'.join(lines) + '</tool>')

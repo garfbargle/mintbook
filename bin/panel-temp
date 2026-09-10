@@ -41,17 +41,20 @@ while [ "${#padded}" -lt 3 ]; do padded=$' '"$padded"; done
 
 printf '<txt><span font_features="tnum" foreground="%s">%s°C </span></txt>\n' "$col" "$padded"
 
-# Monospace, or the columns will not line up - GTK tooltips otherwise render
-# in a proportional font and space-padding does nothing.
-rows=$(printf '%-6s%4s°C' "CPU" "$c")
+# CPU is already on the bar. The hover names the other sensors that are not.
+bits=''
 for h in /sys/class/hwmon/hwmon*; do
     n=$(cat "$h/name" 2>/dev/null)
     v=$(cat "$h/temp1_input" 2>/dev/null)
     [ -n "$v" ] || continue
     case "$n" in
-        nvme)  rows="$rows"$'\n'"$(printf '%-6s%4s°C' 'SSD' "$(( v / 1000 ))")" ;;
-        pch_*) rows="$rows"$'\n'"$(printf '%-6s%4s°C' 'PCH' "$(( v / 1000 ))")" ;;
-        BAT*)  rows="$rows"$'\n'"$(printf '%-6s%4s°C' 'Batt' "$(( v / 1000 ))")" ;;
+        nvme)  bits="${bits:+$bits · }SSD $(( v / 1000 ))°C" ;;
+        pch_*) bits="${bits:+$bits · }PCH $(( v / 1000 ))°C" ;;
+        BAT*)  bits="${bits:+$bits · }Battery $(( v / 1000 ))°C" ;;
     esac
 done
-printf '<tool><span font_family="monospace">%s</span></tool>\n' "$rows"
+if [ -n "$bits" ]; then
+    printf '<tool>Temperature\n%s</tool>\n' "$bits"
+else
+    printf '<tool>Temperature</tool>\n'
+fi

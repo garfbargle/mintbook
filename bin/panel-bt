@@ -32,12 +32,12 @@ emit() { printf '<img>%s/%s.svg</img>\n<tool>%b</tool>\n' "$DIR" "$1" "$2"; exit
 shopt -s nullglob
 adapters=(/sys/class/bluetooth/hci*)
 shopt -u nullglob
-[ ${#adapters[@]} -eq 0 ] && emit bt-off 'No Bluetooth adapter'
+[ ${#adapters[@]} -eq 0 ] && emit bt-off 'Bluetooth\nNo adapter'
 
 objs=$(dbus-send --system --print-reply --dest=org.bluez / \
          org.freedesktop.DBus.ObjectManager.GetManagedObjects 2>/dev/null) \
-  || emit bt-off 'Bluetooth status unknown'
-[ -z "$objs" ] && emit bt-off 'Bluetooth status unknown'
+  || emit bt-off 'Bluetooth\nStatus unknown'
+[ -z "$objs" ] && emit bt-off 'Bluetooth\nStatus unknown'
 
 # One pass over dbus-send's reply. Properties arrive as a `string "Name"` line
 # followed by a `variant <type> <value>` line, nested under a `string
@@ -48,7 +48,7 @@ objs=$(dbus-send --system --print-reply --dest=org.bluez / \
 # so each object is buffered and flushed when the next `object path` arrives.
 read -r powered names < <(awk '
   function flush() {
-    if (dev_conn && dev_alias != "") { conn = conn sep dev_alias; sep = "\\n" }
+    if (dev_conn && dev_alias != "") { conn = conn sep dev_alias; sep = " · " }
     dev_conn = 0; dev_alias = ""
   }
   /^ *object path "/     { flush(); iface = ""; next }
@@ -71,6 +71,6 @@ read -r powered names < <(awk '
   END { flush(); print (powered ? 1 : 0), conn }
 ' <<< "$objs")
 
-[ "$powered" = 1 ] || emit bt-off 'Bluetooth off'
-[ -n "$names" ] && emit bt-on "Bluetooth on\n$names"
-emit bt-on 'Bluetooth on\nNo devices connected'
+[ "$powered" = 1 ] || emit bt-off 'Bluetooth\nOff'
+[ -n "$names" ] && emit bt-on "Bluetooth\n$names"
+emit bt-on 'Bluetooth'

@@ -60,16 +60,14 @@ def main():
     period, temp = redshift_status()
     icon = 'night-on' if warm(m, period) else 'night-off'
     print(f'<img>{DIR}/{icon}.svg</img>')
-    title = LABELS[m]
-    bits = [f'Night Light · {title}']
+    extra = LABELS[m]
     if m == 'auto' and period:
-        bits.append(period + (f' · {temp}' if temp else ''))
+        extra = f'{LABELS[m]} · {period}' + (f' · {temp}' if temp else '')
     elif m == 'on' and temp:
-        bits.append(temp)
+        extra = f'{LABELS[m]} · {temp}'
     elif m == 'off':
-        bits.append('Daylight')
-    bits.append('Click to change')
-    print('<tool>' + '\n'.join(bits) + '</tool>')
+        extra = f'{LABELS[m]} · Daylight'
+    print(f'<tool>Night Light\n{extra}</tool>')
 
 
 if __name__ == '__main__':

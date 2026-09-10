@@ -24,11 +24,11 @@ p=${p#s \"}
 p=${p%\"}
 
 case "$p" in
-  power-saver) label='Power Saver'; hint='Battery default — CPU capped ~1.6 GHz' ;;
-  performance) label='Sustained';   hint='Long compiles — ~20% more work, same heat' ;;
+  power-saver) label='Power Saver' ;;
+  performance) label='Sustained' ;;
   # Anything unreadable falls back to balanced, the same as the Python did:
   # a missing icon would leave a hole in the bar.
-  *) p=balanced; label='Balanced'; hint='AC default — turbo allowed' ;;
+  *) p=balanced; label='Balanced' ;;
 esac
 
 ac='unknown'
@@ -38,4 +38,4 @@ case "$(cat /sys/class/power_supply/ADP1/online 2>/dev/null)" in
 esac
 
 printf '<img>%s/%s.svg</img>\n' "$DIR" "$p"
-printf '<tool>%s (%s)\n%s\nClick to choose a profile</tool>\n' "$label" "$ac" "$hint"
+printf '<tool>Power\n%s · %s</tool>\n' "$label" "$ac"

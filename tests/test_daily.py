@@ -41,6 +41,24 @@ class DailyTests(unittest.TestCase):
         self.assertIn(f'<click>{directory}/.local/bin/overview</click>', result.stdout)
         self.assertIn('<tool>Overview\nOpen with Super + Space</tool>', result.stdout)
 
+    def test_control_center_tooltip_is_just_the_name(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(
+                [str(ROOT / 'bin/panel-control')],
+                env={**os.environ, 'HOME': directory}, text=True,
+                capture_output=True, check=True)
+        self.assertIn('<tool>Control Center</tool>', result.stdout)
+
+    def test_cpu_tooltip_is_name_and_percent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / '.cache/mintbook').mkdir(parents=True)
+            result = subprocess.run(
+                [str(ROOT / 'bin/panel-cpu')],
+                env={**os.environ, 'HOME': directory}, text=True,
+                capture_output=True, check=True)
+        self.assertRegex(result.stdout, r'<tool>CPU\n\d+%</tool>')
+        self.assertNotIn('font_family', result.stdout)
+
     def test_rofi_custom_input_cannot_execute(self):
         actions = load('spotlight-actions')
         with patch.dict(actions.os.environ, {'ROFI_RETV': '2', 'ROFI_INFO': 'dark'}), patch.object(actions.subprocess, 'Popen') as spawn:
@@ -153,15 +171,17 @@ class DailyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             cache = base / '.cache/mintbook'; cache.mkdir(parents=True)
+            (base / '.config/mintbook').mkdir(parents=True)
             cache.joinpath('health.json').write_text(json.dumps({'rows': [
                 {'status': 'warn'}, {'status': 'fail'}, {'status': 'ok'}]}))
+            (base / '.config/mintbook/updates.conf').write_text('')
             cache.joinpath('updates.state').write_text(
                 'count = 5\nsecurity = 2\nchecked = 10\nerror = \n')
             result = subprocess.run([str(ROOT / 'bin/panel-system')],
                                     env={**os.environ, 'HOME': directory}, text=True,
                                     capture_output=True, check=True)
             self.assertIn('system-alert.svg</img>', result.stdout)
-            self.assertIn('Doctor: 1 passed · 1 notes · 1 errors', result.stdout)
+            self.assertIn('<tool>System\n1 error · 5 updates</tool>', result.stdout)
 
     def test_awake_status_rejects_expired_and_reused_process_ids(self):
         awake = load('keep-awake')

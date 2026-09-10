@@ -4,23 +4,19 @@ CPU sparkline for xfce4-genmon-plugin.
 
 Replaces xfce4-cpugraph-plugin, which draws hard vertical edges and offers no
 control over its tooltip. This renders an SVG with the leading and trailing
-edges faded out via a gradient mask, and builds a tooltip listing the top 5
-processes by *interval* CPU (computed from /proc deltas, not ps's
-since-process-start average, which is misleading for a live readout).
+edges faded out via a gradient mask. The tooltip is the widget name and the
+current percentage — the same shape Overview uses — and the process story
+lives in the glass menu behind the click.
 
 The sparkline samples every 2 s off two numbers in /proc/stat, which is cheap.
-The tooltip is not: it opens /proc/<pid>/stat for every process on the machine
-and writes the whole table back out. At 2 s that was 159 s of CPU in a
-two-hour session. The walk now runs every PROC_EVERY-th tick into its own
-state file, so the sparkline keeps its 2 s resolution and the process table
-costs a third of what it did. The tooltip's CPU header stays live every tick;
-only the per-process rows can be up to PROC_EVERY ticks old, and nothing reads
-them until the pointer is over the plugin anyway. See docs/desktop.md.
-
-That same walk now also writes cpu.stack: the top processes' share of the
-machine, RSS, and the I/O they did in the interval. The glass menu behind
-the click paints those samples as a stacked chart. I/O is opened only for
-the top N, not for every pid — the walk's cost stays the /proc/stat pass.
+The /proc walk is not: it opens /proc/<pid>/stat for every process on the
+machine. At 2 s that was 159 s of CPU in a two-hour session. The walk now runs
+every PROC_EVERY-th tick into its own state file, so the sparkline keeps its
+2 s resolution and the process table costs a third of what it did. That
+walk writes cpu.stack: the top processes' share of the machine, RSS, and the
+I/O they did in the interval. The menu paints those samples as a stacked
+chart. I/O is opened only for the top N, not for every pid — the walk's cost
+stays the /proc/stat pass. See docs/desktop.md.
 """
 import os, sys
 import time
@@ -46,27 +42,16 @@ def cpu_lib():
     return mintbook_cpu
 
 def read_state():
-    """total, idle, history, tick counter and the cached top-5 rows.
-
-    Small, rewritten every tick.
-    """
+    """total, idle, history and tick counter. Small, rewritten every tick."""
     try:
         with open(STATE) as f:
             parts = f.read().split('\n')
         total = int(parts[0]); idle = int(parts[1])
         hist  = [float(x) for x in parts[2].split(',') if x]
         tick  = int(parts[3])
-        top   = []
-        for fld in parts[4].split('\x1e'):
-            if not fld: continue
-            bits = fld.split('\x1f')
-            v = float(bits[0])
-            name = bits[1] if len(bits) > 1 else ''
-            pid = int(bits[2]) if len(bits) > 2 and bits[2].isdigit() else 0
-            top.append((v, name, pid))
-        return total, idle, hist, tick, top
+        return total, idle, hist, tick
     except Exception:
-        return None, None, [], -1, []
+        return None, None, [], -1
 
 
 def read_procs():
@@ -180,7 +165,7 @@ f'''<svg width="{W}" height="{H}" viewBox="0 0 {W} {H}" xmlns="http://www.w3.org
 
 def main():
     out_svg = os.path.expanduser('~/.cache/mintbook/cpu.svg')
-    ptotal, pidle, hist, ptick, top = read_state()
+    ptotal, pidle, hist, ptick = read_state()
     total, idle = cpu_totals()
 
     # The sparkline: two numbers, every tick.
@@ -190,10 +175,11 @@ def main():
         dt, di = total - ptotal, idle - pidle
         pct = max(0.0, min(100.0, 100.0 * (dt - di) / dt))
 
-    # The tooltip and the stacked history: every process on the machine, every
-    # PROC_EVERY ticks. Deltas are measured against the /proc/stat totals
-    # stored alongside the table, not against the previous tick, so the
-    # percentages stay correct over the longer interval.
+    # The stacked history: every process on the machine, every PROC_EVERY
+    # ticks. Deltas are measured against the /proc/stat totals stored
+    # alongside the table, not against the previous tick, so the percentages
+    # stay correct over the longer interval. The tooltip is just the name
+    # and this tick's percentage; the process story is in the menu.
     tick = ptick + 1
     if tick % PROC_EVERY == 0:
         procs = proc_times()
@@ -209,7 +195,6 @@ def main():
                     share = 100.0 * d / dtp
                     ranked.append((share, pid, name, rss))
             ranked.sort(reverse=True)
-            top = [(share * NCPU, name, pid) for share, pid, name, _rss in ranked[:5]]
             if proc_idle is not None:
                 busy = max(0.0, min(100.0, 100.0 * (dtp - (idle - proc_idle)) / dtp))
             else:
@@ -225,17 +210,11 @@ def main():
     write_atomic(STATE,
                  f'{total}\n{idle}\n'
                  + ','.join(f'{v:.1f}' for v in hist) + '\n'
-                 + f'{tick}\n'
-                 + '\x1e'.join(f'{v:.1f}\x1f{n}\x1f{p}' for v, n, p in top) + '\n')
+                 + f'{tick}\n')
 
-    # Monospace, or the columns will not line up - GTK tooltips otherwise
-    # render in a proportional font and space-padding does nothing.
-    rows = ''.join(f'\n{n[:16]:<16}{v:>6.1f}%' for v, n, _p in top)
-    tip = ('<span font_family="monospace">'
-           f'{"CPU":<16}{pct:>6.1f}%{rows}</span>')
     click = MENU if os.access(MENU, os.X_OK) else 'gnome-system-monitor'
     print(f'<img>{out_svg}</img>')
-    print(f'<tool>{tip}</tool>')
+    print(f'<tool>CPU\n{pct:.0f}%</tool>')
     print(f'<click>{click}</click>')
     print(f'<iconclick>{click}</iconclick>')
 

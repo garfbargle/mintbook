@@ -137,6 +137,11 @@ Plugin order (`plugin-ids`), left to right:
 | 13 | clock | ` %a %-d %b  %H:%M  `, Inter 11, `digital-layout=3` (time only) |
 | 27 | genmon | **Overview** — click opens app and action search; hover teaches `Super + Space` |
 
+Bar tooltips follow Overview: the widget name, one short status line when it
+earns the hover (SSID, charge remaining, connected devices, CPU percent), and
+the shortcut that opens the menu when there is one. Click-only menus do not
+say "click". The rest of the story is in the popup.
+
 Right-to-left: **Overview, date/time, Control Center, battery, wifi, bluetooth,
 temperature, CPU, then the rest.** This follows the macOS convention — the
 search affordance is furthest right, then the clock, Control Center, battery, Wi-Fi and
@@ -203,24 +208,20 @@ version gives:
 - **Faded leading/trailing edges** via a `<linearGradient>` inside a `<mask>`, so the
   trace dissolves into the bar instead of ending abruptly. Verified in the rendered
   pixbuf: alpha ramps 0 → 209 → 8 across the width.
-- **A tooltip listing the top 5 processes** by CPU. These are *interval* percentages
-  computed from `/proc/<pid>/stat` deltas between runs — not `ps`'s since-process-start
-  average, which is misleading for a live readout.
+- **A tooltip of `CPU` and the current percentage.** The process table used to live
+  here; it moved into the menu, which is where a list of names can actually be
+  used. Same shape as Overview: the name, then one short fact.
 - **Click opens the CPU menu.** [`bin/cpu-menu`](../bin/cpu-menu) is a glass popup
   like Wi-Fi / battery / System. `Activity Monitor…` in the footer still opens
   `gnome-system-monitor`. Without the menu installed, the click falls back to
   System Monitor on its own — the same trick as `panel-wifi`.
 
-The tooltip is wrapped in `<span font_family="monospace">`. This is required, not
-cosmetic: GTK tooltips render in a proportional font, so space-padded columns do not
-line up without it.
-
 State lives in `~/.cache/mintbook/`, written via a temp file and `os.replace`
 so a half-written file is never read. It is **four** files, and the split is the
 point:
 
-- `cpu.state` — previous jiffies, the history, the tick counter and the cached
-  top-5 rows. ~320 bytes, rewritten every tick.
+- `cpu.state` — previous jiffies, the history and the tick counter. Rewritten
+  every tick.
 - `cpu.procs` — the per-process time table and the `/proc/stat` totals it was
   taken against. ~5.6 KB, rewritten every **third** tick (`PROC_EVERY`).
 - `cpu.stack` — JSONL samples of the top 8 processes' *share of the machine*,
@@ -229,14 +230,12 @@ point:
 - `cpu.io` — the previous `/proc/<pid>/io` counters for those top pids, so the
   next sample can store a delta instead of a since-start flood.
 
-The sparkline reads two numbers out of `/proc/stat`, which is cheap. The tooltip
-opens `/proc/<pid>/stat` for every process on the machine, which is not — it was
-running at 2 s alongside a 5.9 KB rewrite of the whole table. Because the
-process delta is measured against the total stored *next to the table* rather
-than against the previous tick, the percentages stay correct over the longer
-interval. The tooltip's `CPU` header is still live every tick; only the
-per-process rows can be up to 6 s old, and nothing reads them until the pointer
-is over the plugin.
+The sparkline reads two numbers out of `/proc/stat`, which is cheap. The `/proc`
+walk that feeds the menu is not: it opens `/proc/<pid>/stat` for every process
+on the machine, and at 2 s that was 159 s of CPU in a two-hour session. The
+walk now runs every third tick. Because the process delta is measured against
+the total stored *next to the table* rather than against the previous tick, the
+percentages stay correct over the longer interval.
 
 I/O is not a second walk of `/proc`. After the ranking, `panel-cpu` opens
 `/proc/<pid>/io` for the eight processes already on the chart. A pid that was
@@ -279,7 +278,8 @@ without opening a Gtk window.
 genmon does **not** use xfconf — it reads `~/.config/xfce4/panel/genmon-17.rc`.
 It runs [`bin/panel-temp`](../bin/panel-temp), which finds `coretemp` **by name** (hwmon
 numbering is not stable across boots), prints the package temp, and colours it
-white / amber at 80°C / red at 90°C. Tooltip adds SSD and PCH temps.
+white / amber at 80°C / red at 90°C. The tooltip is `Temperature` plus the
+sensors that are not already the label (SSD, PCH, battery) on one line.
 
 The label is **fixed-width**: the number is padded to three characters with U+2007
 FIGURE SPACE (exactly one digit wide) and rendered with `font_features="tnum"`, so
@@ -292,9 +292,6 @@ panel is itself a CPU burst, so the reading used to jump high and then drift bac
 ~10s. State survives restarts, so the displayed value now eases rather than slamming.
 The underlying heat was real — this smooths the presentation, it does not hide a
 problem.
-
-Its tooltip lists CPU / SSD / PCH / battery, right-justified inside a
-`font_family="monospace"` span for the same reason as the CPU one.
 
 ### Update manager (mintUpdate tray)
 
@@ -614,9 +611,10 @@ systemd path unit), so there is **no password**. `max_perf_pct` is 70 for Saver,
 [hardware.md](hardware.md#the-three-profiles) for why Sustained is not 100.
 Plug or unplug still runs the automatic AC/battery policy.
 
-The tooltip is the **current** profile and a one-line hint (what that profile
-does to the CPU), not two different modes. "Turbo allowed" means the 2.4 GHz
-ceiling is unlocked; it is not a fourth profile.
+The tooltip is `Power` and the current profile, plus whether the machine is
+plugged in. The longer hint about what a profile does to the CPU is in the
+Control Center tile. "Turbo allowed" means the 2.4 GHz ceiling is unlocked; it
+is not a fourth profile.
 
 Icons from [`icons/generate-power-genmon.py`](../icons/generate-power-genmon.py)
 (locally drawn leaf, bolt, and gauge glyphs, coloured for the active panel).

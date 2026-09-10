@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # Static Overview launcher for xfce4-genmon-plugin.
+#
+# Bar tooltips are the widget name, one short status line when it earns the
+# hover, and the shortcut that opens the menu when there is one. This is the
+# template: Overview has no extra status, and Super + Space is the shortcut.
 OVERVIEW="$HOME/.local/bin/overview"
 
 printf '<click>%s</click>\n<iconclick>%s</iconclick>\n' "$OVERVIEW" "$OVERVIEW"

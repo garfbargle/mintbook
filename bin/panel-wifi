@@ -18,7 +18,7 @@ printf '<click>%s</click>\n<iconclick>%s</iconclick>\n' "$MENU" "$MENU"
 
 line=$(grep -E '^[[:space:]]*[a-z0-9]+:' /proc/net/wireless 2>/dev/null | head -1)
 if [ -z "$line" ]; then
-    printf '<img>%s/wifi-off.svg</img>\n<tool>No wireless device</tool>\n' "$DIR"; exit 0
+    printf '<img>%s/wifi-off.svg</img>\n<tool>Wi-Fi\nNo wireless device</tool>\n' "$DIR"; exit 0
 fi
 
 iface=${line%%:*}; iface=${iface// /}
@@ -27,7 +27,7 @@ qual=$(printf '%s' "$line" | awk '{q=$3; sub(/\./,"",q); print q+0}')
 # carrier tells us association state; quality alone reads 0 while connecting
 carrier=$(cat "/sys/class/net/$iface/carrier" 2>/dev/null || echo 0)
 if [ "$carrier" != "1" ]; then
-    printf '<img>%s/wifi-off.svg</img>\n<tool>Wi-Fi disconnected</tool>\n' "$DIR"; exit 0
+    printf '<img>%s/wifi-off.svg</img>\n<tool>Wi-Fi\nDisconnected</tool>\n' "$DIR"; exit 0
 fi
 
 pct=$(( qual * 100 / 70 ))
@@ -39,7 +39,6 @@ else                         lvl=0
 fi
 
 ssid=$(/usr/sbin/iwgetid -r 2>/dev/null)
-[ -z "$ssid" ] && ssid="Wi-Fi"
 
 # Associated is not the same as online. Three full bars while the uplink is
 # dead, or while a hotel portal is holding the connection, is the icon telling
@@ -62,8 +61,16 @@ esac
 
 if [ -n "$state" ]; then
   printf '<img>%s/wifi-warn.svg</img>\n' "$DIR"
-  printf '<tool>%s\n%s · signal %s%% (%s)</tool>\n' "$ssid" "$state" "$pct" "$iface"
+  if [ -n "$ssid" ]; then
+    printf '<tool>Wi-Fi\n%s · %s</tool>\n' "$ssid" "$state"
+  else
+    printf '<tool>Wi-Fi\n%s</tool>\n' "$state"
+  fi
 else
   printf '<img>%s/wifi-%s.svg</img>\n' "$DIR" "$lvl"
-  printf '<tool>%s\nSignal %s%% (%s)</tool>\n' "$ssid" "$pct" "$iface"
+  if [ -n "$ssid" ]; then
+    printf '<tool>Wi-Fi\n%s</tool>\n' "$ssid"
+  else
+    printf '<tool>Wi-Fi</tool>\n'
+  fi
 fi

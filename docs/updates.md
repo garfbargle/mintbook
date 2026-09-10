@@ -126,8 +126,8 @@ to do, so the bar remains quiet and nothing shifts when updates appear.
 Nothing shouts about a translation package. A bar that raises its voice for
 everything is a bar you stop reading.
 
-The tooltip carries the rest: the count, the total download, the breakdown and
-when the answer was last checked.
+The tooltip is `Updates` and one line: the count, the download size, and the
+security / kernel / flatpak breakdown when any of those are in the list.
 
 Open the System icon and click the Updates row. It reads the same state file and
 opens the existing popup; there is no duplicate Control Center tile or separate
@@ -260,9 +260,11 @@ The flatpak half gets its own line, because it can be stale on its own:
 ```
 
 A machine that has been off the network for three days has a perfectly fresh
-apt answer and a three-day-old flatpak answer sitting in the same file, and
-the bar's tooltip appends `· flatpaks 3d ago` once the two are more than a day
-apart. That is the whole reason the carry-forward exists.
+apt answer and a three-day-old flatpak answer sitting in the same file.
+`bin/doctor` is what says so; the bar tooltip does not, because a hover that
+nags about the timer is the same mistake as an icon that does. That is still
+the whole reason the carry-forward exists: so doctor and the popup can tell
+the two clocks apart.
 
 ### Noticing a refresh somebody else did
 

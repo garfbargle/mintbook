@@ -11,4 +11,4 @@ CC="$HOME/.local/bin/control-center"
 
 printf '<click>%s</click>\n<iconclick>%s</iconclick>\n' "$CC" "$CC"
 printf '<img>%s/.local/share/mintbook/control-center.svg</img>\n' "$HOME"
-printf '<tool>Control Center\nWi-Fi, Bluetooth, display, sound, night light, power</tool>\n'
+printf '<tool>Control Center</tool>\n'

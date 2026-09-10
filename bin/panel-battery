@@ -239,28 +239,20 @@ fi
 
 # ---------------------------------------------------------------- the tooltip
 
-health=''
-[ "$design" -gt 0 ] 2>/dev/null && health=$(( full * 100 / design ))
 rd temp "$B/temp" ''
 rd cycles "$B/cycle_count" ''
 
-
 case "$st" in
-  C) line1="Charging${eta:+ · ${eta} to full}" ;;
-  F) line1='Charged' ;;
-  D) line1="${eta:+$eta remaining}" ;;
-  *) line1='On AC power' ;;
+  C) extra="Charging${eta:+ · ${eta} to full}" ;;
+  F) extra='Charged' ;;
+  D) extra="${eta:+$eta remaining}" ;;
+  *) extra=$([ "$online" = 1 ] && echo 'On AC power' || echo 'On battery') ;;
 esac
-[ -z "$line1" ] && line1=$([ "$online" = 1 ] && echo 'Plugged in' || echo 'On battery')
-
-line2="$(( mw / 1000 )).$(( (mw % 1000) / 100 )) W"
-[ -n "$health" ] && line2="$line2 · health ${health}%"
-[ -n "$cycles" ] && line2="$line2 · ${cycles} cycles"
-[ -n "$temp" ] && line2="$line2 · $(( temp / 10 )) °C"
+info="${pct}%"
+[ -n "$extra" ] && info="$info · $extra"
 
 printf '<img>%s</img>\n' "$SVG"
-printf '<tool><span font_family="Inter"><b>Battery %s%%</b>\n%s\n<small>%s</small></span></tool>\n' \
-  "$pct" "$line1" "$line2"
+printf '<tool>Battery\n%s</tool>\n' "$info"
 
 # ----------------------------------------------------------------- the sample
 #

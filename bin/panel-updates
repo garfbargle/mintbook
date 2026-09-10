@@ -51,7 +51,7 @@ done < "$STATE"
 
 if [ -n "$error" ]; then
   printf '<img>%s/updates.svg</img>\n' "$DIR"
-  printf '<tool>Could not read the APT cache\n%s</tool>\n' "${error:0:120}"
+  printf '<tool>Updates\nCould not read the APT cache</tool>\n'
   exit 0
 fi
 
@@ -79,21 +79,6 @@ else
   printf '<img>%s/updates.svg</img>\n' "$DIR"
 fi
 
-printf -v now '%(%s)T' -1
-age=$(( (now - checked) / 3600 ))
-if   [ "$age" -lt 1 ];  then when='checked just now'
-elif [ "$age" -lt 2 ];  then when='checked an hour ago'
-elif [ "$age" -lt 48 ]; then when="checked ${age}h ago"
-else                         when="checked $(( age / 24 )) days ago"
-fi
-
-# The flatpak half asks the network and the apt half does not, so the two can
-# be answered at different times. When they are far apart, say so — a count
-# that is half fresh is not a fresh count.
-fpwhen=''
-if [ "$flatpak" -gt 0 ] 2>/dev/null && [ "$fpchecked" -gt 0 ] 2>/dev/null; then
-  fpage=$(( (now - fpchecked) / 3600 ))
-  [ "$fpage" -ge 24 ] && fpwhen=" · flatpaks $(( fpage / 24 ))d ago"
-fi
-
-printf '<tool>%s%s\n%s%s</tool>\n' "$head" "${parts:+ ($parts)}" "$when" "$fpwhen"
+info="$head"
+[ -n "$parts" ] && info="$info · $parts"
+printf '<tool>Updates\n%s</tool>\n' "$info"
