@@ -59,6 +59,46 @@ Two earlier deaths (09-05 and 09-06) happened on **deep** S3 and are not explain
 by this. The 09-06 one went 97.8% → flat in 64 minutes, which is ~31 W and
 therefore not consumption at all. Those remain open; they are not this bug.
 
+### Why s2idle costs that much here, and why it cannot be tuned down
+
+The obvious follow-up is to make s2idle cheaper instead of working around it.
+That was checked on 2026-09-10 and there is **no headroom: this platform has no
+S0ix at all.**
+
+s2idle is only cheap on hardware with Low Power S0 Idle, where the firmware and
+the SoC drop the platform into a genuine low-power state. Three independent
+checks say this machine has none of that:
+
+| check | result |
+|---|---|
+| ACPI `LPIT` table (how firmware reports S0ix residency) | **absent** — tables are APIC DMAR DSDT ECDT FACP FACS HPET MCFG SBST SSDT1-7 |
+| FADT Low Power S0 Idle flag | not set — the kernel logs nothing about low-power S0, and defaulted `mem_sleep` to `deep` rather than `s2idle` |
+| `intel_pmc_core`, the S0ix reporter | supports CPU models `0x4E` (Skylake) and later. This is a Core M-5Y31, **model `0x3D`**, Broadwell |
+
+So s2idle here is plain `freeze`: processes stopped, devices asked to suspend,
+CPU idling in ordinary C-states, and every rail still up. ~1.8 W is simply what
+that costs. There is no low-power state being missed and no knob that reaches
+one.
+
+The `intel_pch_thermal` warning that appears on some suspends —
+`CPU-PCH current temp [53C] higher than the threshold temp [50C], S0ix might
+fail` — is the Wildcat Point driver's generic message. It is not evidence that
+S0ix works here, and chasing it would have been wasted effort.
+
+For scale, the three sleep states on this machine:
+
+| state | draw | a full 34.1 Wh pack lasts |
+|---|---|---|
+| awake, idle | ~6 W | ~6 h |
+| s2idle (`freeze`) | ~1.8 W | ~19 h |
+| deep S3 | ~0.08 W | weeks |
+| hibernated | 0 W | indefinitely |
+
+Note what that means for the original failure: at **full** charge s2idle would
+have survived the night with hours to spare. 2026-09-09 died because the lid
+closed at 54%, which is only about ten hours. Charging above ~70% before bed is
+a real, if unsatisfying, mitigation.
+
 ## The design
 
 Deep S3 is unusable here — it wedges the Apple SPI endpoint and costs a reboot
