@@ -319,8 +319,7 @@ class ChartRow(Row):
         cr.stroke()
         text(cr, '100', gx, gy - 2, 7.5, self.c['fg'], .28, tnum=True)
         text(cr, '0', gx, gy + gh + 2, 7.5, self.c['fg'], .28, tnum=True)
-        names = [name for _pid, name in p.legend]
-        drew = stacked_chart(cr, p.samples, names, gx, gy, gw, gh,
+        drew = stacked_chart(cr, p.samples, p.chart_keys, gx, gy, gw, gh,
                              p.color_for, self.c['fg'], p.hot_key)
         if not drew:
             text(cr, 'Collecting history…', 15, gy + gh / 2 - 8, 9.5,
@@ -596,6 +595,11 @@ class Menu:
         self.pct = self.hist[-1] if self.hist else 0.0
         self.samples = mcpu.collapse_samples(mcpu.read_stack())
         self.legend = mcpu.legend_pids(self.samples, mcpu.LIST_N)
+        self.chart_keys = mcpu.chart_names(self.samples)
+        for _pid, name in self.legend:
+            if name not in self.chart_keys:
+                self.chart_keys.append(name)
+        self.hints = mcpu.name_hints(self.samples)
         self.mem = mcpu.meminfo()
         self.load1 = mcpu.loadavg()
         self.psi_cpu = mcpu.pressure('cpu')
@@ -623,41 +627,29 @@ class Menu:
     def assign_colors(self):
         """Which names take a palette slot, and which share a hue.
 
-        Both fall out of the set of names on screen, so both are settled once
-        per load rather than per draw. `fallback_slots` keeps two hashed names
-        off the same swatch; the shade step keeps two apps that resolve to the
-        same icon — `claude` in a terminal and the Claude app — off the same
-        orange.
+        Every name the *chart* can draw, not just the rows the list shows:
+        a band that dips out of the list still has to keep its colour. The bar
+        asks for the same thing on hover, which is why the answer lives in
+        mintbook_appcolor and not here.
         """
-        self.fallbacks = mcpu.fallback_slots(
-            [row['n'] for row in self.procs if not self.icon_bases.get(row['n'])])
-        steps = {}
-        seen = {}
-        for row in sorted(self.procs, key=lambda row: row['n']):
-            base = self.icon_bases.get(row['n'])
-            if not base:
-                continue
-            hue = round(base[0], 2)
-            steps[row['n']] = seen.get(hue, 0)
-            seen[hue] = steps[row['n']] + 1
-        self.shades = steps
+        self.band = appcolor.band_colors(self.chart_keys, self.icon_bases,
+                                         self.dark)
 
     def color_for(self, name):
-        """An app's own icon colour; a palette slot when it has none."""
-        own = appcolor.tint(self.icon_bases.get(name), self.dark,
-                            self.shades.get(name, 0))
-        if own:
-            return own
-        slot = self.fallbacks.get(name)
-        if slot is None:
-            return mcpu.swatch(name, self.dark)
-        return mcpu.swatch_slot(slot, self.dark)
+        """An app's own icon colour; a palette slot when it has none.
+
+        A name the chart never drew — the process behind a detail view that
+        has since gone quiet — still gets an answer.
+        """
+        return (self.band.get(name)
+                or appcolor.tint(self.icon_bases.get(name), self.dark)
+                or appcolor.swatch(name, self.dark))
 
     def want_colors(self):
         """Queue the icon walk if any name on screen is still uncoloured."""
         if self.color_job is not None:
             return
-        if any(proc.get('n') not in self.icon_bases for proc in self.procs):
+        if any(name not in self.icon_bases for name in self.chart_keys):
             self.color_job = GLib.idle_add(self.resolve_colors)
 
     def resolve_colors(self):
@@ -670,12 +662,11 @@ class Menu:
         """
         self.color_job = None
         wants = []
-        for proc in self.procs:
-            key = proc.get('n')
-            if not key or key in self.icon_bases:
+        for key in self.chart_keys:
+            if key in self.icon_bases:
                 continue
-            pid = proc.get('i')
-            wants.append((key, proc.get('comm') or key, key,
+            comm, pid = self.hints.get(key, (key, 0))
+            wants.append((key, comm, key,
                           mcpu.readlink_of(pid, 'exe') if pid else ''))
         if not wants:
             return False

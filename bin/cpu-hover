@@ -1,0 +1,242 @@
+#!/usr/bin/env python3
+"""Hover for the CPU sparkline, on a plugin that has no hover to give.
+
+genmon offers an image and a text tooltip; nothing tells the command that the
+pointer has arrived. But every xfce4-panel plugin runs in its own `wrapper-2.0`
+process with its own X window, and EnterNotify/LeaveNotify are not exclusive —
+another client may select them on someone else's window. `xdotool behave` is
+exactly that client, is already installed for the menu's anchor, and sits
+blocked on the X socket costing nothing until the pointer arrives.
+
+    cpu-hover watch     find the window and hand it to xdotool
+    cpu-hover on|off    the pointer arrived, or left
+
+It takes *two* xdotool processes, one per event. `behave`'s `exec` takes the
+whole rest of the command line, so chaining a second `behave` after it does
+not fail — it quietly becomes arguments to the first handler, which is a
+mouse-enter that fires and a mouse-leave that never does.
+
+`on` writes ~/.cache/mintbook/cpu.hover and asks genmon to re-run panel-cpu
+*now* — see nudge(), which is the fiddly part. panel-cpu sees the flag and
+paints the stacked bands instead of the trace, and sees that its state file is
+younger than a tick, so it repaints without sampling.
+
+The icon walk happens *here*, not in panel-cpu, which must never import Gtk:
+the first nudge goes out from whatever is already cached, and a second follows
+only if the walk found a colour the cache did not have.
+
+bin/panel-cpu starts this and restarts it, so there is no autostart entry to
+install and nothing to clean up when the panel restarts. See docs/desktop.md.
+"""
+import os
+import subprocess
+import sys
+import time
+
+HOME = os.path.expanduser('~')
+CACHE = f'{HOME}/.cache/mintbook'
+HOVER = f'{CACHE}/cpu.hover'
+SVG = f'{CACHE}/cpu.svg'
+PIDFILE = f'{CACHE}/cpu-hover.pid'
+PANEL_RC = f'{HOME}/.config/xfce4/panel'
+HERE = os.path.dirname(os.path.realpath(__file__))
+SELF = os.path.join(HERE, 'cpu-hover')
+
+
+def run(args, timeout=5):
+    try:
+        done = subprocess.run(args, capture_output=True, text=True,
+                              timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return ''
+    return done.stdout
+
+
+def plugin_id():
+    """The genmon plugin whose command is panel-cpu — not a hard-coded 19."""
+    try:
+        names = os.listdir(PANEL_RC)
+    except OSError:
+        return 0
+    for name in sorted(names):
+        if not (name.startswith('genmon-') and name.endswith('.rc')):
+            continue
+        try:
+            with open(os.path.join(PANEL_RC, name)) as handle:
+                body = handle.read()
+        except OSError:
+            continue
+        if 'panel-cpu' in body:
+            try:
+                return int(name[len('genmon-'):-len('.rc')])
+            except ValueError:
+                continue
+    return 0
+
+
+def wrapper_pid(plugin):
+    """The wrapper process running libgenmon.so for that plugin id.
+
+    Found in /proc rather than over X: the argument list is the only place the
+    plugin id and the plugin binary appear together.
+    """
+    for entry in os.listdir('/proc'):
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f'/proc/{entry}/cmdline', 'rb') as handle:
+                args = handle.read().decode('utf-8', 'replace').split('\x00')
+        except OSError:
+            continue
+        if any('libgenmon.so' in a for a in args) and str(plugin) in args:
+            return int(entry)
+    return 0
+
+
+def plugin_window(pid):
+    """That process's biggest X window: the one the pointer can be over.
+
+    A wrapper also owns a 10x10 off-screen window and a 1x1 child; area is the
+    cheapest way to tell them from the plugin itself.
+    """
+    best, best_area = 0, 0
+    for line in run(['xdotool', 'search', '--pid', str(pid)]).split():
+        if not line.strip().isdigit():
+            continue
+        shell = run(['xdotool', 'getwindowgeometry', '--shell', line.strip()])
+        size = {}
+        for row in shell.splitlines():
+            key, _, value = row.partition('=')
+            if value.strip().isdigit():
+                size[key.strip()] = int(value)
+        area = size.get('WIDTH', 0) * size.get('HEIGHT', 0)
+        if area > best_area:
+            best, best_area = int(line), area
+    return best if best_area > 100 else 0
+
+
+def svg_mtime():
+    try:
+        return os.stat(SVG).st_mtime
+    except OSError:
+        return 0
+
+
+def nudge(plugin):
+    """Make genmon re-run panel-cpu now, rather than at its next tick.
+
+    `xfce4-panel --plugin-event=plugin-19:refresh:bool:true` is what this
+    project has been sending for months and it has never done anything: the
+    panel matches on the plugin *name*, not on `plugin-<id>`, so the event
+    found no plugin and returned FALSE. `genmon:refresh:bool:true` does work —
+    and re-runs all twelve genmon widgets on this bar, which is twelve python
+    starts for one hover.
+
+    Each plugin runs in its own wrapper process with its own object on the
+    session bus, and the RemoteEvent signal the panel sends it is matched by
+    path, not by sender: emitting it ourselves reaches plugin 19 alone and
+    leaves the other eleven asleep. That is a panel internal, so this watches
+    for the repaint it should have caused and falls back to the name-wide
+    event if it never comes.
+    """
+    before = svg_mtime()
+    run(['gdbus', 'emit', '--session',
+         '--object-path', f'/org/xfce/Panel/Wrapper/{plugin}',
+         '--signal', 'org.xfce.Panel.Wrapper.RemoteEvent',
+         'refresh', '<true>', '0'])
+    for _ in range(6):
+        time.sleep(0.05)
+        if svg_mtime() != before:
+            return True
+    run(['xfce4-panel', '--plugin-event=genmon:refresh:bool:true'])
+    return False
+
+
+def resolve_colors():
+    """Icon colours for the names the bar is about to draw. True if new."""
+    sys.path.insert(0, HERE)
+    import mintbook_appcolor as appcolor
+    import mintbook_cpu as mcpu
+    _samples, keys = mcpu.bar_stack()
+    sig = appcolor.signature(theme=appcolor.icon_theme_name())
+    bases = appcolor.read_cache(sig=sig)
+    hints = mcpu.name_hints(mcpu.collapse_samples(mcpu.read_stack()))
+    wants = []
+    for key in keys:
+        if key in bases:
+            continue
+        comm, pid = hints.get(key, (key, 0))
+        wants.append((key, comm, key,
+                      mcpu.readlink_of(pid, 'exe') if pid else ''))
+    if not wants:
+        return False
+    bases, found = appcolor.resolve(wants, bases)
+    if not found:
+        return False
+    appcolor.write_cache(bases, sig=sig)
+    return True
+
+
+def enter(plugin):
+    os.makedirs(CACHE, exist_ok=True)
+    with open(HOVER, 'w') as handle:
+        handle.write('1')
+    nudge(plugin)              # colour it now, from what is already known
+    try:
+        if resolve_colors():   # and again if an app had never been looked up
+            nudge(plugin)
+    except Exception:
+        pass
+
+
+def leave(plugin):
+    try:
+        os.remove(HOVER)
+    except OSError:
+        pass
+    nudge(plugin)
+
+
+def watch():
+    """Point two xdotool processes at the plugin's window and get out of the way.
+
+    The pidfile is written even when the search fails, so panel-cpu can see
+    that a try happened: a panel that is still starting should not be hunted
+    once every two seconds. It holds the watchers on one line and the wrapper
+    they are watching on the next — when the panel restarts, that pid changes
+    and the watchers are pointed at a window that no longer exists.
+    """
+    os.makedirs(CACHE, exist_ok=True)
+    open(PIDFILE, 'w').close()
+    plugin = plugin_id()
+    panel = wrapper_pid(plugin) if plugin else 0
+    window = plugin_window(panel) if panel else 0
+    if not window:
+        return 1
+    watchers = []
+    for event, action in (('mouse-enter', 'on'), ('mouse-leave', 'off')):
+        child = subprocess.Popen(
+            ['xdotool', 'behave', str(window), event, 'exec', SELF, action],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        watchers.append(child.pid)
+    with open(PIDFILE, 'w') as handle:
+        handle.write(' '.join(str(p) for p in watchers) + f'\n{panel}\n')
+    return 0
+
+
+def main():
+    action = sys.argv[1] if len(sys.argv) > 1 else 'watch'
+    if action == 'on':
+        enter(plugin_id())
+    elif action == 'off':
+        leave(plugin_id())
+    elif action == 'watch':
+        return watch()
+    else:
+        print(__doc__.strip(), file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main() or 0)

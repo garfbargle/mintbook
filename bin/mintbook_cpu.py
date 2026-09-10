@@ -20,6 +20,9 @@ IO_STATE = os.path.join(CACHE, 'cpu.io')
 STACK_KEEP = 60
 TOP_N = 8
 LIST_N = 6
+CHART_N = 12
+BAND_N = 7           # bands the bar can carry at 92px wide
+BAND_SPAN = 16       # stack samples the bar draws: ~96 s, the trace's window
 
 # comm is 15 characters of kernel truncation. The same idea as the table in
 # bin/battery-menu; both are standalone executables, and this is a data table.
@@ -63,31 +66,6 @@ ROLES = (
     ('--type=crashpad-handler', 'Crashpad'),
 )
 
-# The fallback palette, for an app whose icon has no colour to take (a
-# black-and-white mark) and for the kernel, which has no icon at all. Distinct
-# on both glass appearances, and keyed to the name, so a process keeps its
-# colour as its rank moves. bin/mintbook_appcolor.py is the first choice.
-SWATCHES_LIGHT = (
-    (0, 122, 255),
-    (175, 82, 222),
-    (255, 149, 0),
-    (48, 176, 199),
-    (255, 45, 85),
-    (52, 199, 89),
-    (88, 86, 214),
-    (255, 179, 64),
-)
-SWATCHES_DARK = (
-    (10, 132, 255),
-    (191, 90, 242),
-    (255, 159, 10),
-    (64, 200, 224),
-    (255, 55, 95),
-    (48, 209, 88),
-    (94, 92, 230),
-    (255, 214, 10),
-)
-
 SKIP_FD = (
     'socket:', 'pipe:', 'anon_inode:', '/dev/null', '/dev/zero',
     '/dev/full', '/dev/tty', '/dev/ptmx', '/dev/pts/', '/dev/urandom',
@@ -112,46 +90,6 @@ def read_text(path, default=''):
             return handle.read()
     except OSError:
         return default
-
-
-def color_index(name, n=None):
-    n = n or len(SWATCHES_LIGHT)
-    value = 0
-    for char in name or '?':
-        value = (value * 33 + ord(char)) & 0xffffffff
-    return value % n
-
-
-def swatch_slot(slot, dark=False):
-    palette = SWATCHES_DARK if dark else SWATCHES_LIGHT
-    return palette[slot % len(palette)]
-
-
-def swatch(name, dark=False):
-    return swatch_slot(color_index(name, len(SWATCHES_LIGHT)), dark)
-
-
-def fallback_slots(names, n=None):
-    """A palette slot each for the names with no icon colour of their own.
-
-    The hash alone put ChatGPT and codex on the same teal, which is fine when
-    every band is hashed and confusing next to bands that mean something. A
-    name whose slot is taken probes forward to the next free one. Sorted by
-    name, not by rank, so a slot does not move when the ranking does.
-    """
-    n = n or len(SWATCHES_LIGHT)
-    used = set()
-    out = {}
-    for name in sorted(names):
-        slot = color_index(name, n)
-        for step in range(n):
-            probe = (slot + step) % n
-            if probe not in used:
-                slot = probe
-                break
-        used.add(slot)
-        out[name] = slot
-    return out
 
 
 def pretty(comm, cmdline=''):
@@ -360,6 +298,51 @@ def series_for(samples, keys, by='n'):
         busy.append(busy_v)
         other.append(max(0.0, busy_v - used))
     return out, other, busy
+
+
+def chart_names(samples, limit=CHART_N):
+    """The names worth a band of their own, ranked over the whole window.
+
+    The *list* is a top few right now. Choosing the bands that way too meant a
+    process that slipped to sixth lost its colour and fell into the grey
+    `other` band for a sample, then came back — a band blinking in the middle
+    of the chart. Bands are chosen over the window instead, so only the
+    genuinely small are folded into `other`.
+    """
+    totals = {}
+    for sample in samples:
+        for proc in sample.get('p', []):
+            name = proc.get('n') or str(proc.get('i'))
+            totals[name] = totals.get(name, 0.0) + float(proc.get('s', 0.0))
+    return sorted(totals, key=lambda name: (-totals[name], name))[:limit]
+
+
+def bar_stack(span=BAND_SPAN, limit=BAND_N, path=None):
+    """(samples, names) for the bar's hover stack.
+
+    One definition because two processes need the same answer: panel-cpu draws
+    these names, and cpu-hover looks up their icon colours before asking the
+    panel to repaint. The window is trimmed to roughly the span the resting
+    trace already shows, so hovering re-colours the line rather than replacing
+    it with a different stretch of time.
+    """
+    samples = collapse_samples(read_stack(path))[-span:]
+    return samples, chart_names(samples, limit)
+
+
+def name_hints(samples):
+    """{name: (comm, pid)} — what the icon walk needs to find a .desktop file.
+
+    The most recent sighting wins, so the pid is one that may still be alive.
+    Samples must be collapsed first; that is where `comm` survives grouping.
+    """
+    hints = {}
+    for sample in samples:
+        for proc in sample.get('p', []):
+            name = proc.get('n')
+            if name:
+                hints[name] = (proc.get('comm') or name, proc.get('i') or 0)
+    return hints
 
 
 def legend_pids(samples, limit=LIST_N):

@@ -32,8 +32,11 @@ import colorsys
 import json
 import math
 import os
+import re
 
 CACHE = os.path.expanduser('~/.cache/mintbook/app-colors.json')
+XSETTINGS = os.path.expanduser(
+    '~/.config/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml')
 VERSION = 1
 SIZE = 64            # icon is rendered this big, then every pixel votes
 BUCKETS = 24         # 15 degrees each
@@ -47,6 +50,96 @@ EXEC_WRAPPERS = {'env', 'sh', 'bash', 'dbus-run-session', 'exec', 'nohup'}
 # ink dark enough to read on near-white glass; slate needs it light enough.
 TINT_LIGHT = (0.46, 0.50, 1.00)
 TINT_DARK = (0.62, 0.45, 0.92)
+
+# The fallback palette, for an app whose icon has no colour to take (a
+# black-and-white mark) and for the kernel, which has no icon at all. Distinct
+# on both glass appearances, and keyed to the name, so a process keeps its
+# colour as its rank moves. bin/mintbook_appcolor.py is the first choice.
+SWATCHES_LIGHT = (
+    (0, 122, 255),
+    (175, 82, 222),
+    (255, 149, 0),
+    (48, 176, 199),
+    (255, 45, 85),
+    (52, 199, 89),
+    (88, 86, 214),
+    (255, 179, 64),
+)
+SWATCHES_DARK = (
+    (10, 132, 255),
+    (191, 90, 242),
+    (255, 159, 10),
+    (64, 200, 224),
+    (255, 55, 95),
+    (48, 209, 88),
+    (94, 92, 230),
+    (255, 214, 10),
+)
+
+def color_index(name, n=None):
+    n = n or len(SWATCHES_LIGHT)
+    value = 0
+    for char in name or '?':
+        value = (value * 33 + ord(char)) & 0xffffffff
+    return value % n
+
+
+def swatch_slot(slot, dark=False):
+    palette = SWATCHES_DARK if dark else SWATCHES_LIGHT
+    return palette[slot % len(palette)]
+
+
+def swatch(name, dark=False):
+    return swatch_slot(color_index(name, len(SWATCHES_LIGHT)), dark)
+
+
+def fallback_slots(names, n=None):
+    """A palette slot each for the names with no icon colour of their own.
+
+    The hash alone put ChatGPT and codex on the same teal, which is fine when
+    every band is hashed and confusing next to bands that mean something. A
+    name whose slot is taken probes forward to the next free one. Sorted by
+    name, not by rank, so a slot does not move when the ranking does.
+    """
+    n = n or len(SWATCHES_LIGHT)
+    used = set()
+    out = {}
+    for name in sorted(names):
+        slot = color_index(name, n)
+        for step in range(n):
+            probe = (slot + step) % n
+            if probe not in used:
+                slot = probe
+                break
+        used.add(slot)
+        out[name] = slot
+    return out
+
+
+def band_colors(names, bases, dark=False):
+    """{name: (r, g, b)} for every name a chart can draw.
+
+    One function decides this because two things draw it: the popup's chart
+    and, on hover, the bar itself. An icon colour where the app has one; a
+    hashed swatch no other visible name is using where it does not; and a
+    shade along for the second app that resolves to the same icon.
+    """
+    slots = fallback_slots([n for n in names if not bases.get(n)])
+    steps = {}
+    seen = {}
+    for name in sorted(names):
+        base = bases.get(name)
+        if not base:
+            continue
+        hue = round(base[0], 2)
+        steps[name] = seen.get(hue, 0)
+        seen[hue] = steps[name] + 1
+    out = {}
+    for name in names:
+        base = bases.get(name)
+        out[name] = (tint(base, dark, steps.get(name, 0)) if base
+                     else swatch_slot(slots.get(name, color_index(name)), dark))
+    return out
 
 
 def app_dirs():
@@ -210,14 +303,20 @@ def icon_file(name, size=SIZE):
     return info.get_filename() or '' if info else ''
 
 
-def icon_theme_name():
+def icon_theme_name(path=None):
+    """The icon theme, read from xfconf rather than asked of Gtk.
+
+    bin/panel-cpu reads this cache too and must stay stdlib-only. Both sides
+    have to name the theme the same way or each would keep dropping the
+    other's cache as a stranger's.
+    """
     try:
-        import gi
-        gi.require_version('Gtk', '3.0')
-        from gi.repository import Gtk
-        return Gtk.Settings.get_default().get_property('gtk-icon-theme-name') or ''
-    except Exception:
+        with open(path or XSETTINGS) as handle:
+            found = re.search(r'name="IconThemeName"[^>]*value="([^"]*)"',
+                              handle.read())
+    except OSError:
         return ''
+    return found.group(1) if found else ''
 
 
 def dominant(path, size=SIZE):

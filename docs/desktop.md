@@ -215,6 +215,10 @@ version gives:
   like Wi-Fi / battery / System. `Activity Monitor…` in the footer still opens
   `gnome-system-monitor`. Without the menu installed, the click falls back to
   System Monitor on its own — the same trick as `panel-wifi`.
+- **Hover colours it.** The trace becomes the menu's stacked bands, in the same
+  icon colours, and goes back to one flat colour when the pointer leaves. See
+  below — genmon has no hover to offer, so this is built out of the plugin's
+  own X window.
 
 State lives in `~/.cache/mintbook/`, written via a temp file and `os.replace`
 so a half-written file is never read. It is **four** files, and the split is the
@@ -230,6 +234,11 @@ point:
 - `cpu.io` — the previous `/proc/<pid>/io` counters for those top pids, so the
   next sample can store a delta instead of a since-start flood.
 
+Hover adds two more that are flags rather than state: `cpu.hover` exists only
+while the pointer is on the widget, and `cpu-hover.pid` holds the two watchers
+and the panel wrapper they are watching. `app-colors.json` is the icon-colour
+cache, described under the menu.
+
 The sparkline reads two numbers out of `/proc/stat`, which is cheap. The `/proc`
 walk that feeds the menu is not: it opens `/proc/<pid>/stat` for every process
 on the machine, and at 2 s that was 159 s of CPU in a two-hour session. The
@@ -244,6 +253,65 @@ lifetime counters onto the first point of the line.
 
 > GTK tooltips are not interactive, so a *button* inside the hover is not possible —
 > hence click-to-open. Task Manager remains on its existing **Ctrl+Shift+Esc** binding.
+
+### Hover on the sparkline ([`bin/cpu-hover`](../bin/cpu-hover))
+
+**Since 2026-09-09.** Put the pointer on the sparkline and the trace becomes
+the stack: the same bands as the menu's chart, in the same icon colours, over
+roughly the same ~96 s the flat trace covers. Take the pointer away and it is
+one colour again. The bar at rest is still a reading, not a story.
+
+genmon has no hover to give — an image and a text tooltip is the whole
+contract. But every xfce4-panel plugin here runs in its own `wrapper-2.0`
+process with its own X window, and `EnterNotify`/`LeaveNotify` are not
+exclusive masks: another client may select them on a window it does not own.
+`xdotool behave` is that client, already installed for the menu's anchor, and
+it costs nothing but its ~3 MB while it sits blocked on the X socket.
+
+It takes **two** xdotool processes, one per event. `behave`'s `exec` takes the
+entire rest of the command line, so chaining a second `behave` after it does
+not fail — it quietly becomes arguments to the first handler. Enter fires,
+leave never does, and the bar stays coloured. That looked like it worked in a
+first test only because the enter handler was `touch`ing the file the leave
+handler was supposed to.
+
+> **`--plugin-event=plugin-19:refresh:bool:true` has never done anything.**
+> `bin/cpu-install` has sent it after every install since the sparkline
+> landed, and `xfce4-panel` matches on the plugin **name**, not on
+> `plugin-<id>`: the event was delivered to no plugin and returned FALSE every
+> time. The picture only ever changed on genmon's next 2 s tick, which is also
+> why the old comment there said it would. `genmon:refresh:bool:true` does
+> work — and re-runs all **twelve** genmon widgets on this bar, twelve python
+> starts for one hover.
+
+So the repaint goes to one plugin instead. Each wrapper has its own object on
+the session bus, and the `RemoteEvent` signal the panel sends it is matched by
+path, not by sender — emitting it directly reaches plugin 19 alone in ~50 ms
+and leaves the other eleven asleep. That is a panel internal, so `nudge()`
+watches for the repaint it should have caused and falls back to the name-wide
+event if it never comes. Pointer to colour is ~300 ms end to end.
+
+`panel-cpu` then has to tell a repaint from a tick: a run that arrives within
+`MIN_TICK` of the last state write renders and prints, and does not sample.
+Measuring a 100 ms interval would put a spike in the history and walk `/proc`
+a tick early, so a hover would leave a mark on the graph it was drawing.
+
+The watchers are started and restarted by `panel-cpu` itself — one stat, one
+read and three `/proc` lookups on a tick it was already running — so there is
+no autostart entry to install and nothing to clean up. The pidfile names the
+panel wrapper as well as the watchers, because a panel restart leaves them
+alive and pointed at a window that no longer exists; when any of the three is
+gone the survivors are killed and the pair is started again. A failed attempt
+is not retried for 30 s, so a panel that is still coming up is not hunted once
+every two seconds.
+
+> **The silhouette changes, not just the colour.** The bands come from the
+> 6 s process history, not the 2 s trace, so the hovered line is smoother and
+> its spikes are lower — hovering redraws the line as well as colouring it.
+> A watcher that dies mid-hover also leaves the bar coloured until `panel-cpu`
+> notices, which is up to 30 s. And the colours come from the cache: the first
+> hover of an app nobody has looked at yet costs one icon walk, done in
+> `cpu-hover` rather than in `panel-cpu`, which must never import Gtk.
 
 ### CPU menu ([`bin/cpu-menu`](../bin/cpu-menu))
 
@@ -295,8 +363,8 @@ in the detail view. Pressure stall (`/proc/pressure`) and swap join the
 subtitle only when they are actually happening.
 
 Install with [`bin/cpu-install`](../bin/cpu-install); `--revert` deletes
-`~/.local/bin/cpu-menu` and `panel-cpu` falls back to `gnome-system-monitor` on
-its own. `bin/doctor` checks for it, and says nothing when it is not installed.
+`~/.local/bin/cpu-menu` and `cpu-hover`, stops the watchers, and `panel-cpu`
+falls back to `gnome-system-monitor` on its own and to a plain trace on hover. `bin/doctor` checks for it, and says nothing when it is not installed.
 
 The helpers live in [`bin/mintbook_cpu.py`](../bin/mintbook_cpu.py) so the
 collector and the popup share one format, and so the format can be tested

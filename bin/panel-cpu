@@ -8,6 +8,15 @@ edges faded out via a gradient mask. The tooltip is the widget name and the
 current percentage — the same shape Overview uses — and the process story
 lives in the glass menu behind the click.
 
+Hovering the bar colours it. genmon has no hover to offer — it renders an
+image and a text tooltip — so bin/cpu-hover watches the plugin's own X window
+and drops a flag file when the pointer arrives. This then paints the same
+stacked bands the menu paints, in the same icon colours, over the same ~96 s
+the resting trace covers; the pointer leaves and it is a plain trace in the
+panel foreground again. A run that arrives within MIN_TICK of the last one is
+that repaint and not a sample: measuring a 100 ms interval would put a spike
+in the history and walk /proc a tick early.
+
 The sparkline samples every 2 s off two numbers in /proc/stat, which is cheap.
 The /proc walk is not: it opens /proc/<pid>/stat for every process on the
 machine. At 2 s that was 159 s of CPU in a two-hour session. The walk now runs
@@ -19,6 +28,7 @@ chart. I/O is opened only for the top N, not for every pid — the walk's cost
 stays the /proc/stat pass. See docs/desktop.md.
 """
 import os, sys
+import signal
 import time
 
 W, H      = 92, 36          # canvas; height sits inside the 52px bar
@@ -26,12 +36,24 @@ HIST      = 46              # samples retained
 STATE     = os.path.expanduser('~/.cache/mintbook/cpu.state')
 PROCS     = os.path.expanduser('~/.cache/mintbook/cpu.procs')
 PROC_EVERY = 3              # walk /proc every Nth tick (2 s tick -> every 6 s)
+HOVER     = os.path.expanduser('~/.cache/mintbook/cpu.hover')
+WATCH_PID = os.path.expanduser('~/.cache/mintbook/cpu-hover.pid')
+MIN_TICK  = 0.6             # a run this soon after the last is a repaint
+WATCH_RETRY = 30            # seconds before trying a failed watcher again
 FADE      = 0.16            # fraction of width faded at each edge
 NCPU      = os.cpu_count() or 1
 CLK       = os.sysconf('SC_CLK_TCK')
 PAGE      = os.sysconf('SC_PAGESIZE') or 4096
 TOP_N     = 8
 MENU      = os.path.expanduser('~/.local/bin/cpu-menu')
+WATCHER   = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'cpu-hover')
+
+
+def appcolor_lib():
+    """The colour cache. stdlib-only to read — Gtk is cpu-hover's business."""
+    sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+    import mintbook_appcolor
+    return mintbook_appcolor
 
 
 def cpu_lib():
@@ -141,13 +163,75 @@ def panel_foreground():
         pass
     return '#ffffff'
 
-def render(hist, path_out):
+def bar_is_dark(color):
+    """White ink means a slate bar; the bands need the lighter tints."""
+    try:
+        value = color.lstrip('#')
+        if len(value) == 3:
+            value = ''.join(c * 2 for c in value)
+        r, g, b = (int(value[i:i + 2], 16) for i in (0, 2, 4))
+    except (ValueError, IndexError):
+        return True
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.5
+
+
+def band_path(xs, low, high):
+    up = ' L'.join(f'{x:.1f} {y:.1f}' for x, y in zip(xs, low))
+    down = ' L'.join(f'{x:.1f} {y:.1f}' for x, y in zip(reversed(xs), reversed(high)))
+    return f'M{up} L{down} Z'
+
+
+def stacked_body(fg):
+    """The bands, as SVG, or '' when there is no process history to stack.
+
+    Same shape as the menu's chart: everything the top rows do not account for
+    sits at the bottom in the panel's own ink, and the named processes stack on
+    top of it in their apps' colours.
+    """
+    mcpu = cpu_lib()
+    samples, keys = mcpu.bar_stack()
+    if len(samples) < 2:
+        return ''
+    appcolor = appcolor_lib()
+    bases = appcolor.read_cache(
+        sig=appcolor.signature(theme=appcolor.icon_theme_name()))
+    colors = appcolor.band_colors(keys, bases, bar_is_dark(fg))
+    series, other, _busy = mcpu.series_for(samples, keys)
+    n = len(samples)
+    xs = [i * W / (n - 1) for i in range(n)]
+
+    def ys(values):
+        return [H - max(0.0, min(100.0, v)) / 100.0 * (H - 1) - 0.5
+                for v in values]
+
+    baseline = [0.0] * n
+    out = []
+    ranked = sorted(keys, key=lambda key: -sum(series.get(key, ())))
+    for color, values, opacity in (
+            [(fg, other, 0.22)]
+            + [('#%02x%02x%02x' % colors[key], series.get(key, [0] * n), 0.9)
+               for key in ranked]):
+        top = [b + v for b, v in zip(baseline, values)]
+        out.append(f'    <path d="{band_path(xs, ys(baseline), ys(top))}" '
+                   f'fill="{color}" fill-opacity="{opacity}"/>')
+        baseline = top
+    return '  <g mask="url(#fade)">\n' + '\n'.join(out) + '\n  </g>\n'
+
+
+def render(hist, path_out, hovering=False):
     color = panel_foreground()
-    d = area_path(hist)
-    body = '' if not d else (
-        f'  <g mask="url(#fade)">\n'
-        f'    <path d="{d}" fill="{color}" fill-opacity="0.82"/>\n'
-        f'  </g>\n')
+    body = ''
+    if hovering:
+        try:
+            body = stacked_body(color)
+        except Exception:
+            body = ''      # a colourless bar beats no bar
+    if not body:
+        d = area_path(hist)
+        body = '' if not d else (
+            f'  <g mask="url(#fade)">\n'
+            f'    <path d="{d}" fill="{color}" fill-opacity="0.82"/>\n'
+            f'  </g>\n')
     svg = (
 f'''<svg width="{W}" height="{H}" viewBox="0 0 {W} {H}" xmlns="http://www.w3.org/2000/svg">
  <defs>
@@ -163,8 +247,83 @@ f'''<svg width="{W}" height="{H}" viewBox="0 0 {W} {H}" xmlns="http://www.w3.org
 ''')
     write_atomic(path_out, svg)
 
+def hovering():
+    return os.path.exists(HOVER)
+
+
+def state_age():
+    try:
+        return time.time() - os.stat(STATE).st_mtime
+    except OSError:
+        return None
+
+
+def ensure_watcher():
+    """Keep bin/cpu-hover alive, without an autostart entry to install.
+
+    genmon runs this every two seconds, so the cheapest supervisor is here:
+    one stat, one read, a handful of /proc lookups. The watchers are xdotool
+    blocked on the X socket — nothing until the pointer arrives. The pidfile
+    also names the panel wrapper they are watching, because a panel restart
+    leaves them alive and pointed at a window that is gone. Half a watcher is
+    no watcher, so a survivor is killed rather than left listening, and a flag
+    left behind by a hover that never got its leave goes too.
+    """
+    if not os.access(WATCHER, os.X_OK):
+        return
+    watchers = []
+    try:
+        stamp = os.stat(WATCH_PID).st_mtime
+        with open(WATCH_PID) as f:
+            lines = f.read().split('\n')
+        watchers = [int(p) for p in lines[0].split()]
+        pids = watchers + [int(p) for p in lines[1].split()]
+        if pids and all(os.path.exists(f'/proc/{pid}') for pid in pids):
+            return
+    except (OSError, ValueError, IndexError):
+        stamp = 0
+    for pid in watchers:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+    if time.time() - stamp < WATCH_RETRY:
+        return              # it failed a moment ago; do not spawn once a tick
+    try:
+        os.remove(HOVER)
+    except OSError:
+        pass
+    if os.fork() == 0:      # exits with the exec; no wait, no zombie
+        os.setsid()
+        null = os.open(os.devnull, os.O_RDWR)
+        for fd in (0, 1, 2):
+            os.dup2(null, fd)
+        try:
+            os.execv(WATCHER, [WATCHER, 'watch'])
+        finally:
+            os._exit(1)
+
+
+def emit(pct):
+    click = MENU if os.access(MENU, os.X_OK) else 'gnome-system-monitor'
+    print(f'<img>{os.path.expanduser("~/.cache/mintbook/cpu.svg")}</img>')
+    print(f'<tool>CPU\n{pct:.0f}%</tool>')
+    print(f'<click>{click}</click>')
+    print(f'<iconclick>{click}</iconclick>')
+
+
 def main():
     out_svg = os.path.expanduser('~/.cache/mintbook/cpu.svg')
+    ensure_watcher()
+    age = state_age()
+    if age is not None and 0 <= age < MIN_TICK:
+        # cpu-hover asked genmon to re-run us so the picture could change.
+        # There is nothing to measure in 100 ms: repaint and say nothing new.
+        hist = read_state()[2]
+        render(hist, out_svg, hovering())
+        emit(hist[-1] if hist else 0.0)
+        return
+
     ptotal, pidle, hist, ptick = read_state()
     total, idle = cpu_totals()
 
@@ -205,18 +364,14 @@ def main():
 
     hist.append(pct)
     hist = hist[-HIST:]
-    render(hist, out_svg)
+    render(hist, out_svg, hovering())
 
     write_atomic(STATE,
                  f'{total}\n{idle}\n'
                  + ','.join(f'{v:.1f}' for v in hist) + '\n'
                  + f'{tick}\n')
 
-    click = MENU if os.access(MENU, os.X_OK) else 'gnome-system-monitor'
-    print(f'<img>{out_svg}</img>')
-    print(f'<tool>CPU\n{pct:.0f}%</tool>')
-    print(f'<click>{click}</click>')
-    print(f'<iconclick>{click}</iconclick>')
+    emit(pct)
 
 
 def record_stack(ranked, busy, wall_dt):

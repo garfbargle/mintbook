@@ -181,5 +181,44 @@ class ResolveTests(unittest.TestCase):
         self.assertIsNone(bases['Nope'])
 
 
+class FallbackTests(unittest.TestCase):
+    """What an app with a black-and-white icon gets instead."""
+
+    def test_colour_is_stable_for_a_name(self):
+        self.assertEqual(ac.color_index('firefox'), ac.color_index('firefox'))
+        self.assertNotEqual(ac.color_index('firefox'), ac.color_index('Xorg'))
+
+    def test_two_hashed_names_do_not_share_a_swatch(self):
+        names = ['ChatGPT', 'codex', 'X server', 'Cursor', 'kswapd0']
+        slots = ac.fallback_slots(names)
+        self.assertEqual(len(set(slots.values())), len(names))
+
+    def test_a_slot_does_not_move_when_the_ranking_does(self):
+        names = ['ChatGPT', 'codex', 'X server']
+        self.assertEqual(ac.fallback_slots(names),
+                         ac.fallback_slots(list(reversed(names))))
+
+    def test_more_names_than_swatches_still_answers(self):
+        names = [f'proc{i}' for i in range(len(ac.SWATCHES_LIGHT) + 3)]
+        slots = ac.fallback_slots(names)
+        self.assertEqual(len(slots), len(names))
+        self.assertTrue(all(0 <= v < len(ac.SWATCHES_LIGHT) for v in slots.values()))
+
+class BandTests(unittest.TestCase):
+    def test_an_icon_colour_beats_the_palette(self):
+        colors = ac.band_colors(['Firefox', 'codex'], {'Firefox': (0.1, 0.77)})
+        self.assertNotIn(colors['Firefox'], ac.SWATCHES_LIGHT)
+        self.assertIn(colors['codex'], ac.SWATCHES_LIGHT)
+
+    def test_every_name_gets_one(self):
+        names = ['a', 'b', 'c']
+        self.assertEqual(sorted(ac.band_colors(names, {})), names)
+
+    def test_two_apps_on_one_icon_do_not_share_a_band(self):
+        bases = {'Claude': (0.04, 0.62), 'claude': (0.04, 0.62)}
+        colors = ac.band_colors(list(bases), bases)
+        self.assertNotEqual(colors['Claude'], colors['claude'])
+
+
 if __name__ == '__main__':
     unittest.main()
