@@ -415,8 +415,17 @@ that event and leaves a journal behind.
   epb=8`, which is what AC gets, and it hung anyway.
 - **NVMe runtime PM**: `power/control=on`, `runtime_status=active`.
 - **Audio codec runtime PM**: `snd_hda_intel power_save=0`.
-- **No TLP and no laptop-mode-tools** are installed, so nothing else is
-  retuning the machine when the charger comes out.
+- **No TLP and no laptop-mode-tools** are installed.
+- **pm-utils *is* installed**, which that check missed. Its
+  `/usr/lib/pm-utils/power.d/` ships exactly the battery tunings a hang like
+  this would suggest: `laptop-mode` (laptop_mode=5, 10-minute writeback),
+  `pci_devices` (runtime PM `auto` on Wi-Fi and audio), `pcie_aspm`
+  (`powersave`), and `wireless`. Checked 2026-09-10 and **nothing ever runs
+  them.** Only `pm-powersave` calls those hooks, and nothing calls
+  `pm-powersave`. No udev rule, systemd unit or D-Bus service refers to it,
+  acpid and acpi-support are not installed, and there is no
+  `/var/log/pm-powersave.log`. The one other hook, the hdparm script in
+  `/usr/lib/systemd/system-sleep/`, acts only on `post`, and only on ATA disks.
 - i915 exposes no `enable_psr`/`enable_fbc`/`enable_dc` on this kernel, so the
   most obvious remaining suspect could not be checked directly.
 
