@@ -726,10 +726,16 @@ Python interpreter in order to start a *second* Python interpreter —
 `powerprofilesctl` is itself Python. That was 350 ms a run, at a 3 s period.
 
 CLI is still `powerprofilesctl get` / `pkexec mintbook-power-apply …`. The
-period stays at 3 s: `power-menu` already forces an immediate refresh with
-`xfce4-panel --plugin-event=genmon-22:refresh:bool:true` after a click, so the
-period only governs how fast the icon notices a charger, and stretching it
-would buy a few seconds of CPU an hour in exchange for a laggy icon.
+period stays at 3 s, and the reason given here used to be that `power-menu`
+forces an immediate refresh after a click with
+`xfce4-panel --plugin-event=genmon-22:refresh:bool:true`.
+
+> **Corrected 2026-09-09: it does not.** The event matches on the plugin
+> **name**, so neither `genmon-22` nor `plugin-<id>` reaches anything; both
+> return FALSE. The icon after a click is waiting on the same 3 s period as
+> everything else, which is the real argument for keeping the period short —
+> not the nudge. The forms that do work are under
+> [Hover on the sparkline](#hover-on-the-sparkline-bincpu-hover).
 
 ### Night light (`plugin-23`, genmon)
 

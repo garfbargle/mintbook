@@ -111,8 +111,15 @@ well before the bolt. The icon is 76 px wide in that state against the old 72.5
 — 3.5 px for a shape that belongs inside the thing it describes.
 
 The menu writes `SHOW_PERCENT` back to the config and then nudges genmon
-(`xfce4-panel --plugin-event=plugin-26:refresh:bool:true`), so the bar changes
-under the click that asked for it.
+(`xfce4-panel --plugin-event=plugin-26:refresh:bool:true`).
+
+> **Corrected 2026-09-09: that nudge does nothing, and never has.** The panel
+> matches the event on the plugin **name**, not on `plugin-<id>` — it is
+> delivered to no plugin and returns FALSE. The bar does change, but on
+> `panel-battery`'s own next tick rather than under the click. The CPU
+> sparkline hit the same wall and the working forms are written up in
+> [desktop.md](desktop.md#hover-on-the-sparkline-bincpu-hover): `genmon:refresh`
+> for all of them, or the wrapper's own `RemoteEvent` signal for one.
 
 ### Config
 
