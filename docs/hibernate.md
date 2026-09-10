@@ -1,13 +1,16 @@
 # Hibernation
 
-**Status 2026-09-10: works on AC, hangs the machine on battery. Not usable
-for the case it was built for.**
+**Status 2026-09-10: one combination works — `systemctl hibernate` from the
+desktop, on AC. Everything else has failed at least once.**
 
-- On AC it is proven end to end, Apple SPI keyboard included — see "The cycle
-  that worked".
-- On battery it has wedged **twice out of two**, both times before the
-  pre-hibernate filesystem sync, both times needing a forced power cycle. See
-  "The lid escalation fires, and then wedges".
+- **Proven:** X + AC, save and restore, Apple SPI keyboard included. See "The
+  cycle that worked".
+- **Save hangs** when invoked from X **on battery** (2 of 2). It does not hang
+  from a text console on battery, so this is an X-plus-battery interaction, not
+  either one alone.
+- **Restore has succeeded once and failed once.** The failure was from tty2 on
+  battery: "restoring image", then a black screen. Whether the kernel hung or
+  merely lost the display is **not yet established**.
 - The lid is therefore back on plain `suspend`. Overnight unplugged is **not**
   solved: s2idle still costs ~1.8 W, about 11 hours. Plug in overnight, or
   hibernate by hand on AC.
@@ -304,6 +307,14 @@ That sync line is logged *after* the sync returns, and journald was still
 running to record it in the working case. Its absence points at the pre-hibernate
 filesystem sync never completing.
 
+### Retracted: it is not simply "battery"
+
+The section below concluded the power source was the discriminator. A later
+test from a **text console** disproves that: on battery, from tty2, the image
+saved perfectly. Keep reading for the corrected matrix in "What the TTY test
+showed". The battery correlation was real but incomplete — it takes X *and*
+battery together to hang the save.
+
 ### Isolated: it is the power source, not the timing
 
 Two candidates came out of that test — that the hibernate began 70 ms after an
@@ -346,7 +357,68 @@ Naming battery as the *cause* on n=2 would be overreading it; what is certain
 is that hibernation is unreliable in exactly the state the feature exists to
 serve.
 
-### The next diagnostic, when there is appetite for it
+## What the TTY test showed
+
+Run 2026-09-10 11:49 from tty2, on battery, with `pm_debug_messages=1`,
+`console_suspend=N` and console loglevel 8 so the transition printed to screen
+instead of dying with the journal.
+
+**The image saved.** The screen showed the sequence through "saving image" and
+the machine powered off — the first successful save on battery, and the thing
+that retires the battery-only explanation.
+
+**The restore then failed.** On the power button the screen showed the boot
+text and "restoring image", then went black and stayed black. A second power
+press produced an ordinary cold boot with `PM: Image not found (code -22)`, the
+image having been consumed by the attempt, and journald reporting
+`corrupted or uncleanly shut down`.
+
+### Every attempt, in one table
+
+| time | invoked from | power | save | restore |
+|---|---|---|---|---|
+| 09:50 | X | AC | OK | n/a — `PARTUUID` bug |
+| 10:33 | X | AC | OK | **OK** |
+| 11:01 | X, 70 ms post-s2idle | battery | hang | — |
+| 11:30 | X | battery | hang | — |
+| 11:49 | **tty2** | battery | **OK** | hang, black screen |
+
+Reading it honestly:
+
+- **The save hang needs X and battery together.** X+AC saved twice, tty+battery
+  saved once, X+battery hung twice. Neither variable alone accounts for it, so
+  the earlier "AC-only feature" framing was wrong.
+- **The restore has only ever succeeded once**, and that was the X+AC run. It
+  has one failure, from tty+battery. One of each is not a pattern yet.
+- The save-side window (`pm_prepare_console()` and the
+  `PM_HIBERNATION_PREPARE` notifiers) is consistent with a VT switch away from
+  Xorg going wrong, and something about the battery state making it go wrong.
+  i915 exposes no `enable_psr`/`enable_fbc`/`enable_dc` parameters on this
+  kernel, so that guess could not be checked directly.
+
+### Not yet known: hang, or live machine with a dead display?
+
+The restore going black is **not** proof the kernel stopped. A completed resume
+with a dead panel looks identical from the chair. The journal cannot settle it
+either — nothing was written after `hibernation entry`, but the machine was
+powered off again quickly, possibly before journald flushed.
+
+Distinguishing them changes everything. A dead display is a graphics problem
+with ordinary workarounds; a hung restore is much worse. The test is to let the
+black screen sit for two minutes, then **short-press** the power button once:
+if the system is alive, logind handles that event and shuts down cleanly, and
+the journal survives to prove it.
+
+### The next single-variable test
+
+Hibernate from **tty2 on AC**. That is the 11:49 run with only the power source
+changed, and it separates the two readings of the restore failure:
+
+- restore works → the restore problem is battery-linked
+- restore fails → the restore problem is tty-linked, and the X+AC success at
+  10:33 was the outlier
+
+### The earlier diagnostic, now spent
 
 Hibernate from a text console rather than from X:
 
