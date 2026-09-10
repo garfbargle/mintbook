@@ -386,6 +386,28 @@ remembering a miss safe when an app is installed later.
 > spread apart either; the second only moves a shade along, and the legend dot,
 > the name and the hover are the tiebreak.
 
+> **The grey floor is real, and the chart cannot attribute it.** The busy line
+> comes from `/proc/stat`, which counts every jiffy the machine burns. The
+> bands come from diffing `/proc/<pid>` six seconds apart, which cannot see a
+> process that was *born and died between the two samples*. That CPU is real
+> and belongs to nobody the chart knows about, so it lands in the grey `other`
+> band — a floor rather than a sliver whenever something is forking hard.
+>
+> Measured 2026-09-09, with a runaway spawning ~100 processes every six
+> seconds: busy **27.4%**, the live processes' own time **7.3%**, and the CPU
+> of children they had already reaped **20.7%** — `cutime`+`cstime`, fields 15
+> and 16 of `/proc/<pid>/stat`, which `panel-cpu` does not read. Unexplained:
+> −0.6%. cgroup accounting (`cpu.stat`, which keeps a process's time after it
+> exits) agrees with `/proc/stat` to a tenth of a point, so nothing is lost —
+> it is only unattributable per-pid after the fact. Reading `cutime` would
+> attribute it to whoever spawned it, at the cost of charging a child's whole
+> life to the moment its parent reaped it.
+>
+> With the machine quiet that floor is about **2%**, and the largest single
+> contributor to it is this bar: `panel-cpu` is a python start every two
+> seconds that lives ~65 ms, so the sparkline spends most of its life in the
+> one part of its own chart it cannot draw.
+
 The chart is stacked as *share of the machine*, and **the list now reads in
 that same unit**: `26%`, not `1.0`. Cores are the Activity Monitor number and
 answer "is this pegging a core?", but at one decimal every quiet process
