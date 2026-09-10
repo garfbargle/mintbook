@@ -859,13 +859,13 @@ class Menu:
         self.show_percent = not self.show_percent
         set_conf('SHOW_PERCENT', '1' if self.show_percent else '0')
         self.area.queue_draw()
-        # genmon repaints on its own five-second tick; nudge it so the bar
-        # changes under the click that asked for it.
-        plugin = self.cfg.get('PANEL_ID', '')
-        if plugin:
-            subprocess.Popen(
-                ['xfce4-panel', f'--plugin-event=plugin-{plugin}:refresh:bool:true'],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # The bar changes on panel-battery's own five-second tick. There
+        # used to be a nudge here to make it change under the click instead;
+        # it never worked, and no form of it can. The panel matches the event
+        # on the plugin *name*, and the one form that does work stops at the
+        # first plugin of that name — the CPU sparkline. PANEL_ID stays in
+        # battery.conf because it is what identifies this widget elsewhere.
+        # See docs/desktop.md.
 
     def open_history(self):
         if os.access(HISTORY, os.X_OK):

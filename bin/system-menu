@@ -483,7 +483,11 @@ class Menu:
         threading.Thread(target=work, daemon=True).start()
 
     def doctor_done(self):
-        self.doctor_running = False; self.health = health_snapshot(); self.nudge_panel(); self.area.queue_draw(); return False
+        # The bar's badge is not told about this; it changes on panel-system's
+        # own tick. A nudge used to be sent here and never worked — the panel
+        # matches the event on the plugin *name*, and the form that does work
+        # reaches only the first genmon widget on the bar. See docs/desktop.md.
+        self.doctor_running = False; self.health = health_snapshot(); self.area.queue_draw(); return False
 
     def set_awake(self, value):
         if self.awake_running or not os.access(AWAKE_APP, os.X_OK): return
@@ -496,14 +500,6 @@ class Menu:
 
     def awake_done(self):
         self.awake_running = False; self.awake = self.read_awake(); self.area.queue_draw(); return False
-
-    def nudge_panel(self):
-        panel_id = '28'
-        for line in read_text(HOME / '.config/mintbook/system.conf').splitlines():
-            if line.startswith('PANEL_ID='):
-                panel_id = line.split('=', 1)[1].split()[0]
-        subprocess.Popen(['xfce4-panel', f'--plugin-event=plugin-{panel_id}:refresh:bool:true'],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def open_app(self, path, extra=None):
         if not os.access(path, os.X_OK): return

@@ -123,6 +123,18 @@ class WatcherTests(unittest.TestCase):
     def test_the_flag_the_bar_reads_is_the_one_hover_writes(self):
         self.assertEqual(bar.HOVER, hover.HOVER)
 
+    def test_the_nudge_names_the_plugin_not_its_id(self):
+        """`plugin-19:refresh` was sent for months and reached nothing: the
+        panel matches on the plugin name. Only `genmon:` does anything."""
+        sent = []
+        real, hover.run = hover.run, lambda args, **kw: sent.append(args) or ''
+        self.addCleanup(setattr, hover, 'run', real)
+        hover.nudge(19)
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0][0], 'xfce4-panel')
+        self.assertIn('--plugin-event=genmon:refresh:bool:true', sent[0])
+        self.assertNotIn('--plugin-event=plugin-19:refresh:bool:true', sent[0])
+
     def test_a_repaint_is_not_a_sample(self):
         # panel-cpu must treat a run that lands inside this window as a
         # repaint; genmon's own period is two seconds.

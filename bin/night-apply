@@ -19,7 +19,12 @@ MODES = ('auto', 'on', 'off')
 MODE_FILE = os.path.expanduser('~/.config/mintbook/night.mode')
 CONF = os.path.expanduser('~/.config/redshift.conf')
 LOCK_FILE = os.path.expanduser('~/.cache/mintbook/night-apply.lock')
-PLUGIN = 'genmon-23'
+
+# There used to be a refresh_panel() here, telling genmon plugin-23 to
+# repaint after a change. The moon left the bar on 2026-09-06 for the 50-night
+# tile, so it has had nothing to tell since — and the event it sent never
+# reached a plugin even when the moon was there, because the panel matches on
+# the plugin name. See docs/desktop.md.
 
 
 def read_mode():
@@ -108,13 +113,6 @@ def start_redshift(args):
     )
 
 
-def refresh_panel():
-    subprocess.run(
-        ['xfce4-panel', f'--plugin-event={PLUGIN}:refresh:bool:true'],
-        capture_output=True,
-    )
-
-
 def apply(mode):
     if not os.path.isfile(CONF):
         sys.stderr.write(f'missing {CONF}\n')
@@ -143,7 +141,6 @@ def main():
         fcntl.flock(lock, fcntl.LOCK_EX)
         mode = sys.argv[1] if len(sys.argv) == 2 else read_mode()
         rc = apply(mode)
-    refresh_panel()
     return rc
 
 

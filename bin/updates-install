@@ -167,12 +167,11 @@ systemctl --user enable --now mintbook-updates-check.path
 
 echo "==> first check"
 "$BIN/updates-check" || true
-if [ -e "$STATE/system.conf" ]; then
-  sid=$(sed -n 's/^PANEL_ID=\([0-9]*\).*/\1/p' "$STATE/system.conf" | head -1)
-  [ -n "$sid" ] && xfce4-panel "--plugin-event=plugin-$sid:refresh:bool:true" >/dev/null 2>&1 || true
-else
-  xfce4-panel "--plugin-event=plugin-$PLUGIN:refresh:bool:true" >/dev/null 2>&1 || true
-fi
+# No panel nudge here any more. The `--plugin-event=plugin-<id>` form this
+# sent matched nothing — the panel matches on the plugin *name* — and the
+# working form reaches only the first genmon widget on the bar, which is the
+# CPU sparkline. The panel was restarted forty lines up in any case, so every
+# widget on it is already fresh. See docs/desktop.md.
 
 echo
 echo "bar: ${out[*]}"

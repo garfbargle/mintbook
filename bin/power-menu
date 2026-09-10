@@ -106,9 +106,10 @@ def apply(profile):
         time.sleep(0.1)
         if current() == profile:
             break
-    subprocess.run(
-        ['xfce4-panel', '--plugin-event=genmon-22:refresh:bool:true'],
-        capture_output=True)
+    # No panel nudge: the profile widget (plugin-22) left the bar on
+    # 2026-09-06 for the 60-power tile. The one that used to be here was
+    # `--plugin-event=genmon-22:refresh`, which the panel matched on the
+    # plugin *name* and delivered to nothing anyway. See docs/desktop.md.
     if current() != profile:
         return subprocess.CompletedProcess(
             ['want'], 1, '',

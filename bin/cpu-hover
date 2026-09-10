@@ -17,9 +17,10 @@ not fail — it quietly becomes arguments to the first handler, which is a
 mouse-enter that fires and a mouse-leave that never does.
 
 `on` writes ~/.cache/mintbook/cpu.hover and asks genmon to re-run panel-cpu
-*now* — see nudge(), which is the fiddly part. panel-cpu sees the flag and
-paints the stacked bands instead of the trace, and sees that its state file is
-younger than a tick, so it repaints without sampling.
+*now* — see nudge(), which is the fiddly part, and which works only because of
+where this widget sits on the bar. panel-cpu sees the flag and paints the
+stacked bands instead of the trace, and sees that its state file is younger
+than a tick, so it repaints without sampling.
 
 The icon walk happens *here*, not in panel-cpu, which must never import Gtk:
 the first nudge goes out from whatever is already cached, and a second follows
@@ -31,12 +32,10 @@ install and nothing to clean up when the panel restarts. See docs/desktop.md.
 import os
 import subprocess
 import sys
-import time
 
 HOME = os.path.expanduser('~')
 CACHE = f'{HOME}/.cache/mintbook'
 HOVER = f'{CACHE}/cpu.hover'
-SVG = f'{CACHE}/cpu.svg'
 PIDFILE = f'{CACHE}/cpu-hover.pid'
 PANEL_RC = f'{HOME}/.config/xfce4/panel'
 HERE = os.path.dirname(os.path.realpath(__file__))
@@ -115,41 +114,28 @@ def plugin_window(pid):
     return best if best_area > 100 else 0
 
 
-def svg_mtime():
-    try:
-        return os.stat(SVG).st_mtime
-    except OSError:
-        return 0
-
-
-def nudge(plugin):
+def nudge(_plugin=None):
     """Make genmon re-run panel-cpu now, rather than at its next tick.
 
-    `xfce4-panel --plugin-event=plugin-19:refresh:bool:true` is what this
-    project has been sending for months and it has never done anything: the
-    panel matches on the plugin *name*, not on `plugin-<id>`, so the event
-    found no plugin and returned FALSE. `genmon:refresh:bool:true` does work —
-    and re-runs all twelve genmon widgets on this bar, which is twelve python
-    starts for one hover.
+    Measured at 0-1 ms, and it is the only form of this that does anything:
 
-    Each plugin runs in its own wrapper process with its own object on the
-    session bus, and the RemoteEvent signal the panel sends it is matched by
-    path, not by sender: emitting it ourselves reaches plugin 19 alone and
-    leaves the other eleven asleep. That is a panel internal, so this watches
-    for the repaint it should have caused and falls back to the name-wide
-    event if it never comes.
+    * `--plugin-event=plugin-19:refresh:bool:true`, which this project has
+      sent for months, reaches nothing — the panel matches the event on the
+      plugin **name**, not on `plugin-<id>`, and returns FALSE.
+    * Emitting the wrapper's own `RemoteEvent` signal on the session bus, the
+      apparently precise version of this, does nothing either: the wrapper
+      listens to the panel, not to us.
+    * `genmon:refresh:bool:true` works, and reaches exactly **one** plugin.
+      The panel stops at the first plugin of that name, which on this bar is
+      the sparkline: watching all eight genmon wrappers while sending it, only
+      plugin 19 ever ran.
+
+    So this widget can be repainted on demand because it happens to sit ahead
+    of the other genmon widgets in the panel's order. Put it behind one and
+    the hover goes back to waiting for the next 2 s tick — nothing breaks, it
+    just stops being instant. docs/desktop.md has the experiment.
     """
-    before = svg_mtime()
-    run(['gdbus', 'emit', '--session',
-         '--object-path', f'/org/xfce/Panel/Wrapper/{plugin}',
-         '--signal', 'org.xfce.Panel.Wrapper.RemoteEvent',
-         'refresh', '<true>', '0'])
-    for _ in range(6):
-        time.sleep(0.05)
-        if svg_mtime() != before:
-            return True
     run(['xfce4-panel', '--plugin-event=genmon:refresh:bool:true'])
-    return False
 
 
 def resolve_colors():

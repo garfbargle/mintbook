@@ -275,21 +275,54 @@ leave never does, and the bar stays coloured. That looked like it worked in a
 first test only because the enter handler was `touch`ing the file the leave
 handler was supposed to.
 
-> **`--plugin-event=plugin-19:refresh:bool:true` has never done anything.**
-> `bin/cpu-install` has sent it after every install since the sparkline
-> landed, and `xfce4-panel` matches on the plugin **name**, not on
-> `plugin-<id>`: the event was delivered to no plugin and returned FALSE every
-> time. The picture only ever changed on genmon's next 2 s tick, which is also
-> why the old comment there said it would. `genmon:refresh:bool:true` does
-> work — and re-runs all **twelve** genmon widgets on this bar, twelve python
-> starts for one hover.
+#### Asking genmon to re-run its command
 
-So the repaint goes to one plugin instead. Each wrapper has its own object on
-the session bus, and the `RemoteEvent` signal the panel sends it is matched by
-path, not by sender — emitting it directly reaches plugin 19 alone in ~50 ms
-and leaves the other eleven asleep. That is a panel internal, so `nudge()`
-watches for the repaint it should have caused and falls back to the name-wide
-event if it never comes. Pointer to colour is ~300 ms end to end.
+This took three tries and two wrong answers, so here is the whole of it. The
+witness in every measurement below is the wrapper process's own child list
+(`/proc/<wrapper>/task/<wrapper>/children`) — a `pgrep -f panel-cpu` matches
+this repository's own shells and reports runs that never happened, which is
+how the first two answers got written down as working.
+
+| what is sent | what happens |
+| --- | --- |
+| `--plugin-event=plugin-19:refresh:bool:true` | nothing, rc=1 |
+| `--plugin-event=genmon-19:refresh:bool:true` | nothing, rc=1 |
+| `gdbus emit` of the wrapper's own `RemoteEvent` signal | nothing |
+| `--plugin-event=genmon:refresh:bool:true` | **the first genmon widget re-runs, in 0–1 ms** |
+
+> **The `plugin-<id>` form has never done anything.** `bin/cpu-install` sent it
+> after every install since the sparkline landed, and so did the battery,
+> updates, System, power and night menus. `xfce4-panel` matches the event on
+> the plugin **name**: `plugin-19` and `genmon-19` are not names, so the event
+> reached no plugin and returned FALSE every time. Every widget on this bar has
+> only ever repainted on its own next tick.
+
+> **The wrapper signal looked like the precise fix and is not.** Each plugin
+> has its own object on the session bus and the panel talks to it with a
+> `RemoteEvent` signal, so emitting that signal ourselves should reach one
+> plugin. It reaches none — the wrapper listens to the panel, not to us. An
+> earlier version of this page claimed 50 ms for it, on a measurement that was
+> a 2 s tick landing by luck.
+
+What works is the plugin *name*, and it reaches exactly **one** plugin: the
+panel stops at the first one that handles the event. Watching all eight genmon
+wrappers on this bar while sending it, only plugin 19 ever ran — the sparkline
+is simply first in the panel's order. So **the hover is instant because of
+where this widget sits**, and moving it behind another genmon widget would
+quietly cost it that: the colour would then arrive on the next 2 s tick.
+Nothing else breaks.
+
+And **no other genmon widget on this bar can be refreshed on demand at all.**
+The battery percentage toggle, the update popup and the System sheet had their
+nudges removed rather than fixed, each with a note where it used to be; the
+power and night widgets left the bar in September and had nothing to refresh
+either way. Those widgets change on their own timer: 5 s for the battery,
+30 s for the System badge.
+
+Pointer to colour is **~150 ms** measured from the handler starting: a python
+start, the event, and `panel-cpu`'s own run. An earlier draft of this section
+said ~300 ms, because the code was politely waiting 300 ms for a repaint from
+the wrapper signal that was never going to come.
 
 `panel-cpu` then has to tell a repaint from a tick: a run that arrives within
 `MIN_TICK` of the last state write renders and prints, and does not sample.
@@ -730,12 +763,14 @@ period stays at 3 s, and the reason given here used to be that `power-menu`
 forces an immediate refresh after a click with
 `xfce4-panel --plugin-event=genmon-22:refresh:bool:true`.
 
-> **Corrected 2026-09-09: it does not.** The event matches on the plugin
-> **name**, so neither `genmon-22` nor `plugin-<id>` reaches anything; both
-> return FALSE. The icon after a click is waiting on the same 3 s period as
+> **Corrected 2026-09-09: it never did.** The event matches on the plugin
+> **name**, so neither `genmon-22` nor `plugin-<id>` reached anything; both
+> returned FALSE. The icon after a click was waiting on the same 3 s period as
 > everything else, which is the real argument for keeping the period short —
-> not the nudge. The forms that do work are under
-> [Hover on the sparkline](#hover-on-the-sparkline-bincpu-hover).
+> not the nudge. The call is gone rather than fixed, twice over: this widget
+> left the bar on 2026-09-06 for the `60-power` tile, and the one form that
+> works would not reach it anyway. See
+> [Asking genmon to re-run its command](#asking-genmon-to-re-run-its-command).
 
 ### Night light (`plugin-23`, genmon)
 

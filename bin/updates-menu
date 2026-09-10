@@ -1272,7 +1272,10 @@ class Menu:
         # ticks have nothing left to sit on. Drop them rather than keep a row
         # that no longer exists.
         self.installed &= {u['name'] for u in self.updates}
-        self.nudge_panel()
+        # The indicator and the System badge find out on their own timer,
+        # which is minutes long here on purpose. There used to be a nudge
+        # here; it never reached a plugin, and no form of it can reach these
+        # two — see docs/desktop.md.
         self.rebuild()
         return False
 
@@ -1658,21 +1661,6 @@ class Menu:
         if not self.hidden:
             self.grab(True)
         self.rebuild()
-
-    def nudge_panel(self):
-        """genmon only re-reads on its own timer, and that timer is minutes
-        long here on purpose. Tell it now."""
-        plugins = [self.cfg.get('PANEL_ID', '')]
-        for line in read_file(SYSTEM_CONF).splitlines():
-            if line.startswith('PANEL_ID='):
-                plugins.append(line.split('=', 1)[1].split()[0])
-        for plugin in {value for value in plugins if value}:
-            try:
-                subprocess.Popen(
-                    ['xfce4-panel', f'--plugin-event=plugin-{plugin}:refresh:bool:true'],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except OSError:
-                pass
 
 
     # ---- animation
