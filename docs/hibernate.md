@@ -125,9 +125,36 @@ For scale, the three sleep states on this machine:
 | state | draw | a full 34.1 Wh pack lasts |
 |---|---|---|
 | awake, idle | ~6 W | ~6 h |
-| s2idle (`freeze`) | ~1.8 W | ~19 h |
+| s2idle (`freeze`) | ~1.8 W (09-09) · **~2.6 W (09-11)** | ~19 h · **~12.5 h** |
 | deep S3 | ~0.08 W | weeks |
 | hibernated | 0 W | indefinitely |
+
+**A second night, 2026-09-10 → 11, reads higher.** The lid closed at 02:08:45
+on battery and opened at 06:25:23. The kernel log (with `pm_debug_messages`
+on the command line) shows **one unbroken s2idle**:
+`Timekeeping suspended for 15395.314 seconds` (4.28 h), and a single
+`Triggering wakeup from IRQ 9`. IRQ 9 is the ACPI SCI, which here is the lid.
+There were no spurious wakeups, and the EC's GPE did not fire, because the
+panel's battery polling does not run while userspace is frozen.
+
+| stretch | time | charge | average |
+|---|---|---|---|
+| awake, lid open, idle, 23:19 → 02:03 | 2.73 h | 97.7 → 70.9% | **≈3.3 W** |
+| s2idle, lid closed, 02:08 → 06:25 | 4.28 h | ≈70.0 → 35.8% | **≈2.6 W** |
+
+Percentages are of the pack's present capacity (`charge_full` 4.348 Ah;
+`charge_full_design` is 5.297 Ah). They are converted at the 7.6 V design
+voltage rather than integrated. upower stops sampling during sleep, so the
+start of the s2idle row is its last sample (02:03, 70.9%) less about 0.8% for
+the five awake minutes before the lid closed. That value is an estimate.
+
+So this night's s2idle cost roughly **45% more** than the 1.8 W from 09-09,
+and only about 20% less than sitting awake and idle. Both nights are single
+measurements taken the same way from different starting charges, so the
+spread is not explained. What it changes in practice: a full pack is about
+**12.5 h** of s2idle at this rate, not 19. The machine survived this night
+because the lid closed at about 70% with four hours to go. A close at 50%
+would have run flat around dawn.
 
 Note what that means for the original failure: at **full** charge s2idle would
 have survived the night with hours to spare. 2026-09-09 died because the lid
