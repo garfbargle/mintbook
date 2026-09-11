@@ -7,6 +7,12 @@
 #   pkexec bin/hibernate-trial --mode shutdown    # skip ACPI S4: no _PTS(4), no ECSS=4, no _WAK
 #   pkexec bin/hibernate-trial --unload sbs       # take modules out for the cycle, put them back after
 #   pkexec bin/hibernate-trial --pm-trace         # stamp each device resume into the RTC
+#   pkexec bin/hibernate-trial --offline-cpus     # save and restore on CPU 0 alone
+#
+# --offline-cpus takes every CPU but 0 offline before hibernating and brings
+# them back on return. The restored kernel then has no secondary CPUs to
+# start ("Enabling non-boot CPUs"), which takes that step out of the blind
+# stretch between the jump into the image and the panel coming back.
 #
 # --pm-trace sets /sys/power/pm_trace for the cycle. The restored kernel then
 # writes a hash of each device resume callback into the CMOS clock, and that
@@ -45,13 +51,15 @@ PM_TEST=none
 MODE=
 UNLOAD=
 PM_TRACE=0
+OFFLINE_CPUS=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --pm-test) PM_TEST=${2:?}; shift 2 ;;
     --mode)    MODE=${2:?}; shift 2 ;;
     --unload)  UNLOAD=${2:?}; shift 2 ;;
     --pm-trace) PM_TRACE=1; shift ;;
-    *) echo "usage: $0 [--pm-test freezer|devices|platform|processors|core] [--mode platform|shutdown] [--unload mod1,mod2] [--pm-trace]" >&2; exit 2 ;;
+    --offline-cpus) OFFLINE_CPUS=1; shift ;;
+    *) echo "usage: $0 [--pm-test freezer|devices|platform|processors|core] [--mode platform|shutdown] [--unload mod1,mod2] [--pm-trace] [--offline-cpus]" >&2; exit 2 ;;
   esac
 done
 case "$PM_TEST" in none|freezer|devices|platform|processors|core) ;; *) echo "bad --pm-test $PM_TEST" >&2; exit 2 ;; esac
@@ -64,6 +72,9 @@ cleanup() {
   echo 0 > /sys/power/pm_trace 2>/dev/null || true
   rm -f "$DROPIN"
   for m in ${UNLOAD//,/ }; do modprobe "$m" 2>/dev/null || true; done
+  if [ "$OFFLINE_CPUS" = 1 ]; then
+    for c in /sys/devices/system/cpu/cpu[1-9]*/online; do echo 1 > "$c" 2>/dev/null || true; done
+  fi
 }
 trap cleanup EXIT
 
@@ -88,11 +99,18 @@ if [ -n "$MODE" ]; then
 fi
 echo "$PM_TEST" > /sys/power/pm_test
 echo "$PM_TRACE" > /sys/power/pm_trace
+if [ "$OFFLINE_CPUS" = 1 ]; then
+  for c in /sys/devices/system/cpu/cpu[1-9]*/online; do echo 0 > "$c"; done
+  if [ "$(cat /sys/devices/system/cpu/online)" != 0 ]; then
+    echo "hibernate-trial: CPUs still online: $(cat /sys/devices/system/cpu/online), not hibernating" >&2
+    exit 1
+  fi
+fi
 
 ac=$(cat /sys/class/power_supply/ADP1/online 2>/dev/null || echo '?')
 bat=$(cat /sys/class/power_supply/BAT0/status 2>/dev/null || echo '?')
 vt=$(fgconsole 2>/dev/null || cat /sys/class/tty/tty0/active 2>/dev/null || echo '?')
-msg="start ac=$ac bat=$bat vt=$vt pm_test=$PM_TEST mode=${MODE:-default} unload=${UNLOAD:-none} pm_trace=$PM_TRACE"
+msg="start ac=$ac bat=$bat vt=$vt pm_test=$PM_TEST mode=${MODE:-default} unload=${UNLOAD:-none} pm_trace=$PM_TRACE cpus=$(cat /sys/devices/system/cpu/online)"
 logger -t hibernate-trial "$msg"
 journalctl --sync 2>/dev/null || true
 sync
