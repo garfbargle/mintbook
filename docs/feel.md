@@ -292,6 +292,50 @@ the moment you click. The trigger is CPU, and CPU cannot tell your click apart
 from a background thread. Tying it to input instead of load is the obvious next
 version and has not been written.
 
+**A second bug, found from the journal: it flip-flopped.** On battery on
+2026-09-10 and 2026-09-11, `journalctl -t mintbook-power` showed the profile
+going `balanced`, `power-saver`, `balanced` every 3 s for minutes at a time, with
+nobody touching the panel. It was this script. A boost ended on a *single*
+sample under `QUIET` and went straight back to `normal`, skipping the
+quiet-for-a-stretch rule that re-arms `spent`, so the next sample over `TRIGGER`
+bought a fresh 8 s. On a desktop hovering around 15–25%, that alternates as fast
+as `MINGAP` allows. The journal carries the fingerprint: of 109
+`balanced`→`power-saver` changes on 2026-09-11, 68 came 2–3 s into the boost —
+the `MINGAP` floor, not a burst ending — and after 72 such early ends, 28 boosts
+were granted again within 6 s. Each change is not free either: it runs
+`powerprofilesctl`, a Python program, as root (110 ms of CPU in the one sample
+that caught it).
+
+Now a boost ends early only after `QUIET_FOR` quiet samples in a row, the same
+rule that re-arms `spent`. Old and new, run side by side against the same
+synthetic `/proc/stat`, with the cap pinned at 70 and requests counted rather
+than applied:
+
+| load | old: changes/min, uncapped | new |
+|---|---|---|
+| intermittent: 0.5–2 s of work, 0.5–1.5 s pauses (120 s) | 17.5, 61 s | 3.0, 23 s |
+| hovering, 5–40% per sample (120 s) | 5.0, 26 s | 3.0, 23 s |
+| a 1 s burst every 20 s (60 s) | 4.0, 5 s | 4.0, 6 s |
+| sustained 45% (60 s) | 3.0, 8 s | 3.0, 8 s |
+| a 0.75 s spike every 4 s, quiet between (60 s) | 16.0, 20 s | 16.0, 21 s |
+
+The old version's intermittent run changed profile every 2.5–4.3 s, the
+journal's cadence. The new one boosted for 8 s, spent, and waited out
+`COOLDOWN`. What it costs: a boost now outlives its burst by the 2 s it takes to
+call the machine quiet, about 1 s more uncapped time per minute in the click
+row.
+
+Not fixed: the last row. Spikes more than 2 s apart are each a new burst by this
+definition, so each still gets its boost — 16 changes a minute. That is the
+CPU-not-input limitation above, again. Not verified: the fix was checked only in
+that simulation, not live on battery. The machine was on AC, and the session
+doing the work kept real load above 25% on every one of 328 samples, which
+never flips. Not examined: the 2026-09-10 bursts (18:03, 21:27) had rotated out
+of the journal, so the diagnosis rests on 2026-09-11's. And the journal could
+not say who asked, because every writer of `/run/mintbook-power/want` produces
+the same `mintbook-power` line. turbo-budget now logs each request with its
+reason: `journalctl --user -u mintbook-turbo-budget`.
+
 If the daemon is killed with `SIGKILL` while boosted, the cap stays at 100 until
 something else asserts it — the next AC transition, or `power-apply --reassert`.
 `SIGTERM`, which is what `systemctl --user stop` sends, restores it.
