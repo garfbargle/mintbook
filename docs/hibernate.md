@@ -12,10 +12,14 @@ restore has ever come back.**
   Test B's restore died before userspace and left no journal, and it did so
   with no ACPI S4 code involved. The two X "save hangs" (11:01, 11:30) left the
   same evidence a consumed image leaves, so they may have been restore failures
-  too. **The restore is now the prime suspect.** Test C restored a battery
+  too. ~~**The restore is now the prime suspect.** Test C restored a battery
   save on AC, and it failed too, so the power source at restore time is not
-  the cause. Open confound: no `shutdown`-mode image has ever restored, even
-  one saved on AC. The mechanism is not established.
+  the cause.~~ **Retracted after Test D:** a `shutdown`-mode save and restore
+  entirely on AC failed the same way. So `HibernateMode=shutdown` does not
+  restore on this machine at all (0 for 3), and Tests B and C say nothing
+  about battery. The battery evidence is back to one clean failure, 11:49
+  (`platform` mode, tty2), plus two ambiguous ones. `shutdown` mode is out as
+  a fix. The mechanism is not established.
 - **Narrowed on 2026-09-10 evening.** A `pm_test=core` run on battery from X
   got through the whole save path except the image: VT switch, notifiers,
   sync, freeze, allocation, device freeze and ACPI `_PTS(4)`. It came back
@@ -405,6 +409,7 @@ hibernation started, and whether the charger was in.
 | 18:53 | X, `pm_test=core` | battery | **early path OK** (no image by design) | — |
 | 19:18 | X, `mode=shutdown` | battery | **OK** — proved by the swap header | **failed** — consumed by a boot that left no journal |
 | 20:50 | X, `mode=shutdown` | battery | **OK** — new header crc | **failed on AC** — "error" flashed past |
+| 21:00 | X, `mode=shutdown` | **AC** | **OK** — new header crc | **failed on AC** — image loaded, died after `Suspending console(s)` |
 
 **On AC nothing has ever failed** — three saves, two restores. **On battery
 nothing has ever fully succeeded.** The active VT does not decide whether it
@@ -669,8 +674,10 @@ was pressed only after that, so the restore ran on AC.
   `SWAPSPACE2`, so a boot consumed the image. The whole sequence took 2.7
   minutes.
 
-So **the power source at restore time is not what breaks it.** An image saved
-on battery fails to restore on AC as well. One run.
+~~So **the power source at restore time is not what breaks it.** An image saved
+on battery fails to restore on AC as well. One run.~~ **Retracted by Test D.**
+A `shutdown`-mode image saved *and* restored on AC fails too, so this run
+isolates nothing about power. It only adds to the `shutdown`-mode failures.
 
 **A confound this exposes.** Both restores that ever worked (10:33 and 12:50)
 were `platform`-mode images saved on AC. Tests B and C were `shutdown`-mode
@@ -679,6 +686,57 @@ machine at all, so "saved on battery" and "saved in shutdown mode" cannot yet
 be told apart. The only failure without that confound is 11:49 (battery,
 `platform`, tty2). The control is a `shutdown`-mode save and restore entirely
 on AC.
+
+### Test D: `shutdown` mode fails on AC too — the control
+
+2026-09-10 21:00, `--mode shutdown`, from X, **on AC throughout**, and the
+restore filmed.
+
+- **The save completed.** New header, `crc32 = 0x57ff1fad`, `flags = 0x4`.
+  After the failed resume the signature was back to `SWAPSPACE2`, and the next
+  boot (21:02:19) found no image.
+- **The restore failed on AC.** There is no `returned` line, and the boot id
+  changed.
+- **The film shows where.** The boot kernel's initramfs found and loaded the
+  image without complaint. Transcribed from the photo:
+
+  ```
+  [2.089] PM: hibernation: resume from hibernation
+  [2.113] Freezing user space processes ... completed
+  [2.177] PM: Using 3 thread(s) for lzo decompression
+  [2.177] PM: Loading and decompressing image data (346121 pages)...
+  [2.342] PM: Image loading progress:   0%
+  ...
+  [7.044] PM: Image loading progress: 100%
+  [7.046] PM: Image loading done
+  [7.048] PM: hibernation: Read 1384484 kbytes in 4.86 seconds (284.87 MB/s)
+  [7.050] printk: Suspending console(s) (use no_console_suspend to debug)
+          <frozen here>
+  ```
+
+  So the image is read and decompressed correctly, with no CRC or
+  decompression error. What dies comes after the boot kernel silences its
+  console. That is either the boot kernel quiescing its own devices and
+  parking the other CPUs, or the jump into the image, or the restored kernel
+  resuming devices before its display is back. The boot kernel prints nothing
+  past that line unless `no_console_suspend` is on its command line.
+
+**What this settles.** `HibernateMode=shutdown` has restored **0 times out of
+3** on this machine, on AC and on battery alike. It is not a fix, and Tests B
+and C cannot speak to the battery question. Every restore that ever worked here
+was a `platform`-mode image.
+
+**A candidate mechanism, not yet tested.** `platform` mode does two things
+around a restore that `shutdown` mode skips:
+- in the boot kernel, just before the jump, ACPI `pre_restore` disables all
+  GPEs and suspends EC transactions
+- in the restored kernel, the platform leave/finish hooks run `_WAK` and
+  re-enable ACPI state
+
+On a machine whose EC raises a GPE burst every 5 s (see "EC traffic"), an
+event arriving across that jump is a plausible way to die. That fits all
+three `shutdown`-mode failures. It says nothing yet about why the one clean
+`platform`-mode battery run (11:49) failed.
 
 ### The firmware's sleep methods do not look at the power source
 
