@@ -93,8 +93,8 @@ bin/hw-report            # includes profile, EPB, max_perf_pct
 | `power-profiles-daemon` | 0.21, active. Driver `intel_pstate`, platform `placeholder` |
 | `intel_pstate` | **passive** → `intel_cpufreq` + `schedutil`. No EPP sysfs (Broadwell has no HWP) |
 | EPB | `/sys/devices/system/cpu/cpu*/power/energy_perf_bias` — this is what PPD actually writes |
-| RAPL PL1 | firmware default **~46–49 W** on a **4.5 W TDP** chip. Writes do not stick |
-| `thermald` | active, polling, stock (no `thermal-conf.xml`). Leave it — 95 °C backstop |
+| RAPL PL1 | firmware default **~46–49 W** on a **4.5 W TDP** chip. Writes stick since thermald was masked, but do not bind as expected — see Ruled out |
+| `thermald` | **masked** since 2026-09-04: no sensors here, and it reset the cap. The 95 °C backstop is the CPU's own TCC — see below |
 | GPU | HD 5300, RC6 on, RPS 300–850 MHz. Already idling at RPn when the GT is quiet |
 | Backlight | `acpi_video0` at **20/100**. Keyboard backlight is `spi::kbd_backlight` (0 when last applied) |
 | Wi-Fi | NetworkManager `wifi.powersave = 3` already |
@@ -315,6 +315,13 @@ and doctor fails on it rather than shrugging it off as an override.
 - **RAPL PL1 as a persistent cap.** `constraint_0_power_limit_uw` accepts 5–7 W
   then returns to 24.5 W / 49 W within ~25 s (thermald and/or this Mac’s RAPL
   firmware). Package power and clocks did not follow the write.
+  **Retested 2026-09-11 with thermald masked: the write now sticks** (4.5 W
+  held for all 90 s), so thermald was what reset it. It still does not behave
+  like a usable limit. Uncapped, with two busy threads, the package stayed at
+  7.4–7.9 W / 1600–1800 MHz / 95 °C for ~75 s after the write, against a 28 s
+  time window, then fell to 4.8 W / ~700 MHz / 80 °C. That is one run, and
+  neither the delay nor the undershoot is explained. It stays ruled out as a cap,
+  but no longer for the reason first given.
 - **`no_turbo=1` as the battery default.** It works (75 °C, 5.5 W, 900 MHz) but
   `max_perf_pct=70` matches the thermals with ~1.6 GHz left. Use `no_turbo` only
   if 70% is still too hot.

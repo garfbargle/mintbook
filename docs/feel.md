@@ -327,14 +327,41 @@ row.
 
 Not fixed: the last row. Spikes more than 2 s apart are each a new burst by this
 definition, so each still gets its boost — 16 changes a minute. That is the
-CPU-not-input limitation above, again. Not verified: the fix was checked only in
-that simulation, not live on battery. The machine was on AC, and the session
-doing the work kept real load above 25% on every one of 328 samples, which
-never flips. Not examined: the 2026-09-10 bursts (18:03, 21:27) had rotated out
+CPU-not-input limitation above, again. The simulation was all there was at first — the
+machine was on AC — and the live check below says it was not enough. Not examined: the 2026-09-10 bursts (18:03, 21:27) had rotated out
 of the journal, so the diagnosis rests on 2026-09-11's. And the journal could
 not say who asked, because every writer of `/run/mintbook-power/want` produces
 the same `mintbook-power` line. turbo-budget now logs each request with its
 reason: `journalctl --user -u mintbook-turbo-budget`.
+
+**Checked live on battery the same morning, and it is not enough.** In the first
+2 min 18 s unplugged (2026-09-11 10:00:50) it made 16 requests, about 7 a
+minute, mostly `burst over`: real bursts with 2 s of quiet between them. That is
+the last row of the table, and on this desktop it is the ordinary case, not an
+edge. After that, with an agent session running, it settled into one boost every
+~53 s (10:03:00, 10:03:53, 10:04:46, 10:05:39, 10:06:32): a burst, 8 s,
+`budget spent` at 21–62% CPU, 45 s of `COOLDOWN`, and then the next sample over
+25% — background load, not a click — took the budget again the moment it
+re-armed. Under that load it spends ~15% of the time uncapped on background work,
+and the budget is almost never there when you click.
+
+An end-to-end timing tried to measure what it gives a click: a ~1 s single-core
+task, interleaved over six rounds, on battery:
+
+| arm | median | range |
+|---|---|---|
+| turbo-budget running, cap 70 | 943 ms | 883–1000 |
+| static cap 70 | 980 ms | 865–1147 |
+| uncapped | 628 ms | 592–670 |
+
+In none of the turbo-budget runs did the cap lift before the task ended. That is
+**not** a clean measurement of its best case. Each round restarted the service
+and set the profile, the switch itself is a burst (`powerprofilesctl` is
+Python), and that burst spent the budget, so every one of those runs started in
+`spent`. What it does show is the operating reality above: the budget was gone
+before the work arrived. Whether a lone thread can trigger it from a cold start
+was not tested. One thread is at most 25% of four logical CPUs, against a 25%
+trigger.
 
 If the daemon is killed with `SIGKILL` while boosted, the cap stays at 100 until
 something else asserts it — the next AC transition, or `power-apply --reassert`.
