@@ -30,7 +30,9 @@
   death in the restored kernel's first steps after the jump. **Test F (21:43)
   repeated it with the Smart Battery driver unloaded, and it failed the same
   way**, so `sbs` is out. So is the CPU policy (E and F used different
-  profiles). The mechanism is not established.
+  profiles). **Test G (21:55) restored a battery-saved image on AC, and it
+  failed the same way**, so the battery matters at save time, not at restore
+  time. The mechanism is not established.
 - **Narrowed on 2026-09-10 evening.** A `pm_test=core` run on battery from X
   got through the whole save path except the image: VT switch, notifiers,
   sync, freeze, allocation, device freeze and ACPI `_PTS(4)`. It came back
@@ -424,6 +426,7 @@ hibernation started, and whether the charger was in.
 | 21:16 | X, `platform`, debug cmdline | AC | **OK** | **OK** — same boot id, `returned result=success` |
 | 21:23 | X, `platform`, debug cmdline | battery | **OK** — image found and loaded | **failed** — boot kernel reached the jump, restored kernel never returned |
 | 21:43 | X, `platform`, `sbs` unloaded | battery | **OK** — image loaded | **failed** — same as 21:23 |
+| 21:55 | X, `platform` | battery | **OK** — image loaded | **failed on AC** — charger in before power; same ending |
 
 **On AC nothing has ever failed** — three saves, two restores. **On battery
 nothing has ever fully succeeded.** The active VT does not decide whether it
@@ -885,6 +888,37 @@ None of those has been separated yet. A cheaper split comes first: whether
 the battery matters at **save** time or at **restore** time, in `platform`
 mode. That has never been tested. (Test C tried it, in `shutdown` mode,
 which never restores at all.)
+
+### Test G: a battery-saved image restored on AC — same failure
+
+2026-09-10 21:55, `pkexec bin/hibernate-trial` (default `platform` mode),
+from X, on battery at 48%, PPD `balanced`/100. Once the machine was off, the
+charger went in, and only then was power pressed. So the restore ran on AC.
+
+- **The journal** ends at `start ac=0 bat=Discharging ... mode=default`
+  (21:55:46). There is no `returned` line.
+- **The next boot** (21:57:35) shows `ACPI: AC: AC Adapter [ADP1] (on-line)`
+  at 0.28 s and `Image not found`. The restore boot itself left no journal, so
+  "restored on AC" rests on the sequence the user followed. The boot right
+  after it was on AC.
+- **The film shows the same ending as E and F.** This is from the user's
+  viewing.
+
+**So, in `platform` mode, an image saved on battery fails to restore on AC
+too.** The battery matters at **save** time. Against E0 and the other AC
+cycles (saved and restored on AC, 3 for 3), what breaks is either carried
+inside the image, or left in the machine by a battery-side save and power-off
+in a way that survives until the next power-on. Plugging in before the
+restore does not clear it. One run. The reverse split, saving on AC and
+restoring on battery, has not been done.
+
+Everything that has been varied at save time without effect: the CPU policy
+(E, F, G), the Smart Battery driver (F), the active VT (11:49 from tty2 also
+failed its restore), and the firmware's `_PTS` code, which has no battery
+branch. What is left is state that nothing here has been able to read yet:
+the restored kernel's first steps are blind. The next step is to see them
+instead of guessing: `pm_trace` stores the last device resume callback in the
+RTC, which survives a forced power-off.
 
 ### The firmware's sleep methods do not look at the power source
 
