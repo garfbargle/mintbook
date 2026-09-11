@@ -7,6 +7,13 @@
 - **On battery, 0 for 3.** From X it hangs on the save; from a text console it
   saves and then hangs on the restore. The active VT changes *where* it fails,
   not whether. The mechanism is not established.
+- **Narrowed on 2026-09-10 evening.** A `pm_test=core` run on battery from X
+  got through the whole save path except the image: VT switch, notifiers,
+  sync, freeze, allocation, device freeze and ACPI `_PTS(4)`. It came back
+  unaided. The hang therefore more likely sits in the snapshot copy, the
+  image write, or the S4 power-off itself. One run; see "Test A".
+- Charger out changes only the CPU policy (1,623 settings diffed), and the
+  firmware's `_PTS`/`_WAK` do not branch on the power source.
 - **The overnight case is therefore not solved.** `suspend-then-hibernate`
   hibernates from s2idle with X active, on battery — the exact combination that
   hangs. The lid is back on plain `suspend` at ~1.8 W, about eleven hours, so
@@ -377,6 +384,7 @@ hibernation started, and whether the charger was in.
 | 11:30 | X | battery | hang | — |
 | 11:49 | tty2 | battery | **OK** | hang, black screen |
 | 12:50 | tty2 | AC | **OK** | **OK** |
+| 18:53 | X, `pm_test=core` | battery | **early path OK** (no image by design) | — |
 
 **On AC nothing has ever failed** — three saves, two restores. **On battery
 nothing has ever fully succeeded.** The active VT does not decide whether it
@@ -494,6 +502,41 @@ reading is right, the software configuration all but ruled itself out, and the
 remaining difference is the physical power source: firmware, the EC, and the
 Smart Battery behind it. The 11:01 journal has since rotated away, so this
 rests on the earlier notes above rather than on a log that can be re-read.
+
+### Test A: the early save path completes on battery, from X
+
+2026-09-10 18:53, `pkexec bin/hibernate-trial --pm-test core`, started from X
+(vt7) on battery, PPD on power-saver. `pm_test=core` runs every step of the
+save except the snapshot copy, the image write and the power-off. It holds
+for 5 s at the point where the image would be taken, then unwinds.
+
+```
+[4566.80]  PM: hibernation: hibernation entry
+[4567.10]  Filesystems sync: 0.091 seconds
+[4591.60]  PM: hibernation: Allocated 1780908 kbytes in 24.49 seconds (72.71 MB/s)
+[4592.36]  ACPI: PM: Preparing to enter system sleep state S4     <- _PTS(4), EC.ECSS=4
+[4597.54]  ACPI: PM: Waking up from system sleep state S4
+[4598.70]  PM: hibernation: hibernation exit
+```
+
+**It came back on its own, 38 s wall clock, same boot id.** The kernel log
+carries no warnings. applespi shows the same `crc mismatch` → `modeswitch done`
+pair as a healthy resume. `pm_test` was back to `none` afterwards.
+
+So on battery, from X, all of these worked: the VT switch away from Xorg, the
+`PM_HIBERNATION_PREPARE` notifiers, the sync, the freeze, the image
+allocation, the device freeze, and the firmware's `_PTS(4)`. That is the span
+the old theory blamed. **This is one run.** It doesn't exclude an intermittent
+early hang, but the two X-on-battery failures now more likely stopped later:
+- in the snapshot copy (`swsusp_arch_suspend`)
+- in the device thaw that follows it
+- in the image write
+- or in the real S4 power-off, where the EC gets `ECSS=4` and SLP_TYP and
+  is expected to cut power
+
+One number moved with the CPU policy: the allocation ran at **72.7 MB/s**,
+against 103–134 MB/s on AC. That is 24.5 s instead of 10–17 s. It doesn't
+explain a hang, but every stage on battery runs for longer.
 
 ### The firmware's sleep methods do not look at the power source
 
