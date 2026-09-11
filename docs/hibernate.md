@@ -426,8 +426,18 @@ that event and leaves a journal behind.
   acpid and acpi-support are not installed, and there is no
   `/var/log/pm-powersave.log`. The one other hook, the hdparm script in
   `/usr/lib/systemd/system-sleep/`, acts only on `post`, and only on ATA disks.
-- i915 exposes no `enable_psr`/`enable_fbc`/`enable_dc` on this kernel, so the
-  most obvious remaining suspect could not be checked directly.
+- ~~i915 exposes no `enable_psr`/`enable_fbc`/`enable_dc` on this kernel, so the
+  most obvious remaining suspect could not be checked directly.~~ **Corrected
+  2026-09-10 evening:** those parameters do exist, but they're root-only, under
+  `/sys/kernel/debug/dri/0000:00:02.0/i915_params/` (for example
+  `enable_psr=-1` and `enable_fbc=1`). `bin/power-snapshot` reads them. What they
+  settle:
+  - **PSR is ruled out by the hardware.** The eDP panel reports
+    `Sink support: PSR = no`, so PSR never engages whatever the parameter says.
+  - **DMC/DC states do not apply.** Broadwell has no DMC firmware; that
+    arrived with Skylake. No `i915_dmc_info` file exists.
+  - **FBC is live on AC** (`FBC enabled`, `Compressing: yes`). Whether it
+    changes on battery is what the AC/battery diff is for.
 
 So the mechanism behind the battery correlation is **not established**. What is
 established is the shape of it, at 5 successes on AC and 0 clean cycles on
