@@ -6,6 +6,16 @@
 #   pkexec bin/hibernate-trial --pm-test core     # whole save path except the image; comes back by itself
 #   pkexec bin/hibernate-trial --mode shutdown    # skip ACPI S4: no _PTS(4), no ECSS=4, no _WAK
 #   pkexec bin/hibernate-trial --unload sbs       # take modules out for the cycle, put them back after
+#   pkexec bin/hibernate-trial --pm-trace         # stamp each device resume into the RTC
+#
+# --pm-trace sets /sys/power/pm_trace for the cycle. The restored kernel then
+# writes a hash of each device resume callback into the CMOS clock, and that
+# survives a forced power-off. On the boot after a failed restore, read it
+# straight away, before the clock is set again:
+#   journalctl -b -k | grep -iE 'magic number|hash matches'
+#   cat /sys/power/pm_trace_dev_match
+# The cost is a wrong system clock until NTP corrects it. pm_trace also turns
+# off async suspend/resume, so the cycle runs device by device.
 #
 # --unload takes a comma-separated module list. Each one is removed with
 # `modprobe -r` before hibernating, which also drops dependencies nothing else
@@ -34,12 +44,14 @@ set -euo pipefail
 PM_TEST=none
 MODE=
 UNLOAD=
+PM_TRACE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --pm-test) PM_TEST=${2:?}; shift 2 ;;
     --mode)    MODE=${2:?}; shift 2 ;;
     --unload)  UNLOAD=${2:?}; shift 2 ;;
-    *) echo "usage: $0 [--pm-test freezer|devices|platform|processors|core] [--mode platform|shutdown] [--unload mod1,mod2]" >&2; exit 2 ;;
+    --pm-trace) PM_TRACE=1; shift ;;
+    *) echo "usage: $0 [--pm-test freezer|devices|platform|processors|core] [--mode platform|shutdown] [--unload mod1,mod2] [--pm-trace]" >&2; exit 2 ;;
   esac
 done
 case "$PM_TEST" in none|freezer|devices|platform|processors|core) ;; *) echo "bad --pm-test $PM_TEST" >&2; exit 2 ;; esac
@@ -49,6 +61,7 @@ case "$MODE" in ''|platform|shutdown) ;; *) echo "bad --mode $MODE" >&2; exit 2 
 DROPIN=/run/systemd/sleep.conf.d/90-hibernate-trial.conf
 cleanup() {
   echo none > /sys/power/pm_test 2>/dev/null || true
+  echo 0 > /sys/power/pm_trace 2>/dev/null || true
   rm -f "$DROPIN"
   for m in ${UNLOAD//,/ }; do modprobe "$m" 2>/dev/null || true; done
 }
@@ -74,11 +87,12 @@ if [ -n "$MODE" ]; then
   printf '[Sleep]\nHibernateMode=%s\n' "$MODE" > "$DROPIN"
 fi
 echo "$PM_TEST" > /sys/power/pm_test
+echo "$PM_TRACE" > /sys/power/pm_trace
 
 ac=$(cat /sys/class/power_supply/ADP1/online 2>/dev/null || echo '?')
 bat=$(cat /sys/class/power_supply/BAT0/status 2>/dev/null || echo '?')
 vt=$(fgconsole 2>/dev/null || cat /sys/class/tty/tty0/active 2>/dev/null || echo '?')
-msg="start ac=$ac bat=$bat vt=$vt pm_test=$PM_TEST mode=${MODE:-default} unload=${UNLOAD:-none}"
+msg="start ac=$ac bat=$bat vt=$vt pm_test=$PM_TEST mode=${MODE:-default} unload=${UNLOAD:-none} pm_trace=$PM_TRACE"
 logger -t hibernate-trial "$msg"
 journalctl --sync 2>/dev/null || true
 sync
