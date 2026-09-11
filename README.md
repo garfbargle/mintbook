@@ -89,8 +89,9 @@ particular MacBook worth using again.
 - Suspend uses the mode that reliably brings the keyboard and trackpad back.
 - Hibernation works on battery. Two days of failed restores narrowed it to one
   driver that could not come back from an image saved on battery—the Broadcom
-  Wi-Fi. It now steps aside for the hibernate step and returns after. Lid close,
-  sleep, then hibernate has run end to end on battery. [How it was found](docs/hibernate.md)
+  Wi-Fi. It now steps aside for the hibernate step and returns after. On
+  battery, closing the lid sleeps, then hibernates after 30 minutes, so a night
+  unplugged no longer drains the pack. [How it was found](docs/hibernate.md)
 - Firefox hardware-decodes H.264 for smooth, efficient video.
 
 Three results from that work, each measured on this machine rather than reasoned

@@ -6,9 +6,12 @@ the restored kernel hanging in `brcmfmac`'s `pci_pm_restore` (Test M,
 photographed). The fix is `config/systemd/system-sleep/mintbook-brcmfmac`,
 **installed 08:45**, and with it a plain `systemctl hibernate` on battery has
 now worked twice (Tests N and O). **The full lid-close → s2idle → hibernate
-escalation then worked on battery too (Test P, 08:53).** The lid itself is
-still on plain `suspend` in `/etc` until making `suspend-then-hibernate`
-permanent is approved. Why only battery-saved
+escalation then worked on battery too (Test P, 08:53).** **From 09:13 it is
+the default:** `HandleLidSwitch=suspend-then-hibernate` on battery (AC stays
+on `suspend`), `HibernateDelaySec=30min`, and `bin/hibernate-check` passes
+14/14. The debug command-line parameters were removed at the same time. Not
+yet observed: a real overnight close with the full 30-minute delay. It is
+the same path as Test P with a longer timer. Why only battery-saved
 images trip `brcmfmac` is not known.
 
 ~~Status 2026-09-10, 21:10: works on AC in the default `platform` mode.
@@ -1439,7 +1442,14 @@ that hangs, twice out of two.
 
 ### Current state
 
-`HandleLidSwitch` is back to plain `suspend` and `HibernateDelaySec` to 30min.
+**Updated 2026-09-11 09:13:** `HandleLidSwitch` is `suspend-then-hibernate`
+again, on battery only, with `HibernateDelaySec=30min`. It is the repo's
+`mintbook-lid.conf`, installed over the interim file, which is backed up as
+`20-mintbook-lid.conf.bak-20260911-091317`. The `brcmfmac` hook is what made
+this safe (Tests M–P). The paragraph below describes the interim state from
+2026-09-10 to 2026-09-11, and is kept as it was.
+
+~~`HandleLidSwitch` is back to plain `suspend` and `HibernateDelaySec` to 30min.~~
 A lid close costs the known ~1.8 W rather than risking a hang, because a machine
 wedged with the lid shut draws ~10 W and is strictly worse. At ~1.8 W a full
 charge is about eleven hours, so **unplugged overnight is still unsafe**. Plug
@@ -1476,7 +1486,11 @@ jump. The
 runtime knobs `bin/hibernate-trial` sets cannot reach that far, because the
 boot kernel never runs the trial. These are debug-only; **remove them when
 the investigation ends**. The pre-change file is
-`/etc/default/grub.bak-debug-*`.
+`/etc/default/grub.bak-debug-*`. **Removed 2026-09-11 09:13**, once the lid
+path had worked (Test P). The command line is back to `intel_iommu=off
+mitigations=off resume=UUID=… resume_offset=…`, and the removal's own
+backup is `/etc/default/grub.bak-debug-removal-20260911-091317`. It takes
+effect from the next boot. To film a failure again, put both back.
 
 **Temporary, from 2026-09-11 07:13: `acpi_sleep=s4_nonvs` is appended** for
 Test J. It stops the kernel saving the ACPI NVS region at hibernate and
