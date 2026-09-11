@@ -36,7 +36,9 @@
   device suspend returned an error. That hang is plausibly caused by the
   instrument, and it does not speak to the restore. **Test I (09-11 06:53)
   unloaded the camera driver, and the restore still failed**, so `facetimehd`
-  is out too. The mechanism is not established.
+  is out too. **Test J (07:42) skipped the ACPI NVS restore
+  (`acpi_sleep=s4_nonvs`) and still failed.** Next to isolate: the restored
+  kernel starting CPUs 1–3. The mechanism is not established.
 - **Narrowed on 2026-09-10 evening.** A `pm_test=core` run on battery from X
   got through the whole save path except the image: VT switch, notifiers,
   sync, freeze, allocation, device freeze and ACPI `_PTS(4)`. It came back
@@ -460,6 +462,7 @@ hibernation started, and whether the charger was in.
 | 21:55 | X, `platform` | battery | **OK** — image loaded | **failed on AC** — charger in before power; same ending |
 | 09-11 06:30 | X, `platform`, `pm_trace` | battery | **hung** — a device suspend returned an error | — |
 | 09-11 06:53 | X, `platform`, `facetimehd` unloaded | battery | **OK** — image loaded | **failed** — same as E, F, G |
+| 09-11 07:42 | X, `platform`, `acpi_sleep=s4_nonvs` | battery | **OK** | **failed** — same, screen stayed up longer |
 
 **On AC nothing has ever failed** — three saves, two restores. **On battery
 nothing has ever fully succeeded.** The active VT does not decide whether it
@@ -1078,6 +1081,35 @@ The kernel decodes the CMOS clock at every boot whether or not `pm_trace` was
 on, so a magic number means something only when a `hash matches` line follows
 it.
 
+### Test J: `acpi_sleep=s4_nonvs` — same failure
+
+2026-09-11 07:42. The machine was booted (`918a77e6`) with
+`acpi_sleep=s4_nonvs` on the command line, confirmed in that boot's kernel
+log. Then `pkexec bin/hibernate-trial` (default `platform` mode), from X, on
+battery, and filmed.
+
+- The start line reads `start ac=0 bat=Discharging ... unload=none
+  pm_trace=0`. There is no `returned` line. The next boot (07:44:08, on
+  battery) reports `Image not found`.
+- From the chair, it was the same sequence as before. The only difference
+  was that the last screen stayed up for a while instead of going black
+  first. A forced restart was needed.
+
+**So skipping the ACPI NVS save and restore does not help.** The NVS region
+is out. `s4_nonvs` was taken back out of `/etc/default/grub` straight after,
+and that takes effect at the next boot.
+
+**Why the restore takes "3 CPUs" offline on a 2-CPU machine** (asked from the
+chair). The Core M-5Y31 has 2 cores with Hyper-Threading, so Linux sees 4
+logical CPUs, 0 to 3 (`lscpu`: 2 cores × 2 threads). CPU 0 is the boot CPU.
+The restore jumps into the image on CPU 0 alone, because it overwrites all of
+memory, including whatever the other CPUs would be running. The restored
+kernel then starts CPUs 1–3 again: `Enabling non-boot CPUs` in E0's log. That
+bring-up sits inside the blind stretch where every battery restore dies, and
+it is the one step there not yet isolated. `hibernate-trial --offline-cpus`
+takes CPUs 1–3 offline before the save, so the restored kernel has none to
+start.
+
 ### The firmware's sleep methods do not look at the power source
 
 In `platform` hibernate mode, the default, the kernel calls the firmware's
@@ -1173,6 +1205,7 @@ photo showed an NVS restore completing on the save side, so this is the
 weaker lever, and it is being tried because the stronger ones (the battery
 and camera drivers) came out clean. **If Test J fails, remove it.** The
 pre-change file is `/etc/default/grub.bak-s4nonvs-20260911-071319`.
+**Removed 2026-09-11 after Test J failed**, from the next boot on.
 
 `resume_offset` is counted in `PAGE_SIZE` units, while `filefrag` reports
 filesystem blocks. Both are 4096 here. The installer refuses to run if they ever
