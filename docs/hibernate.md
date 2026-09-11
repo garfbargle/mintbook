@@ -530,6 +530,24 @@ remaining difference is the physical power source: firmware, the EC, and the
 Smart Battery behind it. The 11:01 journal has since rotated away, so this
 rests on the earlier notes above rather than on a log that can be re-read.
 
+### EC traffic: busy, but the same on AC
+
+The EC's GPE (`0x4e`, from the boot log `ACPI: EC: GPE=0x4e`) looked like a
+storm at first: 1,306 in 30 s on battery. It is not firmware noise. It is
+`bin/panel-battery` polling BAT0 every 5 s. BAT0 is a Smart Battery behind the
+EC's SMBus (`sbs`/`sbshc`), and the first attribute read refreshes the whole
+cache over that bus. Measured 2026-09-10:
+
+| | burst every 5 s | GPEs per BAT0 refresh | refresh time |
+|---|---|---|---|
+| battery (Discharging) | 161–165 | 161–165 | 48–54 ms |
+| AC (Charging) | 126–129 | 126–127 | 38–44 ms |
+
+Between bursts the GPE count does not move at all. The pattern is the same on
+AC, so the EC being busy is **not a battery-only difference** and does not
+explain the correlation. The panel does keep the EC SMBus busy about 1% of the
+time, which is worth remembering if a suspend or resume ever has to wait on it.
+
 ### Test A: the early save path completes on battery, from X
 
 2026-09-10 18:53, `pkexec bin/hibernate-trial --pm-test core`, started from X
