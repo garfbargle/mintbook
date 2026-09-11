@@ -366,10 +366,11 @@ How to check it without a reboot, and one check that does not work:
 - `systemd-analyze verify multi-user.target` (or `graphical.target`) does
   reproduce the four journal lines. After the fix, both are clean.
 
-Not yet confirmed through a real reboot. The proof to look for is a
-`Starting mintbook-power.service` at a few seconds of monotonic time in
-`journalctl -b -u mintbook-power.service -o short-monotonic`, and no
-`ordering cycle` line in `journalctl -b`.
+Confirmed through a real reboot (2026-09-11 11:22). `journalctl -b` has no
+`ordering cycle` line, and
+`journalctl -b -u mintbook-power.service -o short-monotonic` shows the unit
+starting at 9.46 s and applying `ac=1 profile=balanced max_perf_pct=100`. That
+is the first boot in the retained journal where it ran at boot.
 
 ### Ruled out
 
