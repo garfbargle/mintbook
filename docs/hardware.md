@@ -271,9 +271,15 @@ The unit had done its job. The journal for that boot:
 ```
 
 It set 70 and something reset it 40-odd seconds later. `mintbook-power.service`
-carries `After=power-profiles-daemon.service`, which does nothing here: PPD is
-D-Bus-activated, so it starts when something first asks for it — 45 s *after*
-the unit that was supposed to be ordered behind it.
+carries `After=power-profiles-daemon.service`, and it did not hold. **Corrected
+2026-09-11:** this section used to say that was because PPD is D-Bus-activated
+and starts when something first asks for it. It is not: PPD has been enabled
+for `graphical.target` since 2026-08-30, and systemd starts it at boot right
+after `multi-user.target`. The `After=` did not hold because it made an ordering
+cycle, and systemd threw away the unit's boot job. See
+[The unit never ran at boot](#the-unit-never-ran-at-boot-2026-09-11). That
+boot's journal has since rotated, so what triggered the 18:42:23 run cannot be
+rechecked. The thermald finding below stands either way.
 
 thermald is the one that writes it (`strings /usr/sbin/thermald` has
 `/max_perf_pct`), and on this machine it is doing so with no idea what the
@@ -304,6 +310,67 @@ next daemon that decides it owns `max_perf_pct`:
 profile *and* the cap, because `power-menu` writes both — so a profile that
 still matches auto while the cap does not is not a preference, it is this fault,
 and doctor fails on it rather than shrugging it off as an override.
+
+### The unit never ran at boot (2026-09-11)
+
+The boot journal carried this on every boot:
+
+```
+multi-user.target: Found ordering cycle on mintbook-power.service/start
+multi-user.target: Found dependency on power-profiles-daemon.service/start
+multi-user.target: Found dependency on multi-user.target/start
+multi-user.target: Job mintbook-power.service/start deleted to break ordering cycle starting with multi-user.target/start
+```
+
+The loop has three edges, and two of them are ours:
+
+- `mintbook-power.service` has `After=power-profiles-daemon.service` (ours).
+- Ubuntu's stock `/usr/lib/systemd/system/power-profiles-daemon.service` has
+  `After=multi-user.target display-manager.target` and is enabled for
+  `graphical.target`. This one is not ours.
+- `WantedBy=multi-user.target` gives the unit an implicit
+  `Before=multi-user.target` (ours).
+
+systemd breaks the loop by deleting the mintbook-power job, so the policy was
+never applied at boot. The journal keeps 12 boots (2026-09-10 21:45 to
+2026-09-11 10:52), and in none of them did the unit start before 36 s. Every
+run in them came from udev on a charger change, or from the settle timer and
+`power-install`. Eight of those boots logged the cycle. The other four (−11,
+−10, −9, −3) also lack PID 1's "Queued start job for default target" line,
+which sits right after the cycle lines. So those boots lost PID 1's earliest
+messages: they show a logging gap, not a boot without the cycle.
+
+Fix: `WantedBy=graphical.target`. PPD hangs off the same target, so the order
+becomes `multi-user.target` → PPD → mintbook-power → `graphical.target`, with no
+loop. This is the default target here. Booting into plain `multi-user.target`
+would skip the unit, but PPD would not start either, and udev plus the settle
+timer still apply the cap.
+
+Why not the other fix: dropping `After=power-profiles-daemon.service` and
+keeping `multi-user.target` would not work. `mintbook-power-apply` calls
+`powerprofilesctl`, which D-Bus-activates PPD. PPD is ordered after
+`multi-user.target`, which in turn waits for this oneshot, so the unit would
+block until the D-Bus call timed out. This follows from the unit ordering and
+was not tried.
+
+`bin/power-install` now runs `systemctl reenable` instead of `enable`. `enable`
+adds the new `graphical.target.wants` link but leaves the old
+`multi-user.target.wants` link in place, and that old link alone keeps the
+cycle. Checked with the fixed unit in a scratch dir before installing.
+
+How to check it without a reboot, and one check that does not work:
+
+- `systemd-analyze verify /etc/systemd/system/mintbook-power.service` reports
+  **nothing** even with the cycle present. It never builds the
+  `multi-user.target` transaction.
+- `systemd-analyze verify multi-user.target` (or `graphical.target`) does
+  reproduce the four journal lines. After the fix, both are clean.
+
+Confirmed through a real reboot (2026-09-11 11:22). `journalctl -b` has no
+`ordering cycle` line, and
+`journalctl -b -u mintbook-power.service -o short-monotonic` shows the unit
+starting at 9.46 s and applying `ac=1 profile=balanced max_perf_pct=100`. That
+is the first boot in the retained journal where it ran at boot.
 
 ### Ruled out
 

@@ -62,9 +62,13 @@ Periods were deliberately left alone. See
 86–90 °C, on every boot.
 
 The unit worked. thermald reset it 40 seconds later — and `After=power-profiles-daemon.service`
-never bound, because PPD is D-Bus-activated and started 45 s *after* the unit
-ordered behind it. Fixed with `--reassert` plus a settle timer at
+never bound. Fixed with `--reassert` plus a settle timer at
 `OnBootSec=90`, and thermald masked. Confirmed through a real reboot.
+**Corrected 2026-09-11:** the reason given here was "PPD is D-Bus-activated".
+That was wrong. The real reason is an ordering cycle with PPD's stock
+`After=multi-user.target`, which made systemd drop the unit's boot job on every
+boot. The settle timer and udev were the only things applying the cap. See
+[hardware.md](hardware.md#the-unit-never-ran-at-boot-2026-09-11).
 
 ### 4. i965 was never reaching a single application
 
