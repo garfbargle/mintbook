@@ -87,6 +87,10 @@ particular MacBook worth using again.
 - Wi-Fi, speakers, headphones, camera, Bluetooth, keyboard, and trackpad work.
 - Battery mode stays cool; external power unlocks short bursts of performance.
 - Suspend uses the mode that reliably brings the keyboard and trackpad back.
+- Hibernation works on battery. Two days of failed restores narrowed it to one
+  driver that could not come back from an image saved on battery—the Broadcom
+  Wi-Fi. It now steps aside for the hibernate step and returns after. Lid close,
+  sleep, then hibernate has run end to end on battery. [How it was found](docs/hibernate.md)
 - Firefox hardware-decodes H.264 for smooth, efficient video.
 
 Three results from that work, each measured on this machine rather than reasoned
@@ -129,7 +133,7 @@ failure here, and the card does not pretend otherwise.
 |---|---|
 | **Desktop** | [Look and behavior](docs/desktop.md) · [Control Center and System menu](docs/control-center.md) · [Software updates](docs/updates.md) · [HiDPI display](docs/display.md) |
 | **Daily use** | [Shortcuts and search](docs/daily.md) · [Battery](docs/battery.md) · [Video](docs/video.md) |
-| **Hardware** | [Input and sleep](docs/input.md) · [Audio](docs/audio.md) · [Camera](docs/camera.md) · [Bluetooth](docs/bluetooth.md) |
+| **Hardware** | [Input and sleep](docs/input.md) · [Hibernation](docs/hibernate.md) · [Audio](docs/audio.md) · [Camera](docs/camera.md) · [Bluetooth](docs/bluetooth.md) |
 | **System** | [Boot and kernels](docs/boot.md) · [App performance](docs/app-performance.md) · [Implementation guide](CONTRIBUTING.md) |
 
 macOS remains on the disk. OpenCore chooses which system boots; GRUB does not.
