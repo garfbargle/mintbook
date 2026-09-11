@@ -43,7 +43,11 @@
   saw it:** with devices resuming one at a time, the restored kernel got
   through the jump, `_WAK` and the noirq and early phases, and lit the panel.
   It then froze in the main device-restore phase, after the USB root hubs.
-  The failing device is not yet named. The mechanism is not established.
+  ~~The failing device is not yet named.~~ **Test M (08:31) named it: the
+  restored kernel called the Wi-Fi driver's (`brcmfmac`) `pci_pm_restore`
+  and it never returned.** Next: one normal cycle with `brcmfmac` unloaded,
+  which is also the candidate fix. Why only battery-saved images trip it is
+  not established.
 - **Narrowed on 2026-09-10 evening.** A `pm_test=core` run on battery from X
   got through the whole save path except the image: VT switch, notifiers,
   sync, freeze, allocation, device freeze and ACPI `_PTS(4)`. It came back
@@ -470,6 +474,7 @@ hibernation started, and whether the charger was in.
 | 09-11 07:42 | X, `platform`, `acpi_sleep=s4_nonvs` | battery | **OK** | **failed** — same, screen stayed up longer |
 | 09-11 07:57 | X, `platform`, CPUs 1–3 offline | battery | **OK** | **failed** — same |
 | 09-11 08:21 | X, `platform`, `pm_trace`, `facetimehd` unloaded | battery | **OK** | **failed later** — panel back, froze in device restore after the USB root hubs |
+| 09-11 08:31 | X, `platform`, sync + print_times, `facetimehd` unloaded | battery | **OK** | **failed** — hung in `brcmfmac`'s `pci_pm_restore` |
 
 **On AC nothing has ever failed** — three saves, two restores. **On battery
 nothing has ever fully succeeded.** The active VT does not decide whether it
@@ -1204,6 +1209,56 @@ evidence of anything.
 keeps the one-device-at-a-time order that let the panel come back, and
 `pm_print_times` prints `calling <device>` before each callback. The last
 such line on a frozen screen names the device. Neither touches the RTC.
+
+### Test M: the device is `brcmfmac` — the Wi-Fi never returns from restore
+
+2026-09-11 08:31, `pkexec bin/hibernate-trial --sync --print-times --unload
+facetimehd` (default `platform` mode), from X, on battery. The start line
+reads `... unload=facetimehd pm_trace=0 cpus=0-3 async=0 print_times=1`.
+Devices resumed one at a time, and each device callback was announced on the
+console.
+
+The user photographed the frozen screen. The top half is the saved kernel's
+freeze sequence, from before the snapshot: every device answered, including
+`nvme` (725 ms), `brcmfmac` (468 µs) and `i915`. The bottom half is the
+restored kernel's restore sequence. Transcribed, with repeats trimmed:
+
+```
+i915 0000:00:02.0: PM: pci_pm_restore returned 0 after 1370474 usecs
+xhci_hcd 0000:00:14.0: PM: calling pci_pm_restore
+usb usb1: root hub lost power or was reset
+usb usb2: root hub lost power or was reset
+xhci_hcd 0000:00:14.0: PM: pci_pm_restore returned 0 after 5590 usecs
+   then 00:15.0, 00:15.2, pxa2xx_spi_pci 00:15.4 (the keyboard's SPI),
+   8250_lpss 00:15.5, mei_me, snd_hda_intel, pcieport 1c.0/1c.2/1c.3/1c.4,
+   lpc_ich, i801_smbus, intel_pch_thermal: every one "returned 0"
+brcmfmac 0000:01:00.0: PM: calling pci_pm_restore @ 7451, parent: 0000:00:1c.2
+   <frozen: no "returned">
+```
+
+**The restored kernel hangs inside the Broadcom Wi-Fi driver's
+`pci_pm_restore`.** Every device before it came back, and `brcmfmac` never
+answered. The next boot (08:33:33, battery) found no image. This is the first
+device-level answer in the investigation. It fits Test L, which froze in the
+same stretch, just after the USB root hubs. It also fits the repo's existing
+caution: `bin/idle-probe` already lists `0000:01:00.0` as risky, with the
+note "brcmfmac runtime PM is known flaky".
+
+What is and is not shown:
+- **Shown, once:** in a synchronous restore on battery, `brcmfmac` is the
+  device that does not return.
+- **Inferred, not shown:** that the same device kills the normal async
+  restores in E–K. Those died out of sight, and async ordering differs.
+- **Unknown:** why only images saved on battery. `brcmfmac`'s restore
+  reprograms the chip and reloads its firmware when it finds the device
+  reset. Whether the chip's power or state across S4 differs when the save
+  happened on battery is a hypothesis.
+
+**The one-variable test, which is also the candidate fix:** take the Wi-Fi
+driver out for one normal cycle. The command is
+`hibernate-trial --unload brcmfmac_wcc,brcmfmac`. `brcmfmac_wcc` (the vendor
+add-on) holds `brcmfmac`, so it has to go first. Run it with async resume and
+with `facetimehd` loaded, exactly like Test E apart from the Wi-Fi.
 
 ### The firmware's sleep methods do not look at the power source
 
