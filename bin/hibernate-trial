@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# hibernate-trial - one instrumented hibernate, for the battery investigation in
+# docs/hibernate.md. Root: run it with pkexec from X, or sudo from a text console.
+#
+#   pkexec bin/hibernate-trial                    # a real hibernate, console armed
+#   pkexec bin/hibernate-trial --pm-test core     # whole save path except the image; comes back by itself
+#   pkexec bin/hibernate-trial --mode shutdown    # skip ACPI S4: no _PTS(4), no ECSS=4, no _WAK
+#
+# What it does, in order:
+#   1. arms the three debug knobs that reset every boot, so a hang leaves its
+#      last line on screen (pm_debug_messages, console_suspend=N, printk 8)
+#   2. writes a "trial starting" line to the journal and forces it to disk.
+#      Nothing after `hibernation entry` reaches the journal on a failed run,
+#      so this line is the only durable record of what was being tried.
+#   3. sets pm_test and/or a runtime HibernateMode, if asked
+#   4. hibernates through systemctl, the same path the lid and the failing
+#      runs used (logind, PrepareForSleep, systemd-sleep)
+#   5. waits for systemd-hibernate.service to finish, then puts pm_test back
+#      to none and removes the runtime drop-in
+#
+# Everything it changes is runtime-only. pm_test and the knobs reset on reboot,
+# and the drop-in lives in /run. Putting pm_test back matters: it applies to
+# suspend too, so a lid close left on pm_test=core would "suspend" for no time
+# at all and drain the battery awake.
+set -euo pipefail
+
+PM_TEST=none
+MODE=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --pm-test) PM_TEST=${2:?}; shift 2 ;;
+    --mode)    MODE=${2:?}; shift 2 ;;
+    *) echo "usage: $0 [--pm-test freezer|devices|platform|processors|core] [--mode platform|shutdown]" >&2; exit 2 ;;
+  esac
+done
+case "$PM_TEST" in none|freezer|devices|platform|processors|core) ;; *) echo "bad --pm-test $PM_TEST" >&2; exit 2 ;; esac
+case "$MODE" in ''|platform|shutdown) ;; *) echo "bad --mode $MODE" >&2; exit 2 ;; esac
+[ "$(id -u)" -eq 0 ] || { echo "run as root: pkexec $(readlink -f "$0") ..." >&2; exit 1; }
+
+DROPIN=/run/systemd/sleep.conf.d/90-hibernate-trial.conf
+cleanup() {
+  echo none > /sys/power/pm_test 2>/dev/null || true
+  rm -f "$DROPIN"
+}
+trap cleanup EXIT
+
+echo 1 > /sys/power/pm_debug_messages
+echo N > /sys/module/printk/parameters/console_suspend
+echo 8 > /proc/sys/kernel/printk
+
+# systemd-sleep writes /sys/power/disk itself from HibernateMode, so an echo
+# there would be overwritten. A drop-in under /run is read by systemd-sleep
+# and vanishes on reboot.
+if [ -n "$MODE" ]; then
+  mkdir -p "${DROPIN%/*}"
+  printf '[Sleep]\nHibernateMode=%s\n' "$MODE" > "$DROPIN"
+fi
+echo "$PM_TEST" > /sys/power/pm_test
+
+ac=$(cat /sys/class/power_supply/ADP1/online 2>/dev/null || echo '?')
+bat=$(cat /sys/class/power_supply/BAT0/status 2>/dev/null || echo '?')
+vt=$(fgconsole 2>/dev/null || cat /sys/class/tty/tty0/active 2>/dev/null || echo '?')
+msg="start ac=$ac bat=$bat vt=$vt pm_test=$PM_TEST mode=${MODE:-default}"
+logger -t hibernate-trial "$msg"
+journalctl --sync 2>/dev/null || true
+sync
+echo "hibernate-trial: $msg"
+
+systemctl hibernate
+
+# Wait for the service to start, then for it to finish. On a real hibernate
+# this loop is frozen along with everything else and resumes after restore.
+svc=systemd-hibernate.service
+for _ in $(seq 20); do
+  [ "$(systemctl show -p ActiveState --value $svc)" = activating ] && break
+  sleep 0.5
+done
+while [ "$(systemctl show -p ActiveState --value $svc)" = activating ]; do sleep 1; done
+
+result=$(systemctl show -p Result --value $svc)
+logger -t hibernate-trial "returned result=$result ac=$(cat /sys/class/power_supply/ADP1/online 2>/dev/null)"
+echo "hibernate-trial: returned, $svc result=$result"
+journalctl -k -b --no-pager -o short-monotonic 2>/dev/null \
+  | grep -E 'hibernation (entry|exit)|pm_test|Filesystems sync|Allocated .* kbytes|S4|Image|Wrote|Read [0-9]' | tail -12
