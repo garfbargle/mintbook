@@ -98,7 +98,9 @@ cleanup() {
 trap cleanup EXIT
 
 for m in ${UNLOAD//,/ }; do
-  modprobe -r "$m"
+  # An earlier `modprobe -r` in the list may already have taken this one as
+  # an unused dependency: brcmfmac_wcc takes brcmfmac with it. Skip it then.
+  grep -q "^$m " /proc/modules && modprobe -r "$m"
   if grep -q "^$m " /proc/modules; then
     echo "hibernate-trial: $m is still loaded, not hibernating" >&2
     exit 1
