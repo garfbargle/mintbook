@@ -1,0 +1,49 @@
+#!/bin/sh
+# Take the Broadcom Wi-Fi driver out across hibernation on the MacBook8,1.
+# Installed to /usr/lib/systemd/system-sleep/mintbook-brcmfmac by
+# bin/hibernate-install. See docs/hibernate.md, "Test M" and "Test N".
+#
+# Why: an image saved on battery never restored here. The restored kernel
+# hangs inside brcmfmac's pci_pm_restore; every device before it comes back
+# and brcmfmac never returns (Test M, photographed 2026-09-11). With the
+# driver unloaded for the cycle, the first battery save-and-restore ever
+# completed (Test N). Why only battery-saved images trip it is not known.
+#
+# Only the hibernate leg is touched. A plain s2idle suspend keeps Wi-Fi, so a
+# short lid close stays connected. systemd-sleep calls this with $1 = pre or
+# post and $2 = the verb; for suspend-then-hibernate it runs once per leg and
+# SYSTEMD_SLEEP_ACTION names the leg (suspend, hibernate,
+# suspend-after-failed-hibernate).
+#
+# A hook cannot veto the sleep, so if the driver will not come out this only
+# logs it. The hibernate then goes ahead and will hang on restore, as before.
+#
+# Undo: delete the installed file. Nothing else depends on it.
+
+case "${2:-}" in
+  hibernate|hybrid-sleep)  leg=hibernate ;;
+  suspend-then-hibernate)  leg=${SYSTEMD_SLEEP_ACTION:-} ;;
+  *)                       exit 0 ;;
+esac
+[ "$leg" = hibernate ] || exit 0
+
+case "${1:-}" in
+  pre)
+    # brcmfmac_wcc (the vendor add-on) holds brcmfmac, so it goes first, and
+    # `modprobe -r` then takes brcmfmac, brcmutil and cfg80211 with it as
+    # unused dependencies. The loop skips whatever has already gone.
+    for m in brcmfmac_wcc brcmfmac; do
+      grep -q "^$m " /proc/modules && modprobe -r "$m"
+    done
+    if grep -q '^brcmfmac ' /proc/modules; then
+      echo "mintbook-brcmfmac: brcmfmac is still loaded; this hibernate will likely hang on restore" >&2
+    fi
+    ;;
+  post)
+    # Same order Test N used. Loading brcmfmac_wcc pulls brcmfmac back in, and
+    # the second call covers a boot where the vendor module is not used.
+    modprobe brcmfmac_wcc 2>/dev/null
+    modprobe brcmfmac
+    ;;
+esac
+exit 0

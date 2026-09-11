@@ -46,10 +46,12 @@ LID_SRC="$ROOT/config/systemd/mintbook-lid.conf"
 LID_DST=/etc/systemd/logind.conf.d/20-mintbook-lid.conf
 POLKIT_SRC="$ROOT/config/polkit/10-mintbook-hibernate.rules"
 POLKIT_DST=/etc/polkit-1/rules.d/10-mintbook-hibernate.rules
+HOOK_SRC="$ROOT/config/systemd/system-sleep/mintbook-brcmfmac"
+HOOK_DST=/usr/lib/systemd/system-sleep/mintbook-brcmfmac
 GRUB=/etc/default/grub
 RESUME_CONF=/etc/initramfs-tools/conf.d/resume
 
-for f in "$SLEEP_SRC" "$LID_SRC" "$POLKIT_SRC"; do
+for f in "$SLEEP_SRC" "$LID_SRC" "$POLKIT_SRC" "$HOOK_SRC"; do
   [ -f "$f" ] || { echo "missing $f" >&2; exit 1; }
 done
 
@@ -174,6 +176,12 @@ echo "==> $POLKIT_DST"
 install -dm755 "$(dirname "$POLKIT_DST")"
 install -m644 "$POLKIT_SRC" "$POLKIT_DST"
 
+# An image saved on battery hangs in brcmfmac's restore unless the Wi-Fi
+# driver is out for the hibernate leg (docs/hibernate.md, "Test M"/"Test N").
+# systemd 255 reads hooks only from /usr/lib/systemd/system-sleep.
+echo "==> $HOOK_DST"
+install -m755 "$HOOK_SRC" "$HOOK_DST"
+
 systemctl daemon-reload
 # reload, not restart: restarting logind takes the graphical session with it.
 systemctl reload systemd-logind
@@ -188,5 +196,5 @@ echo "  xfconf-query -c xfce4-power-manager -p /xfce4-power-manager/logind-handl
 echo
 echo "then reboot, and verify with: bin/hibernate-check"
 echo
-echo "undo: swapoff $SWAP && rm $SWAP $SLEEP_DST $LID_DST $POLKIT_DST $RESUME_CONF"
+echo "undo: swapoff $SWAP && rm $SWAP $SLEEP_DST $LID_DST $POLKIT_DST $HOOK_DST $RESUME_CONF"
 echo "      restore $GRUB.bak-hibernate-* and /etc/fstab.bak-hibernate-*, update-initramfs -u"
