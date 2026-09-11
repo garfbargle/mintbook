@@ -3,9 +3,11 @@
 **Status 2026-09-11, 08:45: hibernation on battery works once the Broadcom
 Wi-Fi driver is out for the cycle (Test N, one run).** The battery failure is
 the restored kernel hanging in `brcmfmac`'s `pci_pm_restore` (Test M,
-photographed). The fix is `config/systemd/system-sleep/mintbook-brcmfmac`. It
-is written but **not installed yet**, and the lid is still on plain `suspend`
-until the full overnight case has been run with it. Why only battery-saved
+photographed). The fix is `config/systemd/system-sleep/mintbook-brcmfmac`,
+**installed 08:45**, and with it a plain `systemctl hibernate` on battery has
+now worked twice (Tests N and O). The lid is still on plain `suspend` until
+the full lid-close → s2idle → hibernate escalation has been run once on
+battery. Why only battery-saved
 images trip `brcmfmac` is not known.
 
 ~~Status 2026-09-10, 21:10: works on AC in the default `platform` mode.
@@ -485,6 +487,7 @@ hibernation started, and whether the charger was in.
 | 09-11 08:21 | X, `platform`, `pm_trace`, `facetimehd` unloaded | battery | **OK** | **failed later** — panel back, froze in device restore after the USB root hubs |
 | 09-11 08:31 | X, `platform`, sync + print_times, `facetimehd` unloaded | battery | **OK** | **failed** — hung in `brcmfmac`'s `pci_pm_restore` |
 | 09-11 08:39 | X, `platform`, **`brcmfmac` unloaded** | battery | **OK** | **OK** — same boot id, `returned result=success`, Wi-Fi back |
+| 09-11 08:45 | X, `platform`, **hook installed**, no `--unload` | battery | **OK** | **OK** — hook logged unload and reload, same boot id |
 
 **On AC nothing has ever failed** — three saves, two restores. **On battery
 nothing has ever fully succeeded.** The active VT does not decide whether it
@@ -1316,6 +1319,35 @@ and reloads them after. A short lid close in s2idle keeps its Wi-Fi. The next
 test is a plain battery hibernate with only the hook doing the unloading, and
 then the real case: lid closed on battery, s2idle, then the escalation to
 hibernate.
+
+### Test O: the hook alone — a second battery cycle that works
+
+2026-09-11 08:45. `mintbook-brcmfmac` was installed to
+`/usr/lib/systemd/system-sleep/`, byte-identical to the repo. Then
+`pkexec bin/hibernate-trial` ran with **no** `--unload`, from X, on battery
+at 51%. `brcmfmac` was loaded when it started, so only the hook could take it
+out.
+
+```
+08:45:58  hibernate-trial: start ac=0 bat=Discharging ... unload=none ... async=1
+08:45:59  systemd-sleep: mintbook-brcmfmac: pre hibernate (hibernate): brcmfmac unloaded
+          -- image written, off, booted on battery, restored --
+08:46:43  systemd-sleep: mintbook-brcmfmac: post hibernate (hibernate): brcmfmac reloaded
+08:46:45  hibernate-trial: returned result=success ac=0
+```
+
+**It restored, on battery, with the hook doing the work.** The boot id was
+`c806b0f8` before and after, and the kernel log runs from `hibernation
+entry` to `hibernation exit`. applespi shows its healthy `crc mismatch` →
+`modeswitch done` pair and no SPI timeouts. `wlp1s0` came back and
+reconnected by itself.
+
+Battery cycles are now **2 for 2 with `brcmfmac` out** (N, O), against 0
+for 14 with it in. One detail matters for the lid: systemd 255 sets
+`SYSTEMD_SLEEP_ACTION=hibernate` even for a plain `systemctl hibernate`. The
+hook's `suspend-then-hibernate` branch reads the same variable on the
+escalation leg, so the lid path should behave the same. It has not been run
+yet.
 
 ### The firmware's sleep methods do not look at the power source
 
