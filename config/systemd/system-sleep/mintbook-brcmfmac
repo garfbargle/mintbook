@@ -37,6 +37,10 @@ case "${1:-}" in
     done
     if grep -q '^brcmfmac ' /proc/modules; then
       echo "mintbook-brcmfmac: brcmfmac is still loaded; this hibernate will likely hang on restore" >&2
+    else
+      # systemd-sleep hands hook output to the journal, so this line is the
+      # record that the hook, and not luck, took the driver out.
+      echo "mintbook-brcmfmac: pre $2 (${SYSTEMD_SLEEP_ACTION:-}): brcmfmac unloaded"
     fi
     ;;
   post)
@@ -44,6 +48,7 @@ case "${1:-}" in
     # the second call covers a boot where the vendor module is not used.
     modprobe brcmfmac_wcc 2>/dev/null
     modprobe brcmfmac
+    echo "mintbook-brcmfmac: post $2 (${SYSTEMD_SLEEP_ACTION:-}): brcmfmac $(grep -q '^brcmfmac ' /proc/modules && echo reloaded || echo NOT reloaded)"
     ;;
 esac
 exit 0
