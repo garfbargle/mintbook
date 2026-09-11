@@ -1,8 +1,17 @@
 # Hibernation
 
-**Status 2026-09-10, 21:10: works on AC in the default `platform` mode.
+**Status 2026-09-11, 08:45: hibernation on battery works once the Broadcom
+Wi-Fi driver is out for the cycle (Test N, one run).** The battery failure is
+the restored kernel hanging in `brcmfmac`'s `pci_pm_restore` (Test M,
+photographed). The fix is `config/systemd/system-sleep/mintbook-brcmfmac`. It
+is written but **not installed yet**, and the lid is still on plain `suspend`
+until the full overnight case has been run with it. Why only battery-saved
+images trip `brcmfmac` is not known.
+
+~~Status 2026-09-10, 21:10: works on AC in the default `platform` mode.
 `HibernateMode=shutdown` never restores (0 for 3, AC included). On battery, no
-`platform`-mode cycle has ever completed.**
+`platform`-mode cycle has ever completed.~~ Superseded by Test N. The history
+below is kept as it was.
 
 - **On AC in `platform` mode, 7 for 7** — four saves, three restores (the last
   one, Test E0, with the debug command line), from both X and a text console,
@@ -475,6 +484,7 @@ hibernation started, and whether the charger was in.
 | 09-11 07:57 | X, `platform`, CPUs 1–3 offline | battery | **OK** | **failed** — same |
 | 09-11 08:21 | X, `platform`, `pm_trace`, `facetimehd` unloaded | battery | **OK** | **failed later** — panel back, froze in device restore after the USB root hubs |
 | 09-11 08:31 | X, `platform`, sync + print_times, `facetimehd` unloaded | battery | **OK** | **failed** — hung in `brcmfmac`'s `pci_pm_restore` |
+| 09-11 08:39 | X, `platform`, **`brcmfmac` unloaded** | battery | **OK** | **OK** — same boot id, `returned result=success`, Wi-Fi back |
 
 **On AC nothing has ever failed** — three saves, two restores. **On battery
 nothing has ever fully succeeded.** The active VT does not decide whether it
@@ -1259,6 +1269,53 @@ driver out for one normal cycle. The command is
 `hibernate-trial --unload brcmfmac_wcc,brcmfmac`. `brcmfmac_wcc` (the vendor
 add-on) holds `brcmfmac`, so it has to go first. Run it with async resume and
 with `facetimehd` loaded, exactly like Test E apart from the Wi-Fi.
+
+### Test N: Wi-Fi driver unloaded — the first battery cycle that works
+
+2026-09-11 08:39, `pkexec bin/hibernate-trial --unload brcmfmac_wcc,brcmfmac`
+(default `platform` mode), from X, on battery at 50%. Async resume was on,
+and `facetimehd` stayed loaded. It is Test E with the Wi-Fi driver out,
+nothing else changed.
+
+```
+start ac=0 bat=Discharging ... unload=brcmfmac_wcc,brcmfmac pm_trace=0 cpus=0-3 async=1 print_times=0
+[350.67] PM: hibernation: hibernation entry
+[350.94] Filesystems sync: 0.042 seconds
+[370.15] PM: hibernation: Allocated 1594968 kbytes in 19.20 seconds (83.07 MB/s)
+[371.59] ACPI: PM: Preparing to enter system sleep state S4
+         -- image written, powered off, booted on battery, loaded, jumped --
+[371.78] ACPI: PM: Waking up from system sleep state S4
+[372.06] applespi spi-APP000D:00: Received corrupted packet (crc mismatch)
+[372.06] applespi spi-APP000D:00: modeswitch done.
+[374.28] PM: hibernation: hibernation exit
+returned result=success ac=0
+```
+
+**It restored, on battery.** The boot id was `c806b0f8` before and after,
+and the trial logged `returned result=success` from the restored session.
+It then reloaded the modules, and `brcmfmac` came back: `wlp1s0` reconnected
+by itself, with the same four optional-firmware `-2` lines as a cold boot.
+applespi shows its healthy `crc mismatch` → `modeswitch done` pair, and no
+SPI timeouts.
+
+This is the first save **and** restore on battery in about sixteen attempts
+over two days. With Test M, it pins the battery failure on the Broadcom Wi-Fi
+driver's restore. Test M saw `brcmfmac` hang, and Test N removed exactly that
+driver and nothing else. One run.
+
+**Still open:** why only an image saved on battery trips `brcmfmac`. AC saves
+restore with it loaded, 3 for 3. The chip's power or firmware state across S4
+depending on the power source is the obvious hypothesis, and it has not been
+tested.
+
+**The fix** is `config/systemd/system-sleep/mintbook-brcmfmac`, installed by
+`bin/hibernate-install` to `/usr/lib/systemd/system-sleep/`. It unloads
+`brcmfmac_wcc`/`brcmfmac` on the hibernate leg only (plain `hibernate`, and
+the hibernate half of `suspend-then-hibernate` via `SYSTEMD_SLEEP_ACTION`),
+and reloads them after. A short lid close in s2idle keeps its Wi-Fi. The next
+test is a plain battery hibernate with only the hook doing the unloading, and
+then the real case: lid closed on battery, s2idle, then the escalation to
+hibernate.
 
 ### The firmware's sleep methods do not look at the power source
 
