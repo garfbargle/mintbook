@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+# power-snapshot - every power-relevant setting as sorted key=value lines, so a
+# snapshot on AC and one on battery can be diffed. Read-only. See
+# docs/hibernate.md ("What changes when the charger comes out").
+#
+#   bin/power-snapshot > ac.txt          # plugged in
+#   bin/power-snapshot > bat.txt         # unplugged, a minute later
+#   bin/power-snapshot --diff ac.txt bat.txt
+#
+# Run it as your user. The session half (xfconf, X DPMS, PPD) needs the session
+# bus and $DISPLAY, which root does not have. It then re-runs itself once
+# through pkexec for the system half, because i915 debugfs, the i915 module
+# parameters and EPB are root-only on this kernel. If pkexec is declined the
+# system half runs unprivileged, and the unreadable files read as '?'.
+#
+# Why this exists: hibernation has worked 5 times out of 5 on AC and never
+# completed on battery, and no single other variable is present in every
+# failure. Whatever this shows flipping when the charger comes out is a
+# candidate. Nothing here writes anything, so taking a snapshot cannot hang
+# the machine the way a hibernate test can.
+set -uo pipefail
+
+# key=value, one line. Multi-line files are joined with ' | '.
+p() { # $1=key $2=file
+  local v
+  # 2>/dev/null before the <, or bash reports a root-only file itself.
+  v=$(tr '\n' '|' 2>/dev/null < "$2" | sed 's/|$//; s/|/ | /g') || v='?'
+  printf '%s=%s\n' "$1" "${v:-?}"
+}
+
+system_half() {
+  local f d k
+  for d in /sys/class/power_supply/*; do
+    for f in online status; do [ -e "$d/$f" ] && p "supply.${d##*/}.$f" "$d/$f"; done
+  done
+
+  for f in state disk mem_sleep pm_async image_size pm_test pm_debug_messages resume resume_offset; do
+    p "power.$f" "/sys/power/$f"
+  done
+  for f in laptop_mode dirty_bytes dirty_background_bytes dirty_ratio \
+           dirty_background_ratio dirty_writeback_centisecs dirty_expire_centisecs; do
+    p "vm.$f" "/proc/sys/vm/$f"
+  done
+  p kernel.printk /proc/sys/kernel/printk
+  p printk.console_suspend /sys/module/printk/parameters/console_suspend
+
+  for f in status max_perf_pct min_perf_pct no_turbo; do
+    p "pstate.$f" "/sys/devices/system/cpu/intel_pstate/$f"
+  done
+  for d in /sys/devices/system/cpu/cpu[0-9]*; do
+    k=${d##*/}
+    p "cpu.$k.governor" "$d/cpufreq/scaling_governor"
+    p "cpu.$k.max_freq" "$d/cpufreq/scaling_max_freq"
+    p "cpu.$k.epb" "$d/power/energy_perf_bias"
+  done
+
+  # Runtime PM for every device that has it, not only PCI: applespi sits on
+  # the LPSS SPI controller, and the sbs battery on the EC's SMBus.
+  while read -r f; do
+    d=${f%/power/control}; k=${d#/sys/devices/}
+    p "rpm.$k.control" "$f"
+    p "rpm.$k.status" "$d/power/runtime_status"
+    [ -e "$d/power/wakeup" ] && p "wakeup.$k" "$d/power/wakeup"
+  done < <(find /sys/devices -path '*/power/control' 2>/dev/null | sort)
+
+  p aspm.policy /sys/module/pcie_aspm/parameters/policy
+  for d in /sys/bus/pci/devices/*; do
+    k=${d##*/}
+    p "pci.$k.power_state" "$d/power_state"
+    p "pci.$k.d3cold_allowed" "$d/d3cold_allowed"
+    for f in "$d"/link/*; do [ -f "$f" ] && p "pci.$k.link.${f##*/}" "$f"; done
+  done
+
+  for d in /sys/class/backlight/*; do
+    for f in type brightness actual_brightness max_brightness bl_power; do
+      p "backlight.${d##*/}.$f" "$d/$f"
+    done
+  done
+  for d in /sys/class/drm/card*-*; do
+    for f in status enabled dpms; do p "drm.${d##*/}.$f" "$d/$f"; done
+  done
+
+  for m in i915 snd_hda_intel usbcore nvme_core; do
+    for f in /sys/module/$m/parameters/*; do [ -f "$f" ] && p "param.$m.${f##*/}" "$f"; done
+  done
+
+  # One line per line of output here: these files are several lines long, and
+  # a joined line would hide which part moved.
+  while read -r f; do
+    k=${f#/sys/kernel/debug/dri/}
+    awk -v k="$k" '{ printf "i915.%s:%d=%s\n", k, NR, $0 }' "$f" 2>/dev/null
+  done < <(find /sys/kernel/debug/dri -maxdepth 3 -type f \( -name '*psr*' \
+             -o -name '*fbc*' -o -name '*dmc*' -o -name '*drrs*' \
+             -o -name '*runtime_pm*' -o -name '*power_domain*' \) 2>/dev/null | sort)
+  [ -r /sys/kernel/debug/dri ] || echo 'i915.debugfs=? (not root)'
+}
+
+session_half() {
+  xfconf-query -c xfce4-power-manager -lv 2>/dev/null \
+    | awk '{ k=$1; $1=""; sub(/^ +/, ""); printf "xfpm.%s=%s\n", k, $0 }'
+  xset q 2>/dev/null | awk '
+    /Standby:/     { printf "x.dpms.timeouts=%s %s %s\n", $2, $4, $6 }
+    /DPMS is/      { printf "x.dpms=%s\n", $3 }
+    /Monitor is/   { printf "x.monitor=%s\n", $3 }
+    /timeout:/ && /cycle:/ { printf "x.screensaver.timeout=%s\n", $2 }'
+  printf 'ppd.profile=%s\n' "$(powerprofilesctl get 2>/dev/null || echo '?')"
+  for dev in /sys/class/net/*/wireless; do
+    dev=${dev%/wireless}; dev=${dev##*/}
+    printf 'wifi.%s.power_save=%s\n' "$dev" \
+      "$(iw dev "$dev" get power_save 2>/dev/null | awk '{print $NF}')"
+  done
+}
+
+if [ "${1:-}" = --diff ]; then
+  [ $# -eq 3 ] || { echo "usage: $0 --diff A B" >&2; exit 2; }
+  # key: A -> B for every key whose value differs, or that is only on one side.
+  awk -F= '
+    /^#/ { next }
+    { k=$1; v=substr($0, length(k)+2) }
+    FNR==NR { a[k]=v; next }
+    { b[k]=v }
+    END {
+      for (k in a) if (!(k in b)) printf "%s: %s -> (absent)\n", k, a[k]
+      for (k in b) if (!(k in a)) printf "%s: (absent) -> %s\n", k, b[k]
+               else if (a[k] != b[k]) printf "%s: %s -> %s\n", k, a[k], b[k]
+    }' "$2" "$3" | sort
+  exit 0
+fi
+
+if [ "${1:-}" = --system ]; then
+  system_half
+  exit 0
+fi
+
+printf '# power-snapshot %s ADP1.online=%s\n' "$(date -Is)" \
+  "$(cat /sys/class/power_supply/ADP1/online 2>/dev/null)"
+{
+  if [ "$(id -u)" -eq 0 ]; then
+    system_half
+  else
+    session_half
+    pkexec "$(readlink -f "$0")" --system || system_half
+  fi
+} | sort
