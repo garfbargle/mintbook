@@ -809,8 +809,18 @@ are appended** for the battery investigation. Test D's restore froze on the
 boot kernel's `printk: Suspending console(s)`. Without `no_console_suspend`
 the boot kernel prints nothing through its device quiesce, its CPU parking
 or the jump into the image, and that is exactly where restores die here.
-`pm_debug_messages` turns on the PM core's own progress lines from the first
-instant of boot, so the restore path in the initramfs prints them too. The
+~~`pm_debug_messages` turns on the PM core's own progress lines from the first
+instant of boot, so the restore path in the initramfs prints them too.~~
+**Corrected after the reboot (verified: both are in `/proc/cmdline`,
+`pm_debug_messages=1`, `console_suspend=N`).** `pm_debug_messages` does turn
+the PM core's debug lines on from the first instant of boot, but it prints
+them at `KERN_DEBUG`. A line reaches the screen only if its level is below
+the console loglevel, which is the kernel default of 7 in the initramfs and 4
+after Ubuntu's sysctl. So those lines go to the ring buffer, **not the
+screen**. Getting them on screen would take `loglevel=8`.
+`no_console_suspend` still does its job: info-level lines past
+`Suspending console(s)` will show, such as the CPUs going offline before the
+jump. The
 runtime knobs `bin/hibernate-trial` sets cannot reach that far, because the
 boot kernel never runs the trial. These are debug-only; **remove them when
 the investigation ends**. The pre-change file is
