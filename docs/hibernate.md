@@ -23,7 +23,12 @@
   restore on this machine at all (0 for 3), and Tests B and C say nothing
   about battery. The battery evidence is back to one clean failure, 11:49
   (`platform` mode, tty2), plus two ambiguous ones. `shutdown` mode is out as
-  a fix. The mechanism is not established.
+  a fix. **Test E (21:23) then ran the real case in `platform` mode, on
+  battery, and filmed it.** The save completed, and the boot kernel loaded
+  the image, stopped the EC, parked the CPUs, and handed over. The restored
+  kernel never came back. The battery failure is therefore, in that run, a
+  death in the restored kernel's first steps after the jump. The mechanism is
+  not established.
 - **Narrowed on 2026-09-10 evening.** A `pm_test=core` run on battery from X
   got through the whole save path except the image: VT switch, notifiers,
   sync, freeze, allocation, device freeze and ACPI `_PTS(4)`. It came back
@@ -415,6 +420,7 @@ hibernation started, and whether the charger was in.
 | 20:50 | X, `mode=shutdown` | battery | **OK** — new header crc | **failed on AC** — "error" flashed past |
 | 21:00 | X, `mode=shutdown` | **AC** | **OK** — new header crc | **failed on AC** — image loaded, died after `Suspending console(s)` |
 | 21:16 | X, `platform`, debug cmdline | AC | **OK** | **OK** — same boot id, `returned result=success` |
+| 21:23 | X, `platform`, debug cmdline | battery | **OK** — image found and loaded | **failed** — boot kernel reached the jump, restored kernel never returned |
 
 **On AC nothing has ever failed** — three saves, two restores. **On battery
 nothing has ever fully succeeded.** The active VT does not decide whether it
@@ -781,6 +787,61 @@ against a cold boot.
 `platform`-mode restores on AC are now **3 for 3**, including one with the
 debug command line. So if Test E fails on battery, the command line is not
 the reason.
+
+### Test E: `platform` mode on battery — the boot kernel hands over, the restored kernel never returns
+
+2026-09-10 21:23, `pkexec bin/hibernate-trial` (default `platform` mode),
+from X, on battery at 66%, booted with the debug command line, and filmed. PPD
+happened to be on `balanced` (`max_perf_pct=100`), so the CPU policy was
+close to AC's for this save.
+
+- **The journal** ends at the trial's `start ac=0 bat=Discharging ...
+  mode=default` line (21:23:22). There is no `returned` line. The next boot
+  (21:25:24) reports `Image not found`.
+- **The film settles where it died.** Transcribed from the last frame:
+
+  ```
+  [7.664] PM: Image loading done
+  [7.664] PM: hibernation: Read 1497728 kbytes in 5.49 seconds (275.82 MB/s)
+  [8.423] ACPI: EC: interrupt blocked
+  [8.424] ACPI: EC: event blocked
+  [8.424] ACPI: EC: EC stopped
+  [8.429] Disabling non-boot CPUs ...
+  [8.440] smpboot: CPU 3 is now offline
+  [8.449] smpboot: CPU 2 is now offline
+  [8.456] smpboot: CPU 1 is now offline
+          <cursor; nothing more>
+  ```
+
+With `no_console_suspend`, the boot kernel printed its whole side. It loaded
+all 374,432 pages of the image. Then `platform` mode's `pre_restore` stopped
+the EC (the step `shutdown` mode skips), and the other CPUs went offline. After
+CPU 1 there is only `syscore_suspend` and the jump into the image, and neither
+prints. **So on battery the boot kernel reaches the hand-over, and the
+restored kernel dies after it.** That rules out the image load, the
+decompression and the boot kernel's device quiesce.
+
+On AC, E0's restored kernel went on to log this sequence:
+1. `Restoring platform NVS memory`
+2. `Enabling non-boot CPUs`
+3. `Waking up from system sleep state S4` (`_WAK`)
+4. a 1.44 s device restore
+
+Test E died somewhere in that sequence, before i915 had lit the panel. The
+restored kernel's console is i915's, so it is blind until then.
+
+**What this says about the battery failure, in `platform` mode:**
+- **The save completed.** The initramfs found and loaded a complete image.
+  So this run was a restore failure, not a save hang.
+- **The CPU policy is a weaker suspect.** The save ran at `max_perf_pct=100`,
+  as on AC.
+- **The candidates** are what the restored kernel does differently on battery
+  right after it wakes: the Smart Battery driver's resume (`sbs` refreshes
+  the whole battery over the EC's SMBus, about 160 EC transactions), EC events
+  that queued while discharging and fire when the EC is re-enabled, and
+  `_WAK`'s `PWRS = EC.EACP` → `PNOT()` CPU notifications arriving while the
+  CPUs come back.
+- This is one run.
 
 ### The firmware's sleep methods do not look at the power source
 
