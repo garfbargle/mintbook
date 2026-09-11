@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""input-boost — lift the CPU cap the moment you touch the machine.
+
+Measured (bin/boost-probe, docs/measurements/2026-09-11-boost-at-input.md): the
+battery cap, max_perf_pct=70, costs ~260 ms on ~1 s of single-core work. Writing
+100 at the moment of input, before the work starts, gets all of it back. The
+same boost through /run/mintbook-power/want (path unit, root script,
+powerprofilesctl) gets about 60% of it back, because it lands late.
+
+So this does the two things turbo-budget could not. It triggers on input, not on
+CPU load, so background work never spends the boost. And it writes max_perf_pct
+itself, one write with no process in between. That needs the tmpfiles rule from
+bin/power-install, which makes the file writable by the desktop group.
+
+A key or button press lifts the cap, and it comes back HOLD seconds after the
+last one. No boost lasts more than MAXBOOST seconds in a row: after that the cap
+stays until input stops for REARM seconds, so typing over a long compile does
+not uncap the compile. The cap it puts back is whatever mintbook-power-apply
+last set, read from /run/mintbook-power/cap, so a profile change or an AC plug
+during a boost is never undone.
+
+It asks the X server for raw key and button presses only. Pointer motion is
+never selected, so moving a finger on the touchpad does not wake it.
+"""
+import ctypes
+import os
+import select
+import sys
+import time
+
+CAP = '/sys/devices/system/cpu/intel_pstate/max_perf_pct'
+POLICY = '/run/mintbook-power/cap'
+HOLD = float(os.environ.get('HOLD', '2'))          # seconds uncapped after the last press
+MAXBOOST = float(os.environ.get('MAXBOOST', '8'))  # longest boost in a row
+REARM = float(os.environ.get('REARM', '1'))        # press-free gap that re-arms after MAXBOOST
+REPORT = float(os.environ.get('REPORT', '600'))    # seconds between journal summaries
+
+GENERIC_EVENT = 35
+XI_RAW_KEY_PRESS, XI_RAW_BUTTON_PRESS = 13, 15
+XI_ALL_MASTER_DEVICES = 1
+
+
+class XIEventMask(ctypes.Structure):
+    _fields_ = [('deviceid', ctypes.c_int), ('mask_len', ctypes.c_int),
+                ('mask', ctypes.POINTER(ctypes.c_ubyte))]
+
+
+class XEvent(ctypes.Union):     # only .type is read; the rest is room for Xlib
+    _fields_ = [('type', ctypes.c_int), ('pad', ctypes.c_long * 24)]
+
+
+def policy():
+    try:
+        with open(POLICY) as f:
+            return int(f.read())
+    except (OSError, ValueError):
+        return None
+
+
+def write_cap(pct):
+    with open(CAP, 'w') as f:
+        f.write(str(pct))
+
+
+def open_x():
+    x11 = ctypes.CDLL('libX11.so.6')
+    xi = ctypes.CDLL('libXi.so.6')
+    dp, ip = ctypes.c_void_p, ctypes.POINTER(ctypes.c_int)
+    x11.XOpenDisplay.restype, x11.XOpenDisplay.argtypes = dp, [ctypes.c_char_p]
+    x11.XDefaultRootWindow.restype, x11.XDefaultRootWindow.argtypes = ctypes.c_ulong, [dp]
+    x11.XConnectionNumber.argtypes = [dp]
+    x11.XPending.argtypes = [dp]
+    x11.XNextEvent.argtypes = [dp, ctypes.c_void_p]
+    x11.XFlush.argtypes = [dp]
+    x11.XQueryExtension.argtypes = [dp, ctypes.c_char_p, ip, ip, ip]
+    xi.XIQueryVersion.argtypes = [dp, ip, ip]
+    xi.XISelectEvents.argtypes = [dp, ctypes.c_ulong, ctypes.POINTER(XIEventMask), ctypes.c_int]
+
+    dpy = x11.XOpenDisplay(None)
+    if not dpy:
+        sys.exit('input-boost: cannot open the X display (is DISPLAY set?)')
+    opcode, first_ev, first_err = ctypes.c_int(), ctypes.c_int(), ctypes.c_int()
+    if not x11.XQueryExtension(dpy, b'XInputExtension', ctypes.byref(opcode),
+                               ctypes.byref(first_ev), ctypes.byref(first_err)):
+        sys.exit('input-boost: no XInput extension')
+    major, minor = ctypes.c_int(2), ctypes.c_int(2)
+    if xi.XIQueryVersion(dpy, ctypes.byref(major), ctypes.byref(minor)) != 0:
+        sys.exit('input-boost: XInput 2.2 not available')
+    bits = (ctypes.c_ubyte * 2)()
+    for e in (XI_RAW_KEY_PRESS, XI_RAW_BUTTON_PRESS):
+        bits[e >> 3] |= 1 << (e & 7)
+    mask = XIEventMask(XI_ALL_MASTER_DEVICES, len(bits), bits)
+    xi.XISelectEvents(dpy, x11.XDefaultRootWindow(dpy), ctypes.byref(mask), 1)
+    x11.XFlush(dpy)
+    return x11, dpy
+
+
+def main():
+    if not os.access(CAP, os.W_OK):
+        sys.exit(f'input-boost: {CAP} is not writable; run pkexec bin/power-install')
+    if policy() is None:
+        sys.exit(f'input-boost: no {POLICY}; run pkexec bin/power-install')
+    x11, dpy = open_x()
+    fd = x11.XConnectionNumber(dpy)
+    ev = XEvent()
+
+    boosted = spent = False
+    start = last = restore = 0
+    boosts, uncapped = 0, 0.0
+    report_at = time.monotonic() + REPORT
+    print(f'input-boost: cap lifted on a key or button press, back {HOLD:g} s after '
+          f'the last, never more than {MAXBOOST:g} s in a row', flush=True)
+
+    while True:
+        pressed = False
+        while x11.XPending(dpy):
+            x11.XNextEvent(dpy, ctypes.byref(ev))
+            pressed |= ev.type == GENERIC_EVENT
+        now = time.monotonic()
+
+        if pressed:
+            if spent and now - last >= REARM:
+                spent = False
+            last = now
+            if not boosted and not spent:
+                restore = policy()
+                if restore is not None and restore < 100:
+                    write_cap(100)
+                    boosted, start = True, now
+                    boosts += 1
+
+        if boosted and (now >= last + HOLD or now >= start + MAXBOOST):
+            spent = now >= start + MAXBOOST
+            p = policy()
+            write_cap(p if p is not None else restore)
+            boosted = False
+            uncapped += now - start
+
+        # Lazily, on the next wakeup: a summary timer would wake an idle machine.
+        if now >= report_at:
+            if boosts:
+                print(f'last {REPORT:g} s: {boosts} boosts, {uncapped:.0f} s uncapped', flush=True)
+            boosts, uncapped, report_at = 0, 0.0, now + REPORT
+
+        timeout = max(0.0, min(last + HOLD, start + MAXBOOST) - now) if boosted else None
+        select.select([fd], [], [], timeout)
+
+
+if __name__ == '__main__':
+    main()

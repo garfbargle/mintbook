@@ -148,9 +148,11 @@ eating it, and one switch.
 The switch is the same power profile the Control Center's Power tile sets,
 through the same `60-power` plugin, so the two cannot disagree about what is
 live. Both read the profile back **from `power-profiles-daemon`** rather than
-from what they last wrote, which is why it moves on its own while
-[`bin/turbo-budget`](../bin/turbo-budget) is granting and revoking bursts. That
-is the tile reporting the truth.
+from what they last wrote, so they show what is live even when something other
+than a click set it. Until 2026-09-11 the switch moved on its own every few
+seconds while `bin/turbo-budget` granted bursts.
+[`bin/input-boost`](../bin/input-boost), which replaced it, moves only the cap,
+never the profile.
 
 The charge graph is in the menu rather than one click further away, because
 that is the question you opened it to answer. Twelve hours of it, a window of

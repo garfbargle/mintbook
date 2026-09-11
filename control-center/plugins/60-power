@@ -3,9 +3,9 @@
 # what keeps this password-free; a genmon-spawned pkexec still prompted.
 # See docs/hardware.md for why Sustained caps at 75% rather than 100%.
 #
-# The tile can change on its own: bin/turbo-budget moves the profile between
-# power-saver and balanced as it grants and revokes bursts, and this reports
-# what is live rather than what was last asked for.
+# This reports what is live rather than what was last asked for.
+# bin/input-boost lifts the cap for a moment after input but never moves the
+# profile, so the tile does not follow it.
 WANT=/run/mintbook-power/want
 case "${1:-read}" in
   set)

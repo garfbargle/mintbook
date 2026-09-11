@@ -204,18 +204,20 @@ That copies:
   → `/etc/systemd/system/` (oneshot at boot; udev runs it again on unplug/plug)
 - [`config/systemd/mintbook-power-request.path`](../config/systemd/mintbook-power-request.path)
   + [`.service`](../config/systemd/mintbook-power-request.service) — panel writes
-  `/run/mintbook-power/want`, root applies it. **No password on click.** The
-  panel is not the only writer: [`bin/turbo-budget`](../bin/turbo-budget) uses
-  the same file on battery, so most `mode=balanced`/`mode=power-saver` lines in
-  `journalctl -t mintbook-power` are it, not clicks. Its own requests are in
-  `journalctl --user -u mintbook-turbo-budget`. A flip every few seconds was a
-  bug in it — see [feel.md](feel.md), item 3.
+  `/run/mintbook-power/want`, root applies it. **No password on click.** Until
+  2026-09-11 `bin/turbo-budget` wrote the same file on battery, and a
+  `mode=balanced`/`mode=power-saver` flip every few seconds in
+  `journalctl -t mintbook-power` was that, not clicks. Its replacement,
+  [`bin/input-boost`](../bin/input-boost), writes `max_perf_pct` directly and
+  never touches this file. See [feel.md](feel.md), item 3.
 - [`config/systemd/mintbook-power-settle.timer`](../config/systemd/mintbook-power-settle.timer)
   + [`.service`](../config/systemd/mintbook-power-settle.service) — re-applies the
   cap 90 s after boot, once thermald and PPD have started. See below.
 - [`config/tmpfiles.d/mintbook-power.conf`](../config/tmpfiles.d/mintbook-power.conf)
   → `/etc/tmpfiles.d/` (`/run/mintbook-power` owned by root and the invoking
-  desktop user's primary group, mode 0770)
+  desktop user's primary group, mode 0770; and `max_perf_pct` made writable by
+  that group, so [`bin/input-boost`](../bin/input-boost) can lift the cap with
+  no root helper in the path)
 - [`config/polkit/org.mintbook.power.policy`](../config/polkit/org.mintbook.power.policy)
   + [`10-mintbook-power.rules`](../config/polkit/10-mintbook-power.rules) — leftover
   `pkexec` from a terminal, not used by the panel

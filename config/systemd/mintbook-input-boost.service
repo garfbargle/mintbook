@@ -1,0 +1,24 @@
+# User service. Runs bin/input-boost for the life of the X session: a key or
+# button press lifts the CPU cap, and it comes back two seconds after the last.
+# See docs/feel.md.
+#
+# Needs max_perf_pct writable by the desktop group and /run/mintbook-power/cap,
+# both from:  pkexec bin/power-install
+#
+# Install:  systemctl --user enable --now mintbook-input-boost.service
+# Undo:     systemctl --user disable --now mintbook-input-boost.service
+[Unit]
+Description=mintbook input boost — uncapped CPU at the moment of input
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/mintbook/bin/input-boost
+# Put the cap back however the process ended, SIGKILL included.
+ExecStopPost=/bin/sh -c 'cat /run/mintbook-power/cap > /sys/devices/system/cpu/intel_pstate/max_perf_pct'
+Restart=on-failure
+RestartSec=5
+Nice=-1
+
+[Install]
+WantedBy=default.target

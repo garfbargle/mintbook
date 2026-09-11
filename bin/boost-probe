@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# boost-probe — does lifting the cap at the moment of input recover its cost?
+#
+# Four arms, interleaved, each starting from the battery cap (70) with the
+# governor settled for 1.5 s:
+#   A  the cap stays at 70
+#   B  100 written to max_perf_pct directly at t0, then the work starts
+#   C  the same trigger through /run/mintbook-power/want (path unit, root
+#      script, powerprofilesctl) — the channel turbo-budget used
+#   D  the cap already 100 for 1.5 s — the best case
+# on two sizes of single-core work, ~1 s and ~0.15 s.
+#
+# Root, because arm B writes max_perf_pct:   pkexec bin/boost-probe [ROUNDS]
+# Stop whatever else moves the cap first (mintbook-input-boost). The cap and
+# profile in effect on entry are restored on exit.
+# Result: docs/measurements/2026-09-11-boost-at-input.md.
+set -u
+
+[ "$(id -u)" -eq 0 ] || { echo "run as root: pkexec $0 [ROUNDS]" >&2; exit 1; }
+
+ROUNDS=${1:-8}
+P=/sys/devices/system/cpu/intel_pstate/max_perf_pct
+WANT=/run/mintbook-power/want
+OUT=$(mktemp -d)
+pct0=$(cat $P); prof0=$(powerprofilesctl get)
+trap 'echo "$prof0" > $WANT; sleep 1; echo "$pct0" > $P; rm -rf "$OUT"; echo "restored cap=$(cat $P)"' EXIT
+
+FIFO=$(mktemp -u); mkfifo "$FIFO"; exec 9<>"$FIFO"; rm -f "$FIFO"
+nap() { read -r -t "$1" -u 9 _ || true; }
+ms() { local t=${EPOCHREALTIME/./}; echo $((t / 1000)); }
+task() { taskset -c 0 python3 -c "x=0
+for i in range($1): x+=i" >/dev/null; }
+wait_cap() { local i; for i in $(seq 1 50); do [ "$(<$P)" = "$1" ] && return 0; nap 0.1; done; }
+
+run() {   # run ARM SIZE
+  local arm=$1 n=$2 t0 t1
+  case $arm in D) echo 100 > $P ;; *) echo 70 > $P ;; esac
+  nap 1.5
+  t0=$(ms)
+  case $arm in
+    B) echo 100 > $P ;;
+    C) echo balanced > $WANT ;;
+  esac
+  task "$n"; t1=$(ms)
+  if [ "$arm" = C ]; then echo power-saver > $WANT; wait_cap 70; nap 0.3; fi
+  printf '%s %s %s\n' "$arm" "$n" $((t1 - t0)) | tee -a "$OUT/runs"
+}
+
+echo power-saver > $WANT; wait_cap 70; nap 1
+for r in $(seq 1 "$ROUNDS"); do
+  for n in 3000000 500000; do for a in A B C D; do run $a $n; done; done
+done
+
+echo
+awk '{k=$1" "$2; v[k]=v[k]" "$3}
+  function med(s,  n,x,i,j,t) {
+    n = split(s, x, " ")
+    for (i = 1; i <= n; i++) for (j = i + 1; j <= n; j++) if (x[j]+0 < x[i]+0) { t = x[i]; x[i] = x[j]; x[j] = t }
+    return sprintf("%7.1f ms  [%s-%s]", n % 2 ? x[(n+1)/2] : (x[n/2] + x[n/2+1]) / 2, x[1], x[n])
+  }
+  END { for (k in v) print k, med(v[k]) }' "$OUT/runs" | sort -k2,2nr -k1,1

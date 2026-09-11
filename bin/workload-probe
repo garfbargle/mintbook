@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 """Compare installed power profiles with Mintbook source compilation, without executing it.
 
-Temporarily stops turbo-budget so a capped arm stays capped; restores the entry
+Temporarily stops input-boost so a capped arm stays capped; restores the entry
 profile and service state on exit. Run from a transient user service to avoid
 inheriting any GUI app's focus priority. Writes raw JSON to the supplied path.
 """
@@ -18,7 +18,8 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 CAP = Path('/sys/devices/system/cpu/intel_pstate/max_perf_pct')
 WANT = Path('/run/mintbook-power/want')
-TURBO = 'mintbook-turbo-budget.service'
+# turbo-budget until 2026-09-11; the name and the JSON keys stay for old results.
+TURBO = 'mintbook-input-boost.service'
 PROFILES = {'balanced': 100, 'performance': 75, 'power-saver': 70}
 
 
