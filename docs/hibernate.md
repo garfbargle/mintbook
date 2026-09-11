@@ -798,6 +798,11 @@ close to AC's for this save.
 - **The journal** ends at the trial's `start ac=0 bat=Discharging ...
   mode=default` line (21:23:22). There is no `returned` line. The next boot
   (21:25:24) reports `Image not found`.
+- **The swap header** reads `flags = 0x5` (platform and CRC32),
+  `crc32 = 0x8e29f4f2`, with the signature back to `SWAPSPACE2`. That is a
+  `platform`-mode image, consumed by the failed restore. It is Test E's:
+  E0's image had already been consumed by its own successful restore, so
+  Test E's save wrote the most recent header.
 - **The film settles where it died.** Transcribed from the last frame:
 
   ```
