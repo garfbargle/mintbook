@@ -204,7 +204,12 @@ That copies:
   → `/etc/systemd/system/` (oneshot at boot; udev runs it again on unplug/plug)
 - [`config/systemd/mintbook-power-request.path`](../config/systemd/mintbook-power-request.path)
   + [`.service`](../config/systemd/mintbook-power-request.service) — panel writes
-  `/run/mintbook-power/want`, root applies it. **No password on click.**
+  `/run/mintbook-power/want`, root applies it. **No password on click.** The
+  panel is not the only writer: [`bin/turbo-budget`](../bin/turbo-budget) uses
+  the same file on battery, so most `mode=balanced`/`mode=power-saver` lines in
+  `journalctl -t mintbook-power` are it, not clicks. Its own requests are in
+  `journalctl --user -u mintbook-turbo-budget`. A flip every few seconds was a
+  bug in it — see [feel.md](feel.md), item 3.
 - [`config/systemd/mintbook-power-settle.timer`](../config/systemd/mintbook-power-settle.timer)
   + [`.service`](../config/systemd/mintbook-power-settle.service) — re-applies the
   cap 90 s after boot, once thermald and PPD have started. See below.

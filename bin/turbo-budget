@@ -73,13 +73,16 @@ boost_until=0 last_req=0 spent_at=0 quiet_run=0
 baseline_pct=0
 mine=""                 # the last profile this script asked for
 
-request() {             # request PROFILE — rate-limited, state-change only
+request() {             # request PROFILE WHY — rate-limited, state-change only
   local p=$1 now=${EPOCHREALTIME%%.*}
   [ -z "$p" ] && return 1
   [ "$p" = "$mine" ] && return 0
   (( now - last_req < MINGAP )) && return 1
   echo "$p" > "$WANT" || return 1
   mine=$p; last_req=$now
+  # One journal line per request, from a builtin. Without it the only record is
+  # mintbook-power-apply's, which cannot tell this script apart from a click.
+  echo "request $p ($2, cpu ${busy_pct}%)"
   return 0
 }
 
@@ -104,6 +107,7 @@ echo "turbo-budget: ${BUDGET}s per burst above ${TRIGGER}% CPU, back to the cap 
 while :; do
   nap "$PERIOD"
   cpu_busy
+  if (( busy_pct < QUIET )); then quiet_run=$(( quiet_run + 1 )); else quiet_run=0; fi
   read -r pct < "$PSTATE"
   now=${EPOCHREALTIME%%.*}
 
@@ -121,28 +125,28 @@ while :; do
   case $state in
     normal)
       if (( busy_pct >= TRIGGER )); then
-        if request balanced; then
+        if request balanced burst; then
           state=boosted; boost_until=$(( now + BUDGET ))
         fi
       fi ;;
+    # A burst is over when the machine has gone quiet by the same rule that
+    # re-arms "spent" below, not when one sample dips. The first version ended a
+    # boost on a single sample under QUIET and went straight back to normal,
+    # skipping the re-arm rule: a desktop hovering around 15-25% then flipped
+    # the profile every 3 s (MINGAP) for minutes at a time. docs/feel.md.
     boosted)
-      if (( busy_pct < QUIET )); then
-        request "$(profile_for "$baseline_pct")" && state=normal   # burst over
+      if (( quiet_run >= QUIET_FOR )); then
+        request "$(profile_for "$baseline_pct")" 'burst over' && state=normal
       elif (( now >= boost_until )); then
-        request "$(profile_for "$baseline_pct")" && { state=spent; spent_at=$now; quiet_run=0; }
+        request "$(profile_for "$baseline_pct")" 'budget spent' && { state=spent; spent_at=$now; }
       fi ;;
     # Re-arming needs the machine to be quiet for a stretch, not for one sample —
     # and it happens anyway after COOLDOWN. A desktop with a live Electron app in
     # it is rarely below 15% for even a moment, and the first version of this
     # parked here permanently because of exactly that.
     spent)
-      if (( busy_pct < QUIET )); then
-        quiet_run=$(( quiet_run + 1 ))
-      else
-        quiet_run=0
-      fi
       if (( quiet_run >= QUIET_FOR || now - spent_at >= COOLDOWN )); then
-        state=normal; quiet_run=0
+        state=normal
       fi ;;
   esac
 done
