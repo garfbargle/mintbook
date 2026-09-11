@@ -79,6 +79,13 @@ while [ "$(systemctl show -p ActiveState --value $svc)" = activating ]; do sleep
 
 result=$(systemctl show -p Result --value $svc)
 logger -t hibernate-trial "returned result=$result ac=$(cat /sys/class/power_supply/ADP1/online 2>/dev/null)"
+# The liveness probe for a black-screen restore. If the restored kernel is
+# alive and only the panel is dead, this line reaches the disk within
+# seconds, and it survives a hard power-off made two minutes later. The power
+# button is no probe here: xfce4-power-manager holds handle-power-key and
+# answers with a dialog nobody can see.
+journalctl --sync 2>/dev/null || true
+sync
 echo "hibernate-trial: returned, $svc result=$result"
 journalctl -k -b --no-pager -o short-monotonic 2>/dev/null \
   | grep -E 'hibernation (entry|exit)|pm_test|Filesystems sync|Allocated .* kbytes|S4|Image|Wrote|Read [0-9]' | tail -12
