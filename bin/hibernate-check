@@ -130,7 +130,9 @@ fi
 
 echo
 echo "last hibernation seen in the journal"
-last=$(journalctl -k --no-pager 2>/dev/null | grep -E 'PM: hibernation entry|PM: hibernation exit|Image saved' | tail -3)
+# Kernel 7.0 prints "PM: hibernation: hibernation entry/exit"; the older
+# "PM: hibernation entry" form never matched here, so this always said "none".
+last=$(journalctl -k --no-pager 2>/dev/null | grep -E 'PM: (hibernation: )?hibernation (entry|exit)|Image saved' | tail -3)
 [ -n "$last" ] && printf '%s\n' "$last" | sed 's/^/  /' || echo "  (none yet)"
 
 echo
