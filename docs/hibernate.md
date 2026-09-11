@@ -38,7 +38,9 @@
   unloaded the camera driver, and the restore still failed**, so `facetimehd`
   is out too. **Test J (07:42) skipped the ACPI NVS restore
   (`acpi_sleep=s4_nonvs`) and still failed.** Next to isolate: the restored
-  kernel starting CPUs 1–3. The mechanism is not established.
+  kernel starting CPUs 1–3. **Test K (07:57) ran the whole cycle on CPU 0
+  alone and still failed**, so that is out too. The mechanism is not
+  established.
 - **Narrowed on 2026-09-10 evening.** A `pm_test=core` run on battery from X
   got through the whole save path except the image: VT switch, notifiers,
   sync, freeze, allocation, device freeze and ACPI `_PTS(4)`. It came back
@@ -463,6 +465,7 @@ hibernation started, and whether the charger was in.
 | 09-11 06:30 | X, `platform`, `pm_trace` | battery | **hung** — a device suspend returned an error | — |
 | 09-11 06:53 | X, `platform`, `facetimehd` unloaded | battery | **OK** — image loaded | **failed** — same as E, F, G |
 | 09-11 07:42 | X, `platform`, `acpi_sleep=s4_nonvs` | battery | **OK** | **failed** — same, screen stayed up longer |
+| 09-11 07:57 | X, `platform`, CPUs 1–3 offline | battery | **OK** | **failed** — same |
 
 **On AC nothing has ever failed** — three saves, two restores. **On battery
 nothing has ever fully succeeded.** The active VT does not decide whether it
@@ -1109,6 +1112,30 @@ bring-up sits inside the blind stretch where every battery restore dies, and
 it is the one step there not yet isolated. `hibernate-trial --offline-cpus`
 takes CPUs 1–3 offline before the save, so the restored kernel has none to
 start.
+
+### Test K: CPUs 1–3 offline for the whole cycle — same failure
+
+2026-09-11 07:57, after a reboot that dropped `s4_nonvs` (boot `194a6267`,
+no `acpi_sleep` in its kernel log). Run as `pkexec bin/hibernate-trial
+--offline-cpus` (default `platform` mode), from X, on battery, and filmed.
+
+- **CPUs 1–3 really were offline.** The kernel logged `smpboot: CPU 1/2/3 is
+  now offline` at 07:57:11, and the start line reads `... pm_trace=0 cpus=0`.
+  The trial refuses to hibernate if any stay up.
+- **The restore failed the same way.** There is no `returned` line, the next
+  boot (07:58:49, on battery) reports `Image not found`, and from the chair
+  there was nothing new on screen.
+
+**So the restored kernel starting its secondary CPUs is not what kills it.**
+With only CPU 0 in the image there was nothing to start, and it died anyway.
+The boot kernel still parks its own CPUs 1–3 before the jump, because it
+booted with all four, and that step has always worked. One run.
+
+What is left in the blind stretch after the jump: the syscore resume ops, the
+EC being re-enabled, `_WAK`, and the device resume that has to finish before
+i915 lights the panel. Tests F and I took two of those devices out (`sbs`,
+`facetimehd`) without effect. The next step is to see which device, if any,
+the restored kernel is resuming when it dies.
 
 ### The firmware's sleep methods do not look at the power source
 
