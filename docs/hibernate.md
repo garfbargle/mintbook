@@ -495,6 +495,36 @@ remaining difference is the physical power source: firmware, the EC, and the
 Smart Battery behind it. The 11:01 journal has since rotated away, so this
 rests on the earlier notes above rather than on a log that can be re-read.
 
+### The firmware's sleep methods do not look at the power source
+
+In `platform` hibernate mode, the default, the kernel calls the firmware's
+`_PTS(4)` before the snapshot and its `_WAK` after restore. That code runs on
+both the save path and the restore path, so it was worth checking for a
+battery branch. The tables were dumped and decompiled on 2026-09-10.
+
+- **The running DSDT is ours, not Apple's.** The boot log shows
+  `ACPI: Table Upgrade: override [DSDT-APPLE - MacBook]`. That is the Bluetooth
+  override ([bluetooth.md](bluetooth.md)), which only rewrites `SSDC._STA`.
+  `_PTS`, `_TTS` and `_WAK` are identical to the pre-patch dump in
+  `/var/lib/macbook-bt-ssdc/dsdt.dsl`; the only differences are iasl spelling
+  `0x00` versus `Zero`.
+- **Linux takes the Darwin branches.** `OSDW()` is true, because the kernel
+  answers `_OSI("Darwin")` on Apple hardware. The evidence is that `SMB0._STA`
+  returns present only under Darwin, and `sbs` is bound to it.
+- **`_PTS(4)`** writes port 80, sets `GP13 = 0`, sleeps 150 ms, and writes
+  `EC.ECSS = 4`, which tells the EC the target sleep state. Nothing else runs
+  under Darwin.
+- **`_WAK`** writes `ECSS = 0`, re-reads the lid, sets two GPIOs, copies
+  `PWRS = EC.EACP`, and calls `PNOT()`. `PNOT()` only sends CPU
+  performance/C-state notifies, and `_PPC` returns `CPLT`, not `PWRS`.
+
+**There is no branch on `PWRS` or `EACP` in any of them.** At the AML level,
+S4 entry and wake run the same code on battery as on AC. The only
+power-dependent AML is `_Q21` (the charger event) and the battery's own `UBST`.
+What the EC firmware does with `ECSS = 4` while discharging is invisible from
+here. That is the one place an ACPI S4 explanation could still live, and only
+a test that skips it (`HibernateMode=shutdown`) can speak to it.
+
 So the mechanism behind the battery correlation is **not established**. What is
 established is the shape of it, at 5 successes on AC and 0 clean cycles on
 battery.
