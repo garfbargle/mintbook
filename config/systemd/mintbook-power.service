@@ -4,6 +4,12 @@
 # Type=oneshot with no RemainAfterExit so a udev SYSTEMD_WANTS on charger
 # change will run it again. Undo: systemctl disable --now this unit and
 # delete the file.
+#
+# WantedBy=graphical.target, not multi-user.target: Ubuntu's stock
+# power-profiles-daemon.service has After=multi-user.target, so a unit that
+# is both After=power-profiles-daemon and pulled in by multi-user.target is
+# an ordering cycle, and systemd drops this job at every boot. See
+# docs/hardware.md, "The unit never ran at boot".
 [Unit]
 Description=mintbook MacBook8,1 AC/battery power policy
 After=power-profiles-daemon.service
@@ -14,4 +20,4 @@ Type=oneshot
 ExecStart=/usr/local/sbin/mintbook-power-apply
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=graphical.target

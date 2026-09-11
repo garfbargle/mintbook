@@ -80,7 +80,9 @@ install -m644 "$SETTLE_UNIT_SRC" "$SETTLE_UNIT_DST"
 echo "==> $SETTLE_TIMER_DST"
 install -m644 "$SETTLE_TIMER_SRC" "$SETTLE_TIMER_DST"
 systemctl daemon-reload
-systemctl enable mintbook-power.service
+# reenable, not enable: enable leaves an old multi-user.target.wants symlink
+# in place, and that symlink alone keeps the ordering cycle.
+systemctl reenable mintbook-power.service
 systemctl enable --now mintbook-power-request.path
 systemctl enable mintbook-power-settle.timer
 systemctl start mintbook-power.service
