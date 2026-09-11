@@ -1,17 +1,26 @@
 # Hibernation
 
-**Status 2026-09-10: works on AC, never yet completed on battery.**
+**Status 2026-09-10: works on AC. On battery the save can complete, but no
+restore has ever come back.**
 
 - **On AC, 5 for 5** — three saves, two restores, from both X and a text
   console, Apple SPI keyboard intact. `systemctl hibernate` on AC is reliable.
-- **On battery, 0 for 3.** From X it hangs on the save; from a text console it
-  saves and then hangs on the restore. The active VT changes *where* it fails,
-  not whether. The mechanism is not established.
+- **On battery, 0 for 4 full cycles.** ~~From X it hangs on the save; from a
+  text console it saves and then hangs on the restore.~~ Two battery saves are
+  now **known to have finished**: 11:49 from tty2, and Test B at 19:18 from X
+  in `HibernateMode=shutdown`, proved by the swap header. Neither restored.
+  Test B's restore died before userspace and left no journal, and it did so
+  with no ACPI S4 code involved. The two X "save hangs" (11:01, 11:30) left the
+  same evidence a consumed image leaves, so they may have been restore failures
+  too. **The restore is now the prime suspect.** The mechanism is not
+  established.
 - **Narrowed on 2026-09-10 evening.** A `pm_test=core` run on battery from X
   got through the whole save path except the image: VT switch, notifiers,
   sync, freeze, allocation, device freeze and ACPI `_PTS(4)`. It came back
-  unaided. The hang therefore more likely sits in the snapshot copy, the
-  image write, or the S4 power-off itself. One run; see "Test A".
+  unaided. ~~The hang therefore more likely sits in the snapshot copy, the
+  image write, or the S4 power-off itself.~~ Test B then showed that, in
+  `shutdown` mode, the copy and the write finish too. One run each; see
+  "Test A" and "Test B".
 - Charger out changes only the CPU policy (1,623 settings diffed), and the
   firmware's `_PTS`/`_WAK` do not branch on the power source.
 - **The overnight case is therefore not solved.** `suspend-then-hibernate`
@@ -336,9 +345,16 @@ the chain fired, and the last one hung the machine.
 So the escalation itself is **not** the problem. The RTC alarm woke the machine
 at exactly two minutes and systemd correctly moved to the hibernate leg.
 
-No image was written. The next boot's `swapon` said nothing about suspend data
+~~No image was written.~~ The next boot's `swapon` said nothing about suspend data
 — it just added ordinary swap — where the 09:50 failure had reported
 `software suspend data detected`. The machine needed a power cycle.
+
+**"No image was written" is retracted (2026-09-10 evening).** A silent
+`swapon` also follows an image that was written and then consumed by a restore
+attempt, and that restore attempt runs in the initramfs where the journal
+cannot see it. Test B produced exactly this evidence after a save that is
+proven to have finished. The 11:01 header has since been overwritten, so which
+of the two happened here cannot be recovered.
 
 It died very early. Compare how far each attempt got:
 
@@ -385,14 +401,18 @@ hibernation started, and whether the charger was in.
 | 11:49 | tty2 | battery | **OK** | hang, black screen |
 | 12:50 | tty2 | AC | **OK** | **OK** |
 | 18:53 | X, `pm_test=core` | battery | **early path OK** (no image by design) | — |
+| 19:18 | X, `mode=shutdown` | battery | **OK** — proved by the swap header | **failed** — consumed by a boot that left no journal |
 
 **On AC nothing has ever failed** — three saves, two restores. **On battery
 nothing has ever fully succeeded.** The active VT does not decide whether it
 fails, only where:
 
-- **X + battery** hangs on the save, before the image is complete. The next
-  boot found no image. ~~before `Filesystems sync` ever returns~~ — retracted
-  below; the journal cannot place it more precisely than that.
+- ~~**X + battery** hangs on the save, before the image is complete. The next
+  boot found no image. before `Filesystems sync` ever returns~~ — retracted
+  twice. The journal cannot place the hang, and "the next boot found no image"
+  is also what a consumed image looks like. Test B saved from X on battery, and
+  the image was complete. Whether 11:01 and 11:30 were save or restore
+  failures is unrecoverable.
 - **tty + battery** saves cleanly and then hangs on the restore, after
   "restoring image", with a black screen.
 
@@ -425,9 +445,13 @@ tty-versus-X rests on a single tty run on battery.
 The restore-side failure is one observation, so it is not yet a pattern. It is
 also **not proof the kernel stopped**: a completed resume with a dead panel is
 indistinguishable from the chair, and the machine was powered off again before
-journald could flush. Letting the black screen sit two minutes and then
+journald could flush. ~~Letting the black screen sit two minutes and then
 short-pressing power would decide it, since a live system shuts down cleanly on
-that event and leaves a journal behind.
+that event and leaves a journal behind.~~ That probe cannot work here:
+xfce4-power-manager holds `handle-power-key` and answers with a dialog nobody
+can see. Its replacement is in `bin/hibernate-trial`, which syncs a `returned`
+line to disk as soon as it is thawed. Test B used it, and the line is absent,
+so that restore did die before userspace (see "Test B").
 
 ### Ruled out by inspection
 
@@ -537,6 +561,73 @@ early hang, but the two X-on-battery failures now more likely stopped later:
 One number moved with the CPU policy: the allocation ran at **72.7 MB/s**,
 against 103–134 MB/s on AC. That is 24.5 s instead of 10–17 s. It doesn't
 explain a hang, but every stage on battery runs for longer.
+
+### Test B: a complete image on battery, from X, and a restore that never came back
+
+2026-09-10 19:18, `pkexec bin/hibernate-trial --mode shutdown`, started from X
+(vt7) on battery. `HibernateMode=shutdown` writes the image and then powers off
+with no ACPI S4. That means no `_PTS(4)` and no `ECSS=4` on the way down, and
+no `_WAK` on the way back. The mode is the one variable that changed against
+the failing X-on-battery runs.
+
+The journal says only this:
+
+```
+19:18:50  hibernate-trial: start ac=0 bat=Discharging vt=7 pm_test=none mode=shutdown
+19:18:51  kernel: PM: hibernation: hibernation entry
+          <boot e47e3f24 ends>
+19:55:09  <boot 0: PM: Image not found (code -22); swapon silent>
+```
+
+The user reported **two restarts**. On journal evidence alone that looks
+exactly like the 11:01 and 11:30 failures. The swap header does not:
+
+```
+$ pkexec dd if=/swapfile bs=4096 count=1   # swsusp_header, last 40 bytes
+sig      = SWAPSPACE2
+orig_sig = SWAPSPACE2
+flags    = 0x4        platform=0  crc32=1
+image    = 18980865   resume_offset + 1: the first page after the header
+crc32    = 0x685bf472
+```
+
+The kernel writes `flags`, `image` and `crc32` in `mark_swapfiles()`. That is
+the last step of the save, after every image page is on disk. A boot that
+finds the image puts back only the signature (`swsusp_check`: "Reset swap
+signature now"), and swapon's own rewrite touches only the signature too, so
+the other fields outlive the image. `platform=0` marks a `shutdown`-mode
+save. Every other image today was written in `platform` mode, so this header is
+Test B's.
+
+What that establishes:
+
+1. **The save completed.** This is the first battery hibernate started from X
+   that is known to have finished writing its image.
+2. **A boot found the image and consumed it, without leaving a journal.** That
+   was restart one. Resume runs in the initramfs before root is mounted, so a
+   restore that dies there writes nothing. Restart two is boot 0, which found
+   no image.
+3. **The restored system never got back to userspace.** A successful restore
+   keeps the boot id, and `e47e3f24` ends at 19:18:51. `hibernate-trial` also
+   syncs a `returned` line to disk the moment it is thawed, and there is none.
+   So this was not a live system behind a dead panel. It died in the restore
+   itself: the image load, the jump into the image, or the resume of devices
+   before thaw. Which of those is not known yet.
+4. **The restore failed without any ACPI S4 code.** A `platform=0` image is
+   restored with no platform hooks, so `_WAK` and the EC's S4 handling are
+   ruled out for the restore side, at least in this mode.
+
+**What this does to the earlier runs.** 11:01 and 11:30 were written up as save
+hangs because the next boot found no image and `swapon` said nothing. Test B
+leaves exactly that evidence after a save that finished. Their headers have
+since been overwritten, so they cannot be re-read. They may have been save
+hangs, or complete saves followed by a restore attempt that nobody noticed as a
+separate boot. The status line "never completed on battery" is now better read
+as **never restored on battery**: two battery saves are known to have finished
+(11:49 from tty2 in `platform` mode, and this one), and neither came back.
+
+This is one run. It does not show that `platform`-mode saves finish on battery.
+How restart one looked from the chair is still to be written down.
 
 ### The firmware's sleep methods do not look at the power source
 
