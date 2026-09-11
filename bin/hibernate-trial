@@ -5,6 +5,13 @@
 #   pkexec bin/hibernate-trial                    # a real hibernate, console armed
 #   pkexec bin/hibernate-trial --pm-test core     # whole save path except the image; comes back by itself
 #   pkexec bin/hibernate-trial --mode shutdown    # skip ACPI S4: no _PTS(4), no ECSS=4, no _WAK
+#   pkexec bin/hibernate-trial --unload sbs       # take modules out for the cycle, put them back after
+#
+# --unload takes a comma-separated module list. Each one is removed with
+# `modprobe -r` before hibernating, which also drops dependencies nothing else
+# holds (sbs takes sbshc with it), and is loaded again on return. If the
+# restore fails, the next boot loads them as usual. Refuses to hibernate if a
+# module will not come out, so a run never silently tests the wrong thing.
 #
 # What it does, in order:
 #   1. arms the three debug knobs that reset every boot, so a hang leaves its
@@ -26,11 +33,13 @@ set -euo pipefail
 
 PM_TEST=none
 MODE=
+UNLOAD=
 while [ $# -gt 0 ]; do
   case "$1" in
     --pm-test) PM_TEST=${2:?}; shift 2 ;;
     --mode)    MODE=${2:?}; shift 2 ;;
-    *) echo "usage: $0 [--pm-test freezer|devices|platform|processors|core] [--mode platform|shutdown]" >&2; exit 2 ;;
+    --unload)  UNLOAD=${2:?}; shift 2 ;;
+    *) echo "usage: $0 [--pm-test freezer|devices|platform|processors|core] [--mode platform|shutdown] [--unload mod1,mod2]" >&2; exit 2 ;;
   esac
 done
 case "$PM_TEST" in none|freezer|devices|platform|processors|core) ;; *) echo "bad --pm-test $PM_TEST" >&2; exit 2 ;; esac
@@ -41,8 +50,17 @@ DROPIN=/run/systemd/sleep.conf.d/90-hibernate-trial.conf
 cleanup() {
   echo none > /sys/power/pm_test 2>/dev/null || true
   rm -f "$DROPIN"
+  for m in ${UNLOAD//,/ }; do modprobe "$m" 2>/dev/null || true; done
 }
 trap cleanup EXIT
+
+for m in ${UNLOAD//,/ }; do
+  modprobe -r "$m"
+  if grep -q "^$m " /proc/modules; then
+    echo "hibernate-trial: $m is still loaded, not hibernating" >&2
+    exit 1
+  fi
+done
 
 echo 1 > /sys/power/pm_debug_messages
 echo N > /sys/module/printk/parameters/console_suspend
@@ -60,7 +78,7 @@ echo "$PM_TEST" > /sys/power/pm_test
 ac=$(cat /sys/class/power_supply/ADP1/online 2>/dev/null || echo '?')
 bat=$(cat /sys/class/power_supply/BAT0/status 2>/dev/null || echo '?')
 vt=$(fgconsole 2>/dev/null || cat /sys/class/tty/tty0/active 2>/dev/null || echo '?')
-msg="start ac=$ac bat=$bat vt=$vt pm_test=$PM_TEST mode=${MODE:-default}"
+msg="start ac=$ac bat=$bat vt=$vt pm_test=$PM_TEST mode=${MODE:-default} unload=${UNLOAD:-none}"
 logger -t hibernate-trial "$msg"
 journalctl --sync 2>/dev/null || true
 sync
