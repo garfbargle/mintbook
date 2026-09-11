@@ -4,8 +4,9 @@
 `HibernateMode=shutdown` never restores (0 for 3, AC included). On battery, no
 `platform`-mode cycle has ever completed.**
 
-- **On AC in `platform` mode, 5 for 5** — three saves, two restores, from both
-  X and a text console, Apple SPI keyboard intact. `systemctl hibernate` on AC
+- **On AC in `platform` mode, 7 for 7** — four saves, three restores (the last
+  one, Test E0, with the debug command line), from both X and a text console,
+  Apple SPI keyboard intact. `systemctl hibernate` on AC
   is reliable. ~~On AC, 5 for 5~~ was true only until Test D. A
   `shutdown`-mode cycle on AC saved and then failed to restore.
 - **On battery, 0 for 4 full cycles.** ~~From X it hangs on the save; from a
@@ -413,6 +414,7 @@ hibernation started, and whether the charger was in.
 | 19:18 | X, `mode=shutdown` | battery | **OK** — proved by the swap header | **failed** — consumed by a boot that left no journal |
 | 20:50 | X, `mode=shutdown` | battery | **OK** — new header crc | **failed on AC** — "error" flashed past |
 | 21:00 | X, `mode=shutdown` | **AC** | **OK** — new header crc | **failed on AC** — image loaded, died after `Suspending console(s)` |
+| 21:16 | X, `platform`, debug cmdline | AC | **OK** | **OK** — same boot id, `returned result=success` |
 
 **On AC nothing has ever failed** — three saves, two restores. **On battery
 nothing has ever fully succeeded.** The active VT does not decide whether it
@@ -740,6 +742,45 @@ On a machine whose EC raises a GPE burst every 5 s (see "EC traffic"), an
 event arriving across that jump is a plausible way to die. That fits all
 three `shutdown`-mode failures. It says nothing yet about why the one clean
 `platform`-mode battery run (11:49) failed.
+
+### Test E0: the AC control with the debug command line — restores
+
+2026-09-10 21:16, `pkexec bin/hibernate-trial` (default `platform` mode),
+from X, on AC, booted with `no_console_suspend pm_debug_messages`, and filmed.
+This run checks that the new command line does not break a restore on its
+own, and records what a working restore looks like, for comparison with
+battery.
+
+**It restored.** The boot id was `29bf1747` before and after.
+`hibernate-trial` logged `returned result=success` at 21:20:04. The kernel
+log for the cycle is complete, from both sides of the image:
+
+```
+[273.66] PM: hibernation: hibernation entry
+[273.89] Filesystems sync: 0.029 seconds
+[289.42] PM: hibernation: Allocated 1517996 kbytes in 15.52 seconds (97.80 MB/s)
+[290.21] PM: noirq freeze of devices complete after 2.559 msecs
+[290.21] ACPI: PM: Preparing to enter system sleep state S4
+[290.36] Disabling non-boot CPUs ...          CPU 3, 2, 1 offline
+[290.37] PM: hibernation: Creating image      377047 pages to copy
+         -- image written, powered off, restored --
+[290.37] ACPI: PM: Restoring platform NVS memory
+[290.37] Enabling non-boot CPUs ...           CPU 1, 2, 3 up
+[290.38] ACPI: PM: Waking up from system sleep state S4
+[292.02] PM: restore of devices complete after 1439.589 msecs
+[292.03] PM: hibernation: Hibernation image restored successfully.
+[292.63] PM: hibernation: hibernation exit
+```
+
+applespi shows the usual `crc mismatch` → `modeswitch done` pair and no SPI
+timeouts. The `error -2` lines around the restore are brcmfmac and facetimehd
+looking for optional firmware files as they re-probe. They look like
+ordinary firmware-probe noise, not a fault, but they were not compared
+against a cold boot.
+
+`platform`-mode restores on AC are now **3 for 3**, including one with the
+debug command line. So if Test E fails on battery, the command line is not
+the reason.
 
 ### The firmware's sleep methods do not look at the power source
 
