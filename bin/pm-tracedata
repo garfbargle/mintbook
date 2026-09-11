@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""pm-tracedata - map a pm_trace "hash matches FILE:LINE" to this kernel's trace points.
+
+    pkexec bin/pm-tracedata
+
+After a hang with /sys/power/pm_trace on, the next boot prints something like
+`PM: hash matches drivers/base/power/main.c:1988`. That line number belongs
+to *this* build of the kernel. It does not have to match upstream, and there is
+no kernel source on this machine to look it up in. The running kernel carries
+the table itself (__tracedata): one packed entry per TRACE_SUSPEND/TRACE_RESUME
+call site, a u16 line followed by a pointer to the __FILE__ string. This reads
+the table through /proc/kcore and prints every entry, with its pm_trace file
+hash, so the reported line can be ranked among the others and matched, in
+order, against the upstream source. See docs/hibernate.md, "Test H".
+
+Read-only. Root, because /proc/kallsyms hides addresses and /proc/kcore is
+root-only.
+"""
+import struct
+
+
+def hash_string(seed, data, mod):
+    """drivers/base/power/trace.c: file hash is hash_string(line, file, 997)."""
+    for c in data.encode():
+        seed = ((seed << 16) + (seed << 6) - seed + c) & 0xffffffff
+    return seed % mod
+
+
+def main():
+    syms = {}
+    with open('/proc/kallsyms') as f:
+        for line in f:
+            addr, _, name = line.split()[:3]
+            if name in ('__tracedata_start', '__tracedata_end'):
+                syms[name] = int(addr, 16)
+    start, end = syms.get('__tracedata_start', 0), syms.get('__tracedata_end', 0)
+    if not start or end <= start:
+        raise SystemExit(f'no usable __tracedata symbols ({syms}); run as root')
+
+    kc = open('/proc/kcore', 'rb')
+    hdr = kc.read(64)
+    phoff, = struct.unpack_from('<Q', hdr, 0x20)
+    phentsize, phnum = struct.unpack_from('<HH', hdr, 0x36)
+    loads = []
+    for i in range(phnum):
+        kc.seek(phoff + i * phentsize)
+        ptype, _, off, vaddr, _, filesz = struct.unpack_from('<IIQQQQ', kc.read(phentsize))
+        if ptype == 1:  # PT_LOAD
+            loads.append((vaddr, off, filesz))
+
+    def read(va, n):
+        for v, o, s in loads:
+            if v <= va and va + n <= v + s:
+                kc.seek(o + va - v)
+                return kc.read(n)
+        raise ValueError(f'{va:#x} not in /proc/kcore')
+
+    raw = read(start, end - start)
+    entries = []
+    for i in range(0, len(raw) - 9, 10):
+        line, ptr = struct.unpack_from('<HQ', raw, i)
+        entries.append((read(ptr, 256).split(b'\0', 1)[0].decode(errors='replace'), line))
+
+    print(f'{len(entries)} trace points')
+    for fname, line in sorted(entries):
+        print(f'{fname}:{line}  filehash={hash_string(line, fname, 997)}')
+
+
+if __name__ == '__main__':
+    main()
