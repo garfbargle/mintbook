@@ -65,7 +65,7 @@ as latency work.
 |---|---|---|
 | 1 | Keyboard repeat | **applied** — 500 ms / 20 Hz → 200 / 40 |
 | 2 | Quiet the maintenance timers | built and measured; **needs one root command** |
-| 3 | Cap the sustained, not the burst | measured, built, **running** |
+| 3 | Cap the sustained, not the burst | turbo-budget **retired**; `input-boost` built, measured, **running** |
 | 4 | Priority for the desktop | measured by proxy, built; **needs one root command** |
 | 5 | Focus-follows-priority | built, **running** — reach is limited, see below |
 | 6 | Writeback in bytes | written, **unproven**; needs root |
@@ -80,7 +80,7 @@ supporting evidence, and item 9 was already fine. Those are in the entries.
 
 ## Tools this pass added
 
-All read-only or self-restoring, and none need root.
+All read-only or self-restoring. Only `boost-probe` needs root.
 
 | | |
 |---|---|
@@ -93,7 +93,8 @@ All read-only or self-restoring, and none need root.
 | [`bin/desktop-nice`](../bin/desktop-nice) | `--check` lists the desktop's nice values |
 | [`bin/focus-priority`](../bin/focus-priority) | `--check` lists real app trees and thread priorities |
 | [`bin/warm-cache`](../bin/warm-cache) | `--check` lists what would be read, and free memory |
-| [`bin/turbo-budget`](../bin/turbo-budget) | `--check` reports the cap and whether the budget is armed |
+| [`bin/boost-probe`](../bin/boost-probe) | Times work with the cap lifted at the moment of input, directly and through `want`. Root |
+| [`bin/input-boost`](../bin/input-boost) | The daemon. Its journal logs boosts and uncapped seconds every 10 minutes |
 | [`bin/runaway-watch`](../bin/runaway-watch) | `--check` lists orphaned processes and what they are burning |
 
 ## What is left for root
@@ -212,7 +213,7 @@ Not yet applied: needs root, and no password is available to this session.
 sudo bin/quiet-timers        # then: bin/quiet-timers --check
 ```
 
-### 3. Cap the sustained, not the burst — **measured, built, running**
+### 3. Cap the sustained, not the burst — **built twice; the second one is running**
 
 The inference above is now a measurement. [`bin/burst-probe`](../bin/burst-probe)
 times a fixed ~1 s single-core task under each cap, interleaved, and prints the
@@ -237,8 +238,8 @@ So both of these are true, and they are not in conflict:
 | sustained | **capped** — 75 does 20–25% more work than 100 | [hardware.md](hardware.md) |
 
 An uncapped chassis sprints into the 95 C wall and then eats throttle stalls.
-A capped one never gets the sprint. [`bin/turbo-budget`](../bin/turbo-budget)
-takes both: while a cap is in force it grants **8 uncapped seconds** at the
+A capped one never gets the sprint. `bin/turbo-budget` — retired 2026-09-11 for
+`bin/input-boost`, below, and still in git history — took both: while a cap is in force it grants **8 uncapped seconds** at the
 start of any burst, then hands the cap back and keeps it until the machine goes
 quiet. A click gets the whole chip; a compile gets the cap it was always going
 to get.
@@ -263,9 +264,11 @@ a `read` timeout on a fifo nobody writes to. The most expensive software ever
 found on this machine was a panel plugin that forked a Python interpreter twice
 a tick.
 
+Removed 2026-09-11, when `input-boost` replaced it:
+
 ```bash
-systemctl --user enable --now mintbook-turbo-budget.service   # installed and running
-systemctl --user disable --now mintbook-turbo-budget.service  # undo
+systemctl --user disable --now mintbook-turbo-budget.service
+rm ~/.config/systemd/user/mintbook-turbo-budget.service
 ```
 
 Tunable through the environment: `BUDGET` (8 s), `TRIGGER` (25% of total CPU),
@@ -417,6 +420,16 @@ Not measured: what boosting at every key press costs in battery and temperature
 over a real session. Every 10 minutes it logs how many boosts it gave and how
 many seconds were uncapped (`journalctl --user -u mintbook-input-boost`), and
 that is the data for it.
+
+```bash
+pkexec bin/power-install     # the tmpfiles rule, and /run/mintbook-power/cap
+cp config/systemd/mintbook-input-boost.service ~/.config/systemd/user/
+systemctl --user enable --now mintbook-input-boost.service
+systemctl --user disable --now mintbook-input-boost.service   # undo
+```
+
+Tunable through the environment: `HOLD` (2 s), `MAXBOOST` (8 s), `REARM` (1 s),
+`REPORT` (600 s).
 
 If the daemon is killed with `SIGKILL` while boosted, the cap stays at 100 until
 something else asserts it — the next AC transition, or `power-apply --reassert`.
@@ -720,7 +733,7 @@ asks about it:
 ### It is not a "high CPU" watcher, on purpose
 
 High CPU is usually *correct*. A compile, an encode, a browser decoding video,
-`turbo-budget` deliberately spending a burst — a notifier that interrupts
+a click that `input-boost` has uncapped — a notifier that interrupts
 those is a notifier you turn off within a day, and then it is not there for
 the one time it mattered. The value of this thing is entirely in how rarely it
 speaks.

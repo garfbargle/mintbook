@@ -230,10 +230,11 @@ function of about six lines in `bin/control-center` and a line in `GLYPHS`.
 - **`skip = on` when the hardware is missing.** `20-bluetooth` does this when
   the SSDC regression has eaten `hci0` — see [bluetooth.md](bluetooth.md).
 - **Report the truth, not the request.** Every plugin here reads the state back
-  from the system rather than from whatever it last wrote. This is why the
-  Power tile appears to change on its own: [`bin/turbo-budget`](../bin/turbo-budget)
-  moves the profile between `power-saver` and `balanced` as it grants and
-  revokes bursts, and the tile shows whichever is live at that moment.
+  from the system rather than from whatever it last wrote, so the Power tile
+  shows the live profile even when something other than a click set it. Until
+  2026-09-11 it changed every few seconds on its own, because `bin/turbo-budget`
+  switched profiles to grant bursts. [`bin/input-boost`](../bin/input-boost),
+  which replaced it, moves only the cap, so the tile no longer follows it.
 
 ### Behind the chevron
 
