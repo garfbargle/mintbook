@@ -27,8 +27,10 @@
   battery, and filmed it.** The save completed, and the boot kernel loaded
   the image, stopped the EC, parked the CPUs, and handed over. The restored
   kernel never came back. The battery failure is therefore, in that run, a
-  death in the restored kernel's first steps after the jump. The mechanism is
-  not established.
+  death in the restored kernel's first steps after the jump. **Test F (21:43)
+  repeated it with the Smart Battery driver unloaded, and it failed the same
+  way**, so `sbs` is out. So is the CPU policy (E and F used different
+  profiles). The mechanism is not established.
 - **Narrowed on 2026-09-10 evening.** A `pm_test=core` run on battery from X
   got through the whole save path except the image: VT switch, notifiers,
   sync, freeze, allocation, device freeze and ACPI `_PTS(4)`. It came back
@@ -421,6 +423,7 @@ hibernation started, and whether the charger was in.
 | 21:00 | X, `mode=shutdown` | **AC** | **OK** — new header crc | **failed on AC** — image loaded, died after `Suspending console(s)` |
 | 21:16 | X, `platform`, debug cmdline | AC | **OK** | **OK** — same boot id, `returned result=success` |
 | 21:23 | X, `platform`, debug cmdline | battery | **OK** — image found and loaded | **failed** — boot kernel reached the jump, restored kernel never returned |
+| 21:43 | X, `platform`, `sbs` unloaded | battery | **OK** — image loaded | **failed** — same as 21:23 |
 
 **On AC nothing has ever failed** — three saves, two restores. **On battery
 nothing has ever fully succeeded.** The active VT does not decide whether it
@@ -847,6 +850,41 @@ restored kernel's console is i915's, so it is blind until then.
   `_WAK`'s `PWRS = EC.EACP` → `PNOT()` CPU notifications arriving while the
   CPUs come back.
 - This is one run.
+
+### Test F: the Smart Battery driver taken out — same failure
+
+2026-09-10 21:43, `pkexec bin/hibernate-trial --unload sbs` (default
+`platform` mode), from X, on battery at 53%, and filmed. The one change
+against Test E is that `sbs` was unloaded for the cycle. PPD was on
+`power-saver` (`max_perf_pct=70`) this time; Test E ran on `balanced` at 100.
+
+- **`sbs` really was out.** The start line reads `start ac=0 bat=? ...
+  unload=sbs`. `bat=?` means `BAT0/status` did not exist when the line was
+  written, and the trial refuses to hibernate if the module is still loaded.
+  `modprobe -r sbs` should also have taken `sbshc`, since nothing else held
+  it, but that was not logged.
+- **The restore failed.** There is no `returned` line. The next boot
+  (21:45:29) reports `Image not found` and loads `sbs`/`sbshc` normally.
+- **The film shows the same ending as Test E**: image loaded, EC stopped,
+  CPUs 3–2–1 offline, then nothing. This is from the user's viewing; the
+  frame was not transcribed.
+
+**So the Smart Battery driver's resume is not what kills the restored
+kernel.** It is ruled out, on one run. The CPU policy is now out for this
+failure too: the restore died with `balanced`/100 (E) and with
+`power-saver`/70 (F).
+
+What is left between "the boot kernel hands over" and "the restored kernel
+shows a panel" that could care about the power source:
+- the ACPI NVS restore
+- the EC being re-enabled with events that queued while discharging
+- `_WAK`'s `PWRS = EC.EACP` → `PNOT()` notifies as the CPUs come back
+- any device whose resume path the firmware treats differently on battery
+
+None of those has been separated yet. A cheaper split comes first: whether
+the battery matters at **save** time or at **restore** time, in `platform`
+mode. That has never been tested. (Test C tried it, in `shutdown` mode,
+which never restores at all.)
 
 ### The firmware's sleep methods do not look at the power source
 
