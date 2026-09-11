@@ -998,6 +998,47 @@ suspend/resume off, so devices run one at a time.
   starts resuming devices, and each one writes a new trace. None did, so it
   hung between the failed suspend and the first resume of the abort path.
 
+**The screen says more than the trace.** A photo of the frozen screen,
+taken by the user and transcribed:
+
+```
+PM: hibernation: Creating image
+PM: hibernation: Need to copy 379305 pages
+PM: hibernation: Image created (360812 pages copied, 18493 zero pages)
+ACPI: PM: Restoring platform NVS memory
+ACPI: EC: EC started
+Calling ...syscore resume ops (lapic, irqrouter, i8259, ioapic, timekeeping, intel_epb_restore, microcode)
+facetimehd 0000:02:00.0: Found FaceTime HD camera with device id: 1570
+facetimehd 0000:02:00.0: Failed to lock S2 PLL: 0xc902c902
+facetimehd 0000:02:00.0: DDR40 PHY PLL locked on safe settings
+...  DDR calibration, full memory verification succeeded
+facetimehd 0000:02:00.0: Loaded firmware, size: 1392kb
+facetimehd 0000:02:00.0: ISP woke up after 0ms
+...  FWMSG: APOLLO-ISP-APPLE banner, then ISP commands
+FWMSG: [DSO] CH = 0  Camera current config Get (0)
+<frozen>
+```
+
+So the snapshot was taken, the NVS restore and EC start went fine, and the
+kernel was **thawing devices so it could write the image**. It stopped inside
+the FaceTime camera driver (`facetimehd`, out of tree, DKMS). On thaw that
+driver re-initialises the camera from scratch: PLLs, DDR, a 1.3 MB firmware
+load, and booting the camera's image processor. The image was never written.
+
+- **This does not agree with the `pm_trace` decode**, which pointed at a
+  device *suspend* returning an error. The screen shows the kernel well into
+  *resuming* devices. The photo is direct evidence, and the decode rests on
+  small hashes that collide, so the photo wins. Why the RTC kept a
+  suspend-side trace is not understood.
+- **`Failed to lock S2 PLL` is not the clue.** It also appears on cold boots
+  on AC (20:53 and 21:02 on 09-10). [camera.md](camera.md) already records it
+  as cosmetic, because the lock-bit poll is inverted.
+- **Why this matters for the real failure:** the camera driver runs the same
+  full re-initialisation in the restored kernel on the way back, which is
+  exactly where E, F and G died, out of sight. On AC, E0's restored kernel got
+  through it. Whether this camera bring-up is what hangs on battery is the
+  next thing to test, by unloading `facetimehd` for one cycle.
+
 **What this is worth:** one run, with an instrument that changes the timing.
 It locates Test H's own save-side hang. It says nothing about the
 restore-side death in E, F and G, which this test was meant to see.
