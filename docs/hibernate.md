@@ -452,6 +452,49 @@ that event and leaves a journal behind.
   - **FBC is live on AC** (`FBC enabled`, `Compressing: yes`). Whether it
     changes on battery is what the AC/battery diff is for.
 
+### What changes when the charger comes out (measured)
+
+`bin/power-snapshot` was run on AC at 17:57, pulled at 18:02:58, then run again
+immediately and at +3 minutes (2026-09-10). It covers 1,623 keys: runtime PM
+and wakeup for all 614 devices that have it, PCIe ASPM and link state,
+pstate/cpufreq/EPB, backlight, DRM connectors, i915 debugfs
+(FBC/PSR/DRRS/power domains/runtime PM), i915/HDA/usbcore/nvme module
+parameters, vm writeback, and the xfce4-power-manager, X DPMS and PPD session
+state.
+
+**Almost nothing moves.** The whole diff, apart from the supply's own
+`online`/`status`:
+
+| key | AC | battery |
+|---|---|---|
+| PPD profile | balanced | power-saver |
+| `intel_pstate/max_perf_pct` | 100 | 70 |
+| EPB, all four CPUs | 6 | 15 |
+| `scaling_max_freq` | 2.4 GHz | 1.68 GHz |
+| i915 FBC `Compressing` | yes | no *(unverified: see below)* |
+
+The CPU policy rows are all `mintbook-power` responding to the charger. No
+runtime-PM control or status changed on any device. Neither did ASPM, the
+backlight (`acpi_video0` at 40), the writeback sysctls, DPMS or any xfconf key.
+The +3 minute snapshot matched the immediate one, so xfce4-power-manager applies
+nothing on a delay either.
+
+The FBC row is the only display difference. It is **not yet trusted**: the AC
+snapshot and both battery snapshots were each taken with a pkexec dialog on
+screen, and FBC drops compression whenever the front buffer is redrawn. It
+stayed at `no` at +3 minutes with the GPU idle, which argues it is real, but
+one pair of samples is not enough to say so.
+
+This matters for the 11:01 failure. It happened on battery while
+`mintbook-power` held `balanced max_perf_pct=100 epb=8`. That value comes from
+a profile request made on battery, and on this evening's log the same
+`balanced ... ac=0 ... epb=8` line recurs whenever the profile is picked by
+hand. So at 11:01 the CPU policy was within one EPB step of AC. If that
+reading is right, the software configuration all but ruled itself out, and the
+remaining difference is the physical power source: firmware, the EC, and the
+Smart Battery behind it. The 11:01 journal has since rotated away, so this
+rests on the earlier notes above rather than on a log that can be re-read.
+
 So the mechanism behind the battery correlation is **not established**. What is
 established is the shape of it, at 5 successes on AC and 0 clean cycles on
 battery.
