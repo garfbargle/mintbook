@@ -12,8 +12,10 @@ restore has ever come back.**
   Test B's restore died before userspace and left no journal, and it did so
   with no ACPI S4 code involved. The two X "save hangs" (11:01, 11:30) left the
   same evidence a consumed image leaves, so they may have been restore failures
-  too. **The restore is now the prime suspect.** The mechanism is not
-  established.
+  too. **The restore is now the prime suspect.** Test C restored a battery
+  save on AC, and it failed too, so the power source at restore time is not
+  the cause. Open confound: no `shutdown`-mode image has ever restored, even
+  one saved on AC. The mechanism is not established.
 - **Narrowed on 2026-09-10 evening.** A `pm_test=core` run on battery from X
   got through the whole save path except the image: VT switch, notifiers,
   sync, freeze, allocation, device freeze and ACPI `_PTS(4)`. It came back
@@ -402,6 +404,7 @@ hibernation started, and whether the charger was in.
 | 12:50 | tty2 | AC | **OK** | **OK** |
 | 18:53 | X, `pm_test=core` | battery | **early path OK** (no image by design) | — |
 | 19:18 | X, `mode=shutdown` | battery | **OK** — proved by the swap header | **failed** — consumed by a boot that left no journal |
+| 20:50 | X, `mode=shutdown` | battery | **OK** — new header crc | **failed on AC** — "error" flashed past |
 
 **On AC nothing has ever failed** — three saves, two restores. **On battery
 nothing has ever fully succeeded.** The active VT does not decide whether it
@@ -628,6 +631,36 @@ as **never restored on battery**: two battery saves are known to have finished
 
 This is one run. It does not show that `platform`-mode saves finish on battery.
 How restart one looked from the chair is still to be written down.
+
+### Test C: the same battery save, restored on AC — still fails
+
+2026-09-10 20:50. Same as Test B (`--mode shutdown`, from X, on battery,
+46%). This time the charger went in **while the machine was off**, and power
+was pressed only after that, so the restore ran on AC.
+
+- **The save completed again.** The header changed from Test B's
+  `crc32 = 0x685bf472` to `0xac44afe6`: `flags = 0x4` (platform bit clear) and
+  `image = 18980865`. That is a new, complete image.
+- **Plugging in while off put a battery graphic on screen.** That is the
+  firmware reacting to the charger; the OS was not running.
+- **The restore failed on AC.** From the chair: it "tried to resume",
+  something flashed past too fast to read, and **the word "error" was probably
+  on screen**. A full restart was needed. The journal agrees: the boot ends at
+  `hibernation entry` (20:50:38), there is no `returned` line, the next boot
+  (20:53:20) reports `Image not found`, and the header's signature is back to
+  `SWAPSPACE2`, so a boot consumed the image. The whole sequence took 2.7
+  minutes.
+
+So **the power source at restore time is not what breaks it.** An image saved
+on battery fails to restore on AC as well. One run.
+
+**A confound this exposes.** Both restores that ever worked (10:33 and 12:50)
+were `platform`-mode images saved on AC. Tests B and C were `shutdown`-mode
+images saved on battery. No `shutdown`-mode image has been restored on this
+machine at all, so "saved on battery" and "saved in shutdown mode" cannot yet
+be told apart. The only failure without that confound is 11:49 (battery,
+`platform`, tty2). The control is a `shutdown`-mode save and restore entirely
+on AC.
 
 ### The firmware's sleep methods do not look at the power source
 
