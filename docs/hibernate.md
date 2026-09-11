@@ -1163,6 +1163,17 @@ boot kernel never runs the trial. These are debug-only; **remove them when
 the investigation ends**. The pre-change file is
 `/etc/default/grub.bak-debug-*`.
 
+**Temporary, from 2026-09-11 07:13: `acpi_sleep=s4_nonvs` is appended** for
+Test J. It stops the kernel saving the ACPI NVS region at hibernate and
+writing it back after restore. On AC, `ACPI: PM: Restoring platform NVS
+memory` is the first thing a working restored kernel logs after the jump.
+That region holds firmware variables, `PWRS` (the power source) among them.
+Tests E, F, G and I all died in that blind stretch after the jump. Test H's
+photo showed an NVS restore completing on the save side, so this is the
+weaker lever, and it is being tried because the stronger ones (the battery
+and camera drivers) came out clean. **If Test J fails, remove it.** The
+pre-change file is `/etc/default/grub.bak-s4nonvs-20260911-071319`.
+
 `resume_offset` is counted in `PAGE_SIZE` units, while `filefrag` reports
 filesystem blocks. Both are 4096 here. The installer refuses to run if they ever
 stop matching, because a wrong offset resumes from garbage rather than failing.
