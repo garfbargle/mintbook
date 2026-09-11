@@ -39,8 +39,11 @@
   is out too. **Test J (07:42) skipped the ACPI NVS restore
   (`acpi_sleep=s4_nonvs`) and still failed.** Next to isolate: the restored
   kernel starting CPUs 1–3. **Test K (07:57) ran the whole cycle on CPU 0
-  alone and still failed**, so that is out too. The mechanism is not
-  established.
+  alone and still failed**, so that is out too. **Test L (08:21) finally
+  saw it:** with devices resuming one at a time, the restored kernel got
+  through the jump, `_WAK` and the noirq and early phases, and lit the panel.
+  It then froze in the main device-restore phase, after the USB root hubs.
+  The failing device is not yet named. The mechanism is not established.
 - **Narrowed on 2026-09-10 evening.** A `pm_test=core` run on battery from X
   got through the whole save path except the image: VT switch, notifiers,
   sync, freeze, allocation, device freeze and ACPI `_PTS(4)`. It came back
@@ -466,6 +469,7 @@ hibernation started, and whether the charger was in.
 | 09-11 06:53 | X, `platform`, `facetimehd` unloaded | battery | **OK** — image loaded | **failed** — same as E, F, G |
 | 09-11 07:42 | X, `platform`, `acpi_sleep=s4_nonvs` | battery | **OK** | **failed** — same, screen stayed up longer |
 | 09-11 07:57 | X, `platform`, CPUs 1–3 offline | battery | **OK** | **failed** — same |
+| 09-11 08:21 | X, `platform`, `pm_trace`, `facetimehd` unloaded | battery | **OK** | **failed later** — panel back, froze in device restore after the USB root hubs |
 
 **On AC nothing has ever failed** — three saves, two restores. **On battery
 nothing has ever fully succeeded.** The active VT does not decide whether it
@@ -976,7 +980,9 @@ suspend/resume off, so devices run one at a time.
   on disk. journald reported that file as `corrupted or uncleanly shut down`
   on the next boot. So even the synced line can be lost, and the liveness
   probe has that limit.
-- **The next boot decoded the trace:**
+- **Retracted after Test L:** the decode below is the Mac firmware's
+  reset of the CMOS date, not a trace. Test L's boot decoded exactly the same
+  `7:1:0` from a completely different hang. The next boot decoded the trace:
 
   ```
   PM: RTC time: 00:00:06, date: 2023-01-01
@@ -1136,6 +1142,68 @@ EC being re-enabled, `_WAK`, and the device resume that has to finish before
 i915 lights the panel. Tests F and I took two of those devices out (`sbs`,
 `facetimehd`) without effect. The next step is to see which device, if any,
 the restored kernel is resuming when it dies.
+
+### Test L: the restored kernel is alive — it dies in device restore, after the USB root hubs
+
+2026-09-11 08:21, `pkexec bin/hibernate-trial --pm-trace --unload facetimehd`
+(default `platform` mode), from X, on battery. The start line reads `...
+unload=facetimehd pm_trace=1 cpus=0-3`. The camera driver was out so that the
+save could get past the thaw that hung Test H. `pm_trace` was meant to record
+the restore.
+
+**The film showed the restored kernel's own console,** so the panel came back
+this time. Evidence that it is the restored kernel and not the save: it says
+`noirq restore of devices`, and only a kernel returning from an image says
+`restore` (the save side says `thaw`). The timestamps also continue the saved
+session's clock unbroken, as E0's did. Transcribed:
+
+```
+[1377.842] PM: hibernation: Creating image       <- the save, just before the snapshot
+           -- image written, powered off, booted, loaded, jumped --
+[1377.843] ACPI: PM: Restoring platform NVS memory
+[1377.843] ACPI: EC: EC started
+           Calling ...syscore resume ops (lapic, i8259, ioapic, timekeeping, epb, microcode, kvm)
+[1377.844] Enabling non-boot CPUs ...    CPU1, CPU2, CPU3 up
+[1377.852] ACPI: PM: Waking up from system sleep state S4
+[1377.858] ACPI: EC: interrupt unblocked
+[1377.879] PM: noirq restore of devices complete after 54.394 msecs
+[1377.915] PM: early restore of devices complete after 52.732 msecs
+[1377.968] drm card1-eDP-1: Skipping unprepare of already unprepared panel
+[1378.175] usb usb1: root hub lost power or was reset
+[1379.597] usb usb2: root hub lost power or was reset
+           <frozen>
+```
+
+So on battery, **the jump works**, and so do the NVS restore, the EC start,
+the syscore ops, CPUs 1–3, `_WAK`, and the noirq and early device phases. The
+panel comes back. Then it freezes during the main device-restore phase,
+somewhere after the xHCI root hubs. In the earlier runs, async resume let
+devices race ahead of i915, so the machine was dead before anything reached
+the screen. With `pm_trace` forcing devices one at a time, the panel came up
+first, and the console showed where it got to. One run.
+
+**`pm_trace` does not work on this machine, and Test H's decode is
+retracted.** The boot after Test L decoded exactly what Test H's boot decoded:
+
+```
+PM: RTC time: 00:00:04, date: 2023-01-01
+PM:   Magic number: 7:1:0
+PM:   hash matches drivers/base/power/main.c:1988
+memory memory48: hash matches
+```
+
+Two different hangs cannot leave the same trace: Test H froze in the camera's
+thaw on the save side, and Test L froze in the restored kernel's device
+restore. The simplest reading is that **the Mac firmware resets a CMOS date it
+rejects to 2023-01-01 00:00.** The firmware is dated 01/12/2023. That reset
+value happens to decode as `7:1:0`. That is inference, not observed. Either
+way, the `main.c:1988` / `TRACE_SUSPEND(error)` reading in Test H is not
+evidence of anything.
+
+**Next instrument:** `hibernate-trial --sync --print-times`. `pm_async=0`
+keeps the one-device-at-a-time order that let the panel come back, and
+`pm_print_times` prints `calling <device>` before each callback. The last
+such line on a frozen screen names the device. Neither touches the RTC.
 
 ### The firmware's sleep methods do not look at the power source
 
