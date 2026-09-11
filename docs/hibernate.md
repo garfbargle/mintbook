@@ -5,9 +5,10 @@ Wi-Fi driver is out for the cycle (Test N, one run).** The battery failure is
 the restored kernel hanging in `brcmfmac`'s `pci_pm_restore` (Test M,
 photographed). The fix is `config/systemd/system-sleep/mintbook-brcmfmac`,
 **installed 08:45**, and with it a plain `systemctl hibernate` on battery has
-now worked twice (Tests N and O). The lid is still on plain `suspend` until
-the full lid-close → s2idle → hibernate escalation has been run once on
-battery. Why only battery-saved
+now worked twice (Tests N and O). **The full lid-close → s2idle → hibernate
+escalation then worked on battery too (Test P, 08:53).** The lid itself is
+still on plain `suspend` in `/etc` until making `suspend-then-hibernate`
+permanent is approved. Why only battery-saved
 images trip `brcmfmac` is not known.
 
 ~~Status 2026-09-10, 21:10: works on AC in the default `platform` mode.
@@ -488,6 +489,7 @@ hibernation started, and whether the charger was in.
 | 09-11 08:31 | X, `platform`, sync + print_times, `facetimehd` unloaded | battery | **OK** | **failed** — hung in `brcmfmac`'s `pci_pm_restore` |
 | 09-11 08:39 | X, `platform`, **`brcmfmac` unloaded** | battery | **OK** | **OK** — same boot id, `returned result=success`, Wi-Fi back |
 | 09-11 08:45 | X, `platform`, **hook installed**, no `--unload` | battery | **OK** | **OK** — hook logged unload and reload, same boot id |
+| 09-11 08:53 | **lid close** → s2idle → `suspend-then-hibernate` (2 min), hook installed | battery | **OK** | **OK** — the full overnight chain, same boot id |
 
 **On AC nothing has ever failed** — three saves, two restores. **On battery
 nothing has ever fully succeeded.** The active VT does not decide whether it
@@ -1348,6 +1350,48 @@ for 14 with it in. One detail matters for the lid: systemd 255 sets
 hook's `suspend-then-hibernate` branch reads the same variable on the
 escalation leg, so the lid path should behave the same. It has not been run
 yet.
+
+### Test P: the overnight case, end to end, on battery — it works
+
+2026-09-11 08:53. This is the lid path the whole feature exists for, with the
+hook installed. For this one run, runtime-only drop-ins under `/run` set
+`HandleLidSwitch=suspend-then-hibernate` and `HibernateDelaySec=2min`. The
+permanent `/etc` files stayed on plain `suspend` and 30 min. logind was
+reloaded, not restarted, and it reported `suspend-then-hibernate` on battery
+with `suspend` unchanged on AC. No `handle-lid-switch` inhibitor was held,
+and xfconf's `logind-handle-lid-switch` was `true`. On battery at 49%, the
+lid was closed, left for about 16 minutes, opened, and power pressed.
+
+```
+08:53:05  systemd-logind: Lid closed.
+08:53:06  kernel: PM: suspend entry (s2idle)
+08:55:07  applespi: modeswitch done                          <- RTC wake, 2 min on the nose
+08:55:08  systemd-sleep: System returned from sleep operation 'suspend-then-hibernate'.
+08:55:08  systemd-sleep: mintbook-brcmfmac: pre suspend-then-hibernate (hibernate): brcmfmac unloaded
+08:55:08  systemd-sleep: Performing sleep operation 'hibernate'...
+08:55:08  kernel: PM: hibernation: hibernation entry
+          -- image written, powered off with the lid shut, power pressed, restored on battery --
+09:09:08  kernel: ACPI: PM: Waking up from system sleep state S4
+09:09:08  applespi: crc mismatch -> modeswitch done
+09:09:09  kernel: PM: hibernation: hibernation exit
+09:09:09  systemd-sleep: mintbook-brcmfmac: post suspend-then-hibernate (hibernate): brcmfmac reloaded
+```
+
+**Every link held.** The lid went to s2idle. The RTC woke it at exactly two
+minutes, and systemd moved to the hibernate leg, where the hook's
+`suspend-then-hibernate` branch saw `SYSTEMD_SLEEP_ACTION=hibernate` and took
+`brcmfmac` out. The image was written and the machine powered off with the
+lid shut, then restored on battery. The boot id was `c806b0f8` throughout,
+the Wi-Fi came back, and applespi was healthy. `Lid opened` carries 09:09:08
+only because logind handled the queued event after the thaw.
+
+Compare 11:01 on 2026-09-10: the same escalation, before the fix, wedged
+with the lid shut. That run was recorded as a save hang, a reading later
+retracted. With `brcmfmac` out of the way, the same path now completes.
+
+This settles item 1 of "What is still unproven" for one run. The runtime
+drop-ins were removed straight after, and logind was reloaded back to plain
+`suspend`.
 
 ### The firmware's sleep methods do not look at the power source
 
