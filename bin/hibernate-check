@@ -113,6 +113,22 @@ mode=$(sed -n 's/.*\[\([^]]*\)\].*/\1/p' /sys/power/mem_sleep 2>/dev/null)
                      || say bad "mem_sleep" "${mode:-unknown} - want s2idle"
 
 echo
+echo "the Wi-Fi hook (without it an image saved on battery hangs on restore)"
+# The restored kernel hangs in brcmfmac's pci_pm_restore on any image saved
+# on battery (docs/hibernate.md, "Test M"); the hook takes the driver out for
+# the hibernate leg. Missing, it is a silent failure: hibernation still looks
+# healthy on AC, and only the overnight case breaks.
+hook=/usr/lib/systemd/system-sleep/mintbook-brcmfmac
+hook_src="$(cd "$(dirname "$0")/.." && pwd)/config/systemd/system-sleep/mintbook-brcmfmac"
+if [ ! -x "$hook" ]; then
+  say bad "brcmfmac hook" "missing - battery hibernation will hang on restore; run bin/hibernate-install"
+elif [ -f "$hook_src" ] && ! cmp -s "$hook" "$hook_src"; then
+  say bad "brcmfmac hook" "$hook differs from the repo copy - re-run bin/hibernate-install"
+else
+  say good "brcmfmac hook" "$hook"
+fi
+
+echo
 echo "last hibernation seen in the journal"
 last=$(journalctl -k --no-pager 2>/dev/null | grep -E 'PM: hibernation entry|PM: hibernation exit|Image saved' | tail -3)
 [ -n "$last" ] && printf '%s\n' "$last" | sed 's/^/  /' || echo "  (none yet)"
