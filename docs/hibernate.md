@@ -801,6 +801,18 @@ else:
 GRUB_CMDLINE_LINUX_DEFAULT="intel_iommu=off mitigations=off resume=UUID=7e20499d-3977-4253-9dfc-590530d5b1fe resume_offset=18980864"
 ```
 
+**Temporary, from 2026-09-10 21:09: `no_console_suspend pm_debug_messages`
+are appended** for the battery investigation. Test D's restore froze on the
+boot kernel's `printk: Suspending console(s)`. Without `no_console_suspend`
+the boot kernel prints nothing through its device quiesce, its CPU parking
+or the jump into the image, and that is exactly where restores die here.
+`pm_debug_messages` turns on the PM core's own progress lines from the first
+instant of boot, so the restore path in the initramfs prints them too. The
+runtime knobs `bin/hibernate-trial` sets cannot reach that far, because the
+boot kernel never runs the trial. These are debug-only; **remove them when
+the investigation ends**. The pre-change file is
+`/etc/default/grub.bak-debug-*`.
+
 `resume_offset` is counted in `PAGE_SIZE` units, while `filefrag` reports
 filesystem blocks. Both are 4096 here. The installer refuses to run if they ever
 stop matching, because a wrong offset resumes from garbage rather than failing.
