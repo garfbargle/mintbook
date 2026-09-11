@@ -32,7 +32,10 @@
   way**, so `sbs` is out. So is the CPU policy (E and F used different
   profiles). **Test G (21:55) restored a battery-saved image on AC, and it
   failed the same way**, so the battery matters at save time, not at restore
-  time. The mechanism is not established.
+  time. Test H (09-11, with `pm_trace`) hung on the save side instead, after a
+  device suspend returned an error. That hang is plausibly caused by the
+  instrument, and it does not speak to the restore. The mechanism is not
+  established.
 - **Narrowed on 2026-09-10 evening.** A `pm_test=core` run on battery from X
   got through the whole save path except the image: VT switch, notifiers,
   sync, freeze, allocation, device freeze and ACPI `_PTS(4)`. It came back
@@ -454,6 +457,7 @@ hibernation started, and whether the charger was in.
 | 21:23 | X, `platform`, debug cmdline | battery | **OK** — image found and loaded | **failed** — boot kernel reached the jump, restored kernel never returned |
 | 21:43 | X, `platform`, `sbs` unloaded | battery | **OK** — image loaded | **failed** — same as 21:23 |
 | 21:55 | X, `platform` | battery | **OK** — image loaded | **failed on AC** — charger in before power; same ending |
+| 09-11 06:30 | X, `platform`, `pm_trace` | battery | **hung** — a device suspend returned an error | — |
 
 **On AC nothing has ever failed** — three saves, two restores. **On battery
 nothing has ever fully succeeded.** The active VT does not decide whether it
@@ -946,6 +950,63 @@ branch. What is left is state that nothing here has been able to read yet:
 the restored kernel's first steps are blind. The next step is to see them
 instead of guessing: `pm_trace` stores the last device resume callback in the
 RTC, which survives a forced power-off.
+
+### Test H: `pm_trace` — a different hang, on the save side
+
+2026-09-11 06:30, `pkexec bin/hibernate-trial --pm-trace` (default `platform`
+mode), from X, on battery at about 30%. `pm_trace` makes the kernel write a
+hash of each device PM step into the CMOS clock. It also turns async
+suspend/resume off, so devices run one at a time.
+
+- **It hung on the way down, not on the restore.** From the chair, it froze
+  "at a different spot on shutdown", and a forced restart was needed. E, F
+  and G all saved and powered off cleanly, so this hang is new, and quite
+  possibly caused by `pm_trace` itself: devices now go one at a time, and the
+  CMOS clock is written at every step.
+- **That boot's journal ends at the pkexec authorisation (06:30:30).** The
+  trial's start line, written and synced before `systemctl hibernate`, is not
+  on disk. journald reported that file as `corrupted or uncleanly shut down`
+  on the next boot. So even the synced line can be lost, and the liveness
+  probe has that limit.
+- **The next boot decoded the trace:**
+
+  ```
+  PM: RTC time: 00:00:06, date: 2023-01-01
+  PM:   Magic number: 7:1:0
+  PM:   hash matches drivers/base/power/main.c:1988
+  memory memory48: hash matches
+  ```
+
+  `2023-01-01 00:00` decodes to 23, which is user value 7, file 1, device
+  hash 0.
+- **Line 1988 in this build** was read from the running kernel's own
+  `__tracedata` through `/proc/kcore` (`bin/pm-tracedata`). The twelve
+  `main.c` trace points are at 735, 806, 904, 950, 1049, 1128, 1439, 1500,
+  1634, 1698, 1874 and 1988. 1988 is the only one with file hash 1. Upstream
+  7.0.14, this kernel's base, has the same twelve calls. Matched in order,
+  1988 is the last: **`TRACE_SUSPEND(error)` at the end of
+  `device_suspend()`**. That is the main phase of both freeze and poweroff.
+- **User value 7 is that `error`, mod 16.** Every device passes 0 there on
+  success, so a device's suspend callback returned an error. As an unsigned
+  value it is ≡ 7 mod 16, which fits `-EBADF`, `-ENOTTY`, `-ENOBUFS` or
+  `-EREMOTEIO`. This is inference.
+- **Device hash 0** matches `input6` (the ACPI "Video Bus" input device) and
+  `memory48` by this boot's device names. Neither has a suspend callback that
+  can fail, so either the names differed on the traced boot or the hash
+  collided. **The device is not identified.**
+- **Nothing was traced after it.** After a failed device suspend the kernel
+  starts resuming devices, and each one writes a new trace. None did, so it
+  hung between the failed suspend and the first resume of the abort path.
+
+**What this is worth:** one run, with an instrument that changes the timing.
+It locates Test H's own save-side hang. It says nothing about the
+restore-side death in E, F and G, which this test was meant to see.
+
+The boot after it was slow. It had NVMe I/O timeouts at 36 s and 66 s
+(`completion polled`, meaning lost interrupts), and `systemd-rfkill` timed out
+behind them, about a minute of stalled startup. There have been none since.
+The CMOS clock came back through NTP after systemd had advanced it to the
+kernel's build date.
 
 ### The firmware's sleep methods do not look at the power source
 
