@@ -34,8 +34,9 @@
   failed the same way**, so the battery matters at save time, not at restore
   time. Test H (09-11, with `pm_trace`) hung on the save side instead, after a
   device suspend returned an error. That hang is plausibly caused by the
-  instrument, and it does not speak to the restore. The mechanism is not
-  established.
+  instrument, and it does not speak to the restore. **Test I (09-11 06:53)
+  unloaded the camera driver, and the restore still failed**, so `facetimehd`
+  is out too. The mechanism is not established.
 - **Narrowed on 2026-09-10 evening.** A `pm_test=core` run on battery from X
   got through the whole save path except the image: VT switch, notifiers,
   sync, freeze, allocation, device freeze and ACPI `_PTS(4)`. It came back
@@ -458,6 +459,7 @@ hibernation started, and whether the charger was in.
 | 21:43 | X, `platform`, `sbs` unloaded | battery | **OK** — image loaded | **failed** — same as 21:23 |
 | 21:55 | X, `platform` | battery | **OK** — image loaded | **failed on AC** — charger in before power; same ending |
 | 09-11 06:30 | X, `platform`, `pm_trace` | battery | **hung** — a device suspend returned an error | — |
+| 09-11 06:53 | X, `platform`, `facetimehd` unloaded | battery | **OK** — image loaded | **failed** — same as E, F, G |
 
 **On AC nothing has ever failed** — three saves, two restores. **On battery
 nothing has ever fully succeeded.** The active VT does not decide whether it
@@ -1048,6 +1050,33 @@ The boot after it was slow. It had NVMe I/O timeouts at 36 s and 66 s
 behind them, about a minute of stalled startup. There have been none since.
 The CMOS clock came back through NTP after systemd had advanced it to the
 kernel's build date.
+
+### Test I: the camera driver unloaded — same failure
+
+2026-09-11 06:53, `pkexec bin/hibernate-trial --unload facetimehd` (default
+`platform` mode, no `pm_trace`), from X, on battery at 20%, and filmed. The
+one change against Test E is that the out-of-tree camera driver was out for
+the whole cycle, so neither the thaw nor the restore could run its camera
+bring-up.
+
+- **`facetimehd` really was out.** The start line reads `start ac=0
+  bat=Discharging ... unload=facetimehd pm_trace=0`. The trial refuses to
+  hibernate while the module is still loaded.
+- **The save completed.** The initramfs found and loaded `1460272 kbytes in
+  5.23 seconds`.
+- **The restore failed the same way as E, F and G.** The film's last frame
+  shows `EC stopped`, `Disabling non-boot CPUs`, and CPUs 3, 2 and 1 offline.
+  Then the screen went black and a forced restart was needed. There is no
+  `returned` line, and the next boot (06:55:02) reports `Image not found`.
+
+**So the camera driver's bring-up is not what kills the restored kernel.** It
+may still be what hung Test H's save under `pm_trace`, but it is not the
+battery failure. One run.
+
+The next boot printed `PM: Magic number: 10:9:936` with no `hash matches`.
+The kernel decodes the CMOS clock at every boot whether or not `pm_trace` was
+on, so a magic number means something only when a `hash matches` line follows
+it.
 
 ### The firmware's sleep methods do not look at the power source
 
