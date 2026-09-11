@@ -1,10 +1,13 @@
 # Hibernation
 
-**Status 2026-09-10: works on AC. On battery the save can complete, but no
-restore has ever come back.**
+**Status 2026-09-10, 21:10: works on AC in the default `platform` mode.
+`HibernateMode=shutdown` never restores (0 for 3, AC included). On battery, no
+`platform`-mode cycle has ever completed.**
 
-- **On AC, 5 for 5** — three saves, two restores, from both X and a text
-  console, Apple SPI keyboard intact. `systemctl hibernate` on AC is reliable.
+- **On AC in `platform` mode, 5 for 5** — three saves, two restores, from both
+  X and a text console, Apple SPI keyboard intact. `systemctl hibernate` on AC
+  is reliable. ~~On AC, 5 for 5~~ was true only until Test D. A
+  `shutdown`-mode cycle on AC saved and then failed to restore.
 - **On battery, 0 for 4 full cycles.** ~~From X it hangs on the save; from a
   text console it saves and then hangs on the restore.~~ Two battery saves are
   now **known to have finished**: 11:49 from tty2, and Test B at 19:18 from X
