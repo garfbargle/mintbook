@@ -60,6 +60,12 @@ pct_for() {
   esac
 }
 
+# The cap in force by policy, for bin/input-boost: it lifts max_perf_pct at the
+# moment of input and has to know what to put back. Written wherever this
+# script sets the cap, so a profile change or an AC plug during a boost wins.
+POLICY=/run/mintbook-power/cap
+record_cap() { [ -d "${POLICY%/*}" ] && echo "$1" > "$POLICY" || true; }
+
 if [ "$MODE" = "--reassert" ]; then
   profile=$(powerprofilesctl get 2>/dev/null || echo '')
   pct=$(pct_for "$profile")
@@ -73,6 +79,7 @@ if [ "$MODE" = "--reassert" ]; then
     exit 1
   fi
   echo "$pct" > "$PSTATE/max_perf_pct"
+  record_cap "$pct"
   got=$(cat "$PSTATE/max_perf_pct")
   logger -t mintbook-power \
     "mode=reassert profile=$profile max_perf_pct=$had->$got"
@@ -108,6 +115,7 @@ else
   # unwritable max_perf_pct is exactly how the cap goes missing unnoticed.
   echo "warning: $PSTATE/max_perf_pct not writable, cap not applied" >&2
 fi
+record_cap "$pct"
 
 if command -v powerprofilesctl >/dev/null 2>&1; then
   powerprofilesctl set "$profile" >/dev/null 2>&1 || true

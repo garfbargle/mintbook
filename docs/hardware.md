@@ -215,7 +215,9 @@ That copies:
   cap 90 s after boot, once thermald and PPD have started. See below.
 - [`config/tmpfiles.d/mintbook-power.conf`](../config/tmpfiles.d/mintbook-power.conf)
   → `/etc/tmpfiles.d/` (`/run/mintbook-power` owned by root and the invoking
-  desktop user's primary group, mode 0770)
+  desktop user's primary group, mode 0770; and `max_perf_pct` made writable by
+  that group, so [`bin/input-boost`](../bin/input-boost) can lift the cap with
+  no root helper in the path)
 - [`config/polkit/org.mintbook.power.policy`](../config/polkit/org.mintbook.power.policy)
   + [`10-mintbook-power.rules`](../config/polkit/10-mintbook-power.rules) — leftover
   `pkexec` from a terminal, not used by the panel

@@ -381,6 +381,43 @@ short one, because it lands after the work has started. So the channel was half
 the problem, not a detail. Even a perfect trigger could not have fixed
 turbo-budget.
 
+**Built: [`bin/input-boost`](../bin/input-boost).** A key or button press writes
+`100` to `max_perf_pct`, and the cap comes back 2 s after the last press. No
+boost lasts more than 8 s in a row: after that the cap waits for a 1 s pause, so
+typing over a compile does not uncap the compile. It asks X for raw key and
+button presses only, through `libXi` over `ctypes`, so it needs no new packages.
+The cap it puts back is whatever `mintbook-power-apply` last set, which the
+script now records in `/run/mintbook-power/cap`, so an AC plug or a profile
+change during a boost wins. The profile never moves, so the Power tile no longer
+changes on its own.
+
+The direct write needs one tmpfiles line, installed by `bin/power-install`:
+`max_perf_pct` becomes writable by the desktop group. What that widens: any
+process running as you can move the CPU cap. On a single-user laptop you could
+already ask for any profile without a password.
+
+Verified live on battery, with synthetic key presses from `xdotool`. Those come
+through the XTEST device, which produces the same raw events:
+
+| check | result |
+|---|---|
+| key press → cap at 100 | 31–50 ms, of which 26–44 ms is starting `xdotool`; the listener itself 3–10 ms |
+| ~1 s task after a key vs no key | 745 vs 944 ms (already uncapped was 741 ms in the probe) |
+| ~0.15 s task after a key vs no key | 173.5 vs 212.5 ms |
+| cap back after the last key | 2036 ms |
+| a key every 0.5 s | uncapped until 7.7 s, capped from 8.1 s; one key after a 1.5 s pause boosts again |
+| 400 pointer moves | 0 wakeups (5 key presses: 5) |
+| its own cost | 0.12 s of CPU over the whole run, 12 MB resident |
+
+The key arms start their clock before spawning `xdotool`, so they carry ~30 ms
+that a real key press does not. The short task's remaining gap to already
+uncapped (173.5 vs 154 ms) is probably most of that.
+
+Not measured: what boosting at every key press costs in battery and temperature
+over a real session. Every 10 minutes it logs how many boosts it gave and how
+many seconds were uncapped (`journalctl --user -u mintbook-input-boost`), and
+that is the data for it.
+
 If the daemon is killed with `SIGKILL` while boosted, the cap stays at 100 until
 something else asserts it — the next AC transition, or `power-apply --reassert`.
 `SIGTERM`, which is what `systemctl --user stop` sends, restores it.
