@@ -382,7 +382,9 @@ hibernation started, and whether the charger was in.
 nothing has ever fully succeeded.** The active VT does not decide whether it
 fails, only where:
 
-- **X + battery** hangs on the save, before `Filesystems sync` ever returns.
+- **X + battery** hangs on the save, before the image is complete. The next
+  boot found no image. ~~before `Filesystems sync` ever returns~~ — retracted
+  below; the journal cannot place it more precisely than that.
 - **tty + battery** saves cleanly and then hangs on the restore, after
   "restoring image", with a black screen.
 
@@ -394,12 +396,23 @@ other variable is.**
 
 ### Where each side hangs
 
-The save-side failures stop between `PM: hibernation: hibernation entry` and
+~~The save-side failures stop between `PM: hibernation: hibernation entry` and
 `Filesystems sync`. That window holds exactly `pm_prepare_console()`, which
 switches away from Xorg's VT, and the `PM_HIBERNATION_PREPARE` notifier chain.
 Starting from a text console skips the interesting half of that, and starting
 from a text console is exactly what fixed the save — but only far enough to
-reach the next failure.
+reach the next failure.~~
+
+**Retracted 2026-09-10 evening.** That window was read off the journal, and the
+journal never records `Filesystems sync` before the freeze, even on a cycle that
+works (see "The lid escalation fires, and then wedges"). What the evidence
+actually supports is wider: the save-side failures stop somewhere after
+`hibernation entry` and before the image signature is written, because the next
+boot found no image. That span covers the VT switch, the notifiers, the sync,
+the freeze, the 10–17 s image allocation, the device freeze, the ACPI
+`_PTS(4)` call that `platform` mode makes before the snapshot, and the whole
+image write. The VT theory was only ever one candidate among those, and
+tty-versus-X rests on a single tty run on battery.
 
 The restore-side failure is one observation, so it is not yet a pattern. It is
 also **not proof the kernel stopped**: a completed resume with a dead panel is
