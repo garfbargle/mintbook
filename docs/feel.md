@@ -363,6 +363,24 @@ before the work arrived. Whether a lone thread can trigger it from a cold start
 was not tested. One thread is at most 25% of four logical CPUs, against a 25%
 trigger.
 
+**What would work, measured before building it.** Two changes were proposed:
+trigger on input instead of CPU load, and write the cap directly instead of
+through the root channel. [`bin/boost-probe`](../bin/boost-probe) times
+single-core work in four interleaved arms, each starting capped
+([raw numbers](measurements/2026-09-11-boost-at-input.md)):
+
+| work | cap 70 | cap lifted at input, direct write | same, through `want` | already uncapped |
+|---|---|---|---|---|
+| ~1 s | 1000 ms | **718 ms** | 837 ms | 741 ms |
+| ~0.15 s | 206 ms | **152 ms** | 189 ms | 154 ms |
+
+A direct write at the moment of input gets back everything the cap costs: it
+matches the already-uncapped arm. The same boost through the path unit, root
+script and `powerprofilesctl` gets back ~60% on the long task and ~30% on the
+short one, because it lands after the work has started. So the channel was half
+the problem, not a detail. Even a perfect trigger could not have fixed
+turbo-budget.
+
 If the daemon is killed with `SIGKILL` while boosted, the cap stays at 100 until
 something else asserts it — the next AC transition, or `power-apply --reassert`.
 `SIGTERM`, which is what `systemctl --user stop` sends, restores it.
