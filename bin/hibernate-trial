@@ -14,6 +14,16 @@
 # start ("Enabling non-boot CPUs"), which takes that step out of the blind
 # stretch between the jump into the image and the panel coming back.
 #
+#   pkexec bin/hibernate-trial --sync --print-times   # name each device on screen as it resumes
+#
+# --sync sets /sys/power/pm_async to 0, so devices suspend and resume one at a
+# time, in order. --print-times sets /sys/power/pm_print_times, so the kernel
+# prints "calling <device>" before every device callback. With both on, the
+# last "calling" line on a frozen screen names the device that hangs. Both are
+# put back to their previous values on the way out. Prefer this to --pm-trace
+# on this machine: the Mac firmware resets the CMOS date that pm_trace writes,
+# so the trace never survives (docs/hibernate.md, "Test L").
+#
 # --pm-trace sets /sys/power/pm_trace for the cycle. The restored kernel then
 # writes a hash of each device resume callback into the CMOS clock, and that
 # survives a forced power-off. On the boot after a failed restore, read it
@@ -52,6 +62,11 @@ MODE=
 UNLOAD=
 PM_TRACE=0
 OFFLINE_CPUS=0
+SYNC=0
+PRINT_TIMES=0
+# Read before any change, so cleanup can put back exactly what was there.
+ORIG_ASYNC=$(cat /sys/power/pm_async 2>/dev/null || echo 1)
+ORIG_PRINT_TIMES=$(cat /sys/power/pm_print_times 2>/dev/null || echo 0)
 while [ $# -gt 0 ]; do
   case "$1" in
     --pm-test) PM_TEST=${2:?}; shift 2 ;;
@@ -59,7 +74,9 @@ while [ $# -gt 0 ]; do
     --unload)  UNLOAD=${2:?}; shift 2 ;;
     --pm-trace) PM_TRACE=1; shift ;;
     --offline-cpus) OFFLINE_CPUS=1; shift ;;
-    *) echo "usage: $0 [--pm-test freezer|devices|platform|processors|core] [--mode platform|shutdown] [--unload mod1,mod2] [--pm-trace] [--offline-cpus]" >&2; exit 2 ;;
+    --sync) SYNC=1; shift ;;
+    --print-times) PRINT_TIMES=1; shift ;;
+    *) echo "usage: $0 [--pm-test freezer|devices|platform|processors|core] [--mode platform|shutdown] [--unload mod1,mod2] [--pm-trace] [--offline-cpus] [--sync] [--print-times]" >&2; exit 2 ;;
   esac
 done
 case "$PM_TEST" in none|freezer|devices|platform|processors|core) ;; *) echo "bad --pm-test $PM_TEST" >&2; exit 2 ;; esac
@@ -75,6 +92,8 @@ cleanup() {
   if [ "$OFFLINE_CPUS" = 1 ]; then
     for c in /sys/devices/system/cpu/cpu[1-9]*/online; do echo 1 > "$c" 2>/dev/null || true; done
   fi
+  echo "$ORIG_ASYNC" > /sys/power/pm_async 2>/dev/null || true
+  echo "$ORIG_PRINT_TIMES" > /sys/power/pm_print_times 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -99,6 +118,8 @@ if [ -n "$MODE" ]; then
 fi
 echo "$PM_TEST" > /sys/power/pm_test
 echo "$PM_TRACE" > /sys/power/pm_trace
+[ "$SYNC" = 1 ] && echo 0 > /sys/power/pm_async
+[ "$PRINT_TIMES" = 1 ] && echo 1 > /sys/power/pm_print_times
 if [ "$OFFLINE_CPUS" = 1 ]; then
   for c in /sys/devices/system/cpu/cpu[1-9]*/online; do echo 0 > "$c"; done
   if [ "$(cat /sys/devices/system/cpu/online)" != 0 ]; then
@@ -110,7 +131,7 @@ fi
 ac=$(cat /sys/class/power_supply/ADP1/online 2>/dev/null || echo '?')
 bat=$(cat /sys/class/power_supply/BAT0/status 2>/dev/null || echo '?')
 vt=$(fgconsole 2>/dev/null || cat /sys/class/tty/tty0/active 2>/dev/null || echo '?')
-msg="start ac=$ac bat=$bat vt=$vt pm_test=$PM_TEST mode=${MODE:-default} unload=${UNLOAD:-none} pm_trace=$PM_TRACE cpus=$(cat /sys/devices/system/cpu/online)"
+msg="start ac=$ac bat=$bat vt=$vt pm_test=$PM_TEST mode=${MODE:-default} unload=${UNLOAD:-none} pm_trace=$PM_TRACE cpus=$(cat /sys/devices/system/cpu/online) async=$(cat /sys/power/pm_async) print_times=$(cat /sys/power/pm_print_times 2>/dev/null || echo '?')"
 logger -t hibernate-trial "$msg"
 journalctl --sync 2>/dev/null || true
 sync
