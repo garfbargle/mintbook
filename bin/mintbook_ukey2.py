@@ -187,7 +187,13 @@ class ClientHandshake:
         """The encrypted channel, once both sides have spoken."""
         if self.server_init is None:
             raise HandshakeError('SERVER_INIT has not arrived yet')
-        shared = self.private.exchange(ec.ECDH(), self.peer)
+        # SHA-256 of the ECDH output, not the output itself. UKEY2 hashes
+        # the shared secret before it becomes HKDF input keying material, and
+        # skipping that produces four perfectly self-consistent keys that no
+        # real device shares: the handshake completes, the phone answers, and
+        # the first encrypted frame back fails to verify.
+        shared = hashlib.sha256(
+            self.private.exchange(ec.ECDH(), self.peer)).digest()
         transcript = self.init + self.server_init
         next_secret = hkdf(NEXT_SALT, shared, transcript)
         auth = hkdf(AUTH_SALT, shared, transcript)

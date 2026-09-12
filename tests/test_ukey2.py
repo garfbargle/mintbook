@@ -81,7 +81,8 @@ class HandshakeTests(unittest.TestCase):
         client.accept_server_init(server_init)
         theirs = ukey2.D2DContext(
             ukey2.hkdf(ukey2.NEXT_SALT,
-                       server_private.exchange(ec.ECDH(), _client_key(client)),
+                       hashlib.sha256(server_private.exchange(
+                           ec.ECDH(), _client_key(client))).digest(),
                        client.client_init() + server_init),
             is_client=False)
         return client.context(), theirs
