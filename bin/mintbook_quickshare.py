@@ -392,11 +392,20 @@ def disconnection():
 
 
 def bytes_payload(payload_id, blob):
-    """A sharing frame, wrapped so the transport will carry it."""
+    """A sharing frame, wrapped so the transport will carry it.
+
+    Two frames, not one: the data, then an empty chunk carrying LAST_CHUNK at
+    the end offset. A payload is only complete when that terminator arrives —
+    setting the flag on the data chunk itself leaves the far end waiting for
+    a boundary that never comes.
+    """
     header = pb.pack((1, payload_id), (2, PAYLOAD_BYTES), (3, len(blob)))
-    chunk = pb.pack((1, LAST_CHUNK), (2, 0), (3, blob))
-    body = pb.pack((1, PACKET_DATA), (2, header), (3, chunk))
-    return offline_frame(PAYLOAD_TRANSFER, payload_transfer=(4, body))
+    data = pb.pack((1, PACKET_DATA), (2, header),
+                   (3, pb.pack((1, 0), (2, 0), (3, blob))))
+    end = pb.pack((1, PACKET_DATA), (2, header),
+                  (3, pb.pack((1, LAST_CHUNK), (2, len(blob)))))
+    return (offline_frame(PAYLOAD_TRANSFER, payload_transfer=(4, data)),
+            offline_frame(PAYLOAD_TRANSFER, payload_transfer=(4, end)))
 
 
 def file_chunk(payload_id, size, name, offset, blob, last=False):
@@ -517,7 +526,8 @@ class Connection:
 
     def send_sharing(self, frame):
         self.payload_id += 1
-        self.send(bytes_payload(self.payload_id, frame))
+        for part in bytes_payload(self.payload_id, frame):
+            self.send(part)
 
     def next_sharing(self, timeout=60):
         """The next sharing frame, answering keep-alives while we wait.
