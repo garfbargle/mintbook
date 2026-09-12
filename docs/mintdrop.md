@@ -273,143 +273,142 @@ showing a real peer. Both need a second machine running mintdrop.
 
 ## The phone half — Quick Share
 
-An unmodified Samsung or Android phone will see this machine only if it
-speaks **Quick Share**. That work is in progress, in stages that can each be
-tested on their own.
+**Working, 2026-09-12: a file sent from this machine lands on a Galaxy S24.**
+Real Quick Share — Google's handshake, an unmodified phone, no app on it.
 
-### Done: the phone can see this machine
+```
+mintdrop peers                  phones appear alongside Linux machines
+mintdrop send "Galaxy S24" a.jpg
+mintdrop visible 120            be findable by a phone for two minutes
+```
 
-`bin/mintbook_quickshare.py` builds the advertisement, and
-`bin/mintdrop-install` writes it to
-`/etc/avahi/services/mintdrop-quickshare.service`. It is a static file like
-the mintdrop one, so being discoverable by a phone costs no process either.
+Sending works. **Receiving from a phone does not exist yet** — that is the
+server half of the same protocol, and the crypto and framing it needs are now
+proven.
 
-Discovery is mDNS **and** BLE. An earlier version of this section said BLE
-was only a nudge and not needed; that was wrong — see *Bluetooth: why mDNS
-alone was not enough* below. Bluetooth must be on, or the phone will not list
-this machine however correct the mDNS record is.
+### What has to happen for a phone to see this machine
 
-The layouts come from grishka's reverse-engineered
-[PROTOCOL.md](https://github.com/grishka/NearDrop/blob/master/PROTOCOL.md),
-and they fail silently: a wrong bit raises nothing, it just means the phone
-never lists the machine. `tests/test_quickshare.py` pins every offset.
+Four things, and every one of them was a bug first.
 
-| | |
+**1. Bluetooth must be on.** Not optional, and not for carrying data.
+Android sleeps its Nearby stack to save battery, and a sleeping phone never
+looks at the network however correct the mDNS record is. A BLE advertisement
+on `0000fe2c` wakes it. With Bluetooth rfkill-blocked, the phone here never
+listed the machine once; with the right advertisement it appears within
+seconds.
+
+**2. The advertisement is a fixed 24-byte constant.** Nearby "fast
+initiation", from rquickshare's `blea.rs`:
+
+```
+fc 12 8e 01 42 00 00 00 00 00 00 00 00 00 bf 2d 5b a0 e1 d8 75 24 ca 00
+```
+
+It says *somebody nearby wants to share*, not who. An earlier version here
+advertised eight bytes captured off the air on the theory they came from the
+phone. They did not: a leading `0x00` and seven bytes is a **Fast Pair
+account-key-filter** advertisement — earbuds — and `0xFE2C` is the Fast Pair
+UUID that Nearby borrows. We broadcast a headphone's hello for an hour and
+nothing woke up.
+
+**3. Service data only, no `ServiceUUIDs`.** A BLE advertisement is 31 bytes
+total; the service-data structure alone is 28, and a 16-bit UUID list costs 4
+more. BlueZ reports the overflow as `Failed to register advertisement` and
+never mentions length.
+
+**4. `RegisterAdvertisement` needs a running main loop.** BlueZ calls back
+into the caller for the advertisement's properties *before* it replies, so a
+synchronous call deadlocks against the loop that would serve the callback and
+dies with `Did not receive a reply`.
+
+### Do not trust avahi's cache while debugging this
+
+A phone's endpoint id, instance name and TCP port all change every time its
+Quick Share sheet is reopened, and `avahi-daemon` keeps serving the old
+record after the phone has stopped listening. That produces a peer that
+resolves perfectly and refuses every connection.
+
+It also produced a false conclusion recorded here for two turns: that the
+phone was set to Contacts-only, because the cached record said `HIDDEN=1`.
+A direct mDNS query showed `flags=0x22, HIDDEN=0`. The phone was visible the
+whole time and the evidence was stale.
+
+`avahi-browse --terminate` is separately unusable for this: it exits once the
+cache is dumped, which is *before* a just-announced device's SRV and TXT have
+resolved, so the phone arrives as an announcement with no address. Discovery
+reads the browse stream live and stops on a deadline.
+
+### The conversation
+
+```
+->  CONNECTION_REQUEST                                   plaintext
+->  Ukey2 CLIENT_INIT
+<-  Ukey2 SERVER_INIT
+->  Ukey2 CLIENT_FINISH
+->  CONNECTION_RESPONSE                                  plaintext
+<-  CONNECTION_RESPONSE
+    ---- everything below is encrypted ----
+->  PAIRED_KEY_ENCRYPTION      we have no certificate
+<-  PAIRED_KEY_ENCRYPTION
+->  PAIRED_KEY_RESULT          "unable" — we are a stranger
+->  INTRODUCTION               raises the prompt on the phone
+<-  RESPONSE  ACCEPT           somebody tapped it
+->  PAYLOAD_TRANSFER  x N      the file
+<-  DISCONNECTION              it has committed the file
+```
+
+Two layers share the word *frame*. `OfflineFrame` is Nearby Connections, the
+transport. The sharing `Frame` is the application, and it does not get its
+own socket: it travels as the body of a BYTES payload inside a
+`PAYLOAD_TRANSFER` OfflineFrame. Files go the same way as FILE payloads.
+
+Field numbers are not remembered. `vendor/nearby-protobufs/` holds the seven
+`.proto` files at a pinned revision, and nothing is compiled from them —
+`bin/mintbook_protobuf.py` writes the wire format directly, in about a
+hundred lines, so this needs no protobuf package.
+
+### The five bugs only a real phone could find
+
+Each one failed silently. None would have been caught by a test.
+
+| symptom | cause |
 |---|---|
-| service type | `_FC9F5ED42C8A._tcp`, the first three bytes of SHA-256("NearbySharing") |
-| instance name | 10 bytes, base64url unpadded: `0x23`, endpoint id (4), `FC 9F 5E`, `00 00` |
-| TXT `n` | `version<<5 \| hidden<<4 \| type<<1`, 16 identity bytes, name length, name |
-| port | 8771 — the socket mintdrop already listens on |
+| phone accepts the socket, then hangs up | `CONNECTION_REQUEST` had no `endpoint_name` |
+| handshake completes, first encrypted frame fails its HMAC | key material is `SHA256(ECDH output)`, not the output |
+| both ends wait until the read times out | `pair()` waited for a `PAIRED_KEY_RESULT` the phone will not send until it has heard the introduction |
+| offer accepted on the phone, **no file saved** | a payload is *two* frames — data, then an empty chunk flagged `LAST_CHUNK`; the flag was on the data chunk |
+| offer accepted, still no file saved | the sender hung up on the last byte; the receiver commits the file and *then* says so |
 
-Two details worth keeping:
+The second is the one worth remembering. Both ends of a *test* derive the
+same four keys whether or not the shared secret is hashed, so every test
+passed, the handshake completed against a real phone, and the failure
+appeared one message later as a signature that would not verify.
 
-- **The endpoint id is stored**, in `~/.local/state/mintbook/quickshare-endpoint`.
-  Regenerating it each boot would show up on the phone as a new device every
-  time.
-- **The 16 identity bytes are random.** They encode a Google account for
-  "Contacts" visibility, and this machine has no account, so the phone cannot
-  place it as a contact and lists it under Everyone — which is the right
-  visibility for a laptop anyway.
+The last two look identical from the sending side: bytes written, no error,
+nothing received. A socket that accepts your bytes has told you nothing about
+whether a file exists.
 
-One listener serves both protocols. `bin/mintdrop` reads four bytes before
-deciding anything: `MNTD` is mintdrop, and anything else is a protobuf length
-and belongs to Quick Share. So the phone connects to the same socket unit,
-and the idle cost does not double.
+### What it costs
 
-### Bluetooth: why mDNS alone was not enough
+Sending holds a BLE advertisement for as long as the sheet is open, or for
+the couple of minutes `mintdrop visible` asks for. That is the only resident
+thing in this feature — an advertisement lives exactly as long as the D-Bus
+connection registering it, and nothing advertises in the background. A laptop
+that broadcasts its presence all day to save two seconds of waiting is the
+trade this does not make.
 
-**Retracted, 2026-09-12.** This doc previously said discovery was mDNS and
-that "BLE is only a nudge, so it is not needed for a phone on the same
-Wi-Fi". That was wrong, and the phone proved it: the advertisement was live
-and structurally identical to the phone's own, and the phone still never
-listed the machine.
+There is no `sendfile()` on this path: every chunk is encrypted and framed,
+so the bytes come through the process. That is the protocol's price, and the
+reason the mintdrop path between two Linux machines keeps its zero-copy send.
 
-Android sleeps its Nearby stack to save battery, and a sleeping phone does
-not look at the network. A BLE advertisement carrying `0000fe2c` is what
-wakes it. rquickshare carries one for the same reason, and says plainly that
-without Bluetooth a phone often never lists the Linux machine at all.
+### Still rough
 
-So Bluetooth is **required** for a phone to find this machine, and the
-machine had it rfkill soft-blocked — which is a fine way to run a laptop, and
-means Quick Share cannot work until it is on.
+- **Receiving from a phone is not implemented.**
+- **The phone refuses a share of connection attempts outright**, and a retry
+  gets through. Not understood; it happens more after a session that ended
+  badly, so it may be the phone still cleaning up. Anything driving this
+  should retry rather than report failure.
+- The name a phone sees comes from `mintdrop.conf`; the name advertised *for
+  receiving* is baked into `/etc/avahi/services/` at install time, so
+  changing it means re-running `bin/mintdrop-install`.
 
-#### The payload is NOT confirmed — read this before trusting it
-
-**Correction, 2026-09-12.** This section first said the payload was "measured,
-not guessed". That claim was too strong and is withdrawn.
-
-Nothing documents the service data. With Bluetooth on, a real Quick Share
-device a metre away broadcasts:
-
-```
-FE2C service data = 00 40 10 2a 05 00 11 5d      (8 bytes, 2026-09-12)
-```
-
-but there is no evidence that capture came from the phone rather than from
-some other device in the room. A leading `0x00` followed by seven bytes is
-also the shape of a **Fast Pair account-key-filter** advertisement, which is
-what earbuds and speakers broadcast — and `0xFE2C` is Google's Fast Pair
-UUID that Nearby Share borrows, so both land on the same service. At
-RSSI -56 the likeliest source is a pair of headphones.
-
-So `bin/mintbook_ble.py` currently advertises a shape that may belong to an
-entirely different protocol, with a random tail. **Treat it as unverified.**
-
-The evidence that it does not work: with the mDNS record live, the BLE
-advertisement registered and on air, and Bluetooth on, a Galaxy S24 and an
-iPhone were both asked to share. The socket's own counters afterwards:
-
-```
-Accepted: 0; Connected: 0
-```
-
-The phone never connected — so it never discovered the machine. This is not
-a phone that finds us and then gives up; it is a phone that never sees us.
-
-#### Two things BlueZ will not tell you
-
-- `RegisterAdvertisement` calls back into the caller for the advertisement's
-  properties *before* it replies. Call it synchronously and it deadlocks
-  against the loop that would serve that callback, then fails with
-  `Did not receive a reply`.
-- It rejects the whole advertisement with `Failed to parse advertisement`,
-  naming no field, unless the service data is `dbus.Byte` elements and
-  `Discoverable`/`IncludeTxPower` are absent. Found by trying variants and
-  watching which registered.
-
-#### It is the one resident thing here, and it is time-boxed
-
-A BLE advertisement lives exactly as long as the D-Bus connection that
-registered it. So visibility costs a process for as long as you asked for and
-not a second longer:
-
-```
-mintdrop visible 120     # findable by a phone for two minutes
-```
-
-and the sheet holds one for exactly as long as it is open. Nothing advertises
-in the background. A laptop that broadcasts its presence all day to save two
-seconds of waiting is the trade this deliberately does not make.
-
-### Not done: the conversation
-
-Being listed is not being able to receive. Still to build, on that same
-connection:
-
-1. length-prefixed protobuf framing (4-byte big-endian) and `OfflineFrame`
-2. the UKEY2 handshake — P-256 ECDH, HKDF-SHA256 with the two fixed salts
-3. the D2D secure-message layer — AES-256-CBC plus HMAC-SHA256, sequence
-   numbered
-4. the sharing frames — paired-key encryption, the introduction listing the
-   files, accept/reject, then chunked `PAYLOAD_TRANSFER`
-5. `KEEP_ALIVE` every 10 seconds, which Android expects both ways
-
-The plan is to hand-roll a small protobuf codec rather than add a dependency:
-the wire format is varints and length-delimited fields, only a handful of
-messages are needed, and this machine does not need a package installed to
-move a file. The accept prompt, the download directory and the name handling
-are already shared, in `bin/mintbook_drop.py`, so Quick Share arrives as an
-adapter beside mintdrop rather than as a second copy of everything.
-
-Reference implementations to read when stuck: `grishka/NearDrop` (macOS,
-Swift), `teaishealthy/pyquickshare` (Linux, Python).

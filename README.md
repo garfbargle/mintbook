@@ -111,13 +111,19 @@ file read by the Avahi daemon that is already running for the rest of the
 system. A file that is landing runs niced and in the idle I/O class, so an
 arriving gigabyte cannot stall the desktop on two cores.
 
+**It sends to Android phones.** Not a fallback or a web page—real Quick
+Share, Google's own handshake, against an unmodified phone with nothing
+installed on it. Pick the phone in the sheet, tap Accept on its screen, and
+the file is there. Bluetooth has to be on: Android sleeps its Nearby stack to
+save battery, and a BLE advertisement is what wakes it. Receiving *from* a
+phone is not built yet.
+
 This is not Apple's AirDrop, and on this machine it cannot be: AirDrop puts
 its data on AWDL, which needs the wireless card in monitor mode with frame
 injection, and the BCM4350 here has neither. Quick Share—Samsung's and
 Google's—announces over BLE and mDNS and then moves bytes over an ordinary
-TCP connection, which any card can do. That is the shape Mintdrop follows.
-Phones already **appear** in the sheet, marked *Quick Share*; speaking enough
-of that protocol to actually send them a file is being built.
+TCP connection, which any card can do. That is the shape Mintdrop follows,
+and the reason it works here at all.
 
 [How it works, and what it does not protect](docs/mintdrop.md)
 

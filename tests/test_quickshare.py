@@ -114,3 +114,134 @@ class AdvertTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def pb_load():
+    loader = importlib.machinery.SourceFileLoader(
+        'mintbook_protobuf', str(ROOT / 'bin' / 'mintbook_protobuf.py'))
+    module = importlib.util.module_from_spec(
+        importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(module)
+    return module
+
+
+pb = pb_load()
+
+
+def v1_of(frame):
+    """The V1Frame inside an OfflineFrame, as a decoded dict."""
+    outer = pb.unpack(frame)
+    assert pb.one(outer, 1) == 1, 'version must be V1'
+    return pb.submessage(outer, 2)
+
+
+class TransportFrameTests(unittest.TestCase):
+    """Field numbers here are checked against vendor/nearby-protobufs."""
+
+    def test_connection_request_carries_who_we_are(self):
+        info = qs.endpoint_info('Mintbook1')
+        v1 = v1_of(qs.connection_request('AB12', info, hostname='host'))
+        self.assertEqual(pb.one(v1, 1), qs.CONNECTION_REQUEST)
+        body = pb.submessage(v1, 2)
+        self.assertEqual(pb.one(body, 1), b'AB12')          # endpoint_id
+        # endpoint_name: omitting it made a real phone hang up without a word
+        self.assertEqual(pb.one(body, 2), b'host')
+        self.assertEqual(body[5], [qs.WIFI_LAN])            # mediums
+        self.assertEqual(pb.one(body, 6), info)             # endpoint_info
+
+    def test_connection_response_accepts(self):
+        v1 = v1_of(qs.connection_response_accept())
+        self.assertEqual(pb.one(v1, 1), qs.CONNECTION_RESPONSE)
+        self.assertEqual(pb.one(pb.submessage(v1, 3), 3), qs.ACCEPT_RESPONSE)
+
+    def test_keep_alive_can_be_an_ack(self):
+        v1 = v1_of(qs.keep_alive(ack=True))
+        self.assertEqual(pb.one(v1, 1), qs.KEEP_ALIVE)
+        self.assertEqual(pb.one(pb.submessage(v1, 6), 1), 1)
+
+
+class PayloadFramingTests(unittest.TestCase):
+    """A payload is two frames. Getting this wrong cost a working transfer:
+    the phone accepted the offer and saved nothing, because the terminator it
+    was waiting for never came."""
+
+    def test_a_bytes_payload_is_data_then_a_last_chunk(self):
+        data, end = qs.bytes_payload(7, b'hello')
+        first = pb.submessage(v1_of(data), 4)
+        self.assertEqual(pb.one(pb.submessage(first, 2), 1), 7)      # id
+        self.assertEqual(pb.one(pb.submessage(first, 2), 2),
+                         qs.PAYLOAD_BYTES)
+        chunk = pb.submessage(first, 3)
+        self.assertEqual(pb.one(chunk, 1), 0)                        # no flag
+        self.assertEqual(pb.one(chunk, 3), b'hello')
+
+        last = pb.submessage(pb.submessage(v1_of(end), 4), 3)
+        self.assertEqual(pb.one(last, 1), qs.LAST_CHUNK)
+        self.assertEqual(pb.one(last, 2), 5)                         # offset
+        self.assertIsNone(pb.one(last, 3))                           # no body
+
+    def test_a_file_chunk_names_the_file_and_its_size(self):
+        frame = qs.file_chunk(9, 1234, 'a.jpg', 0, b'xyz')
+        transfer = pb.submessage(v1_of(frame), 4)
+        header = pb.submessage(transfer, 2)
+        self.assertEqual(pb.one(header, 1), 9)
+        self.assertEqual(pb.one(header, 2), qs.PAYLOAD_FILE)
+        self.assertEqual(pb.one(header, 3), 1234)
+        self.assertEqual(pb.one(header, 5), b'a.jpg')
+        self.assertEqual(pb.one(pb.submessage(transfer, 3), 3), b'xyz')
+
+    def test_the_final_file_chunk_is_empty_and_flagged(self):
+        frame = qs.file_chunk(9, 1234, 'a.jpg', 1234, b'', last=True)
+        chunk = pb.submessage(pb.submessage(v1_of(frame), 4), 3)
+        self.assertEqual(pb.one(chunk, 1), qs.LAST_CHUNK)
+        self.assertEqual(pb.one(chunk, 2), 1234)
+        self.assertIsNone(pb.one(chunk, 3))
+
+
+class SharingFrameTests(unittest.TestCase):
+    def test_the_introduction_describes_every_file(self):
+        frame = qs.introduction([
+            {'name': 'a.jpg', 'size': 10, 'payload_id': 1, 'mime': 'image/jpeg'},
+            {'name': 'b.pdf', 'size': 20, 'payload_id': 2}])
+        v1 = pb.submessage(pb.unpack(frame), 2)
+        self.assertEqual(pb.one(v1, 1), qs.INTRODUCTION)
+        files = pb.submessage(v1, 2)[1]
+        self.assertEqual(len(files), 2)
+        first = pb.unpack(files[0])
+        self.assertEqual(pb.one(first, 1), b'a.jpg')
+        self.assertEqual(pb.one(first, 3), 1)          # payload_id
+        self.assertEqual(pb.one(first, 4), 10)         # size
+        self.assertEqual(pb.one(first, 5), b'image/jpeg')
+        self.assertEqual(pb.one(pb.unpack(files[1]), 5),
+                         b'application/octet-stream')
+
+    def test_paired_key_frames_say_we_are_a_stranger(self):
+        v1 = pb.submessage(pb.unpack(qs.paired_key_encryption()), 2)
+        self.assertEqual(pb.one(v1, 1), qs.PAIRED_KEY_ENCRYPTION)
+        body = pb.submessage(v1, 4)
+        self.assertEqual(len(pb.one(body, 1)), 72)     # signed_data
+        self.assertEqual(len(pb.one(body, 2)), 6)      # secret_id_hash
+
+        v1 = pb.submessage(pb.unpack(qs.paired_key_result()), 2)
+        self.assertEqual(pb.one(v1, 1), qs.PAIRED_KEY_RESULT)
+        self.assertEqual(pb.one(pb.submessage(v1, 5), 1), qs.PAIRED_KEY_UNABLE)
+
+
+class BleTests(unittest.TestCase):
+    def test_the_fast_init_payload_is_the_known_constant(self):
+        ble = importlib.util.module_from_spec(
+            importlib.util.spec_from_loader(
+                'mintbook_ble',
+                importlib.machinery.SourceFileLoader(
+                    'mintbook_ble', str(ROOT / 'bin' / 'mintbook_ble.py'))))
+        loader = importlib.machinery.SourceFileLoader(
+            'mintbook_ble', str(ROOT / 'bin' / 'mintbook_ble.py'))
+        ble = importlib.util.module_from_spec(
+            importlib.util.spec_from_loader(loader.name, loader))
+        loader.exec_module(ble)
+        # Not derived from anything here: it is the advertisement Android
+        # recognises. An earlier version broadcast eight bytes captured from
+        # what turned out to be a Fast Pair device, and no phone ever woke.
+        self.assertEqual(ble.payload().hex(),
+                         'fc128e0142000000000000000000bf2d5ba0e1d87524ca00')
+        self.assertEqual(len(ble.payload()), 24)
