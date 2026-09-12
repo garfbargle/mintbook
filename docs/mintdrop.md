@@ -402,9 +402,58 @@ There is no `sendfile()` on this path: every chunk is encrypted and framed,
 so the bytes come through the process. That is the protocol's price, and the
 reason the mintdrop path between two Linux machines keeps its zero-copy send.
 
+### Why a phone cannot find this machine (measured with adb, 2026-09-12)
+
+Everything before this was inference from packet captures. With USB debugging
+on the phone, Nearby says it outright:
+
+```
+I/NearbyMediums:  No BLE Fast/GATT advertisements found in the latest cycle.
+I/NearbySharing:  Starting Fast Init advertisement because we're currently
+                  scanning/connecting.
+I/NearbySharing:  ShareTarget cobo m2a discovered
+I/NearbySharing:  ReceiverDiscovered(deviceName=cobo m2a, deviceType=3,
+                  isExternal=true, providerName=com.google.android.mosey)
+```
+
+Three things follow, and they overturn two earlier theories in this document.
+
+**1. Discovery of receivers is BLE, not mDNS.** The phone scans for BLE
+advertisements and finds ours absent. The mDNS work — re-announcing, the
+`_quickshare._tcp` experiment, the collision fix — addressed a channel the
+phone barely uses for this. mDNS matters once a connection is being made, not
+for appearing in the list.
+
+**2. Fast initiation is the wrong advertisement for being found.** The phone
+emits it *itself* while scanning: it means "someone here wants to send", and
+it wakes receivers. We were broadcasting the sender's beacon and expecting to
+be listed as a receiver. It is still the right thing for our *sending* path,
+where it does wake the phone, and that is measured.
+
+**3. The only device the phone did discover came through an OEM bridge.**
+`cobo m2a` is a MacBook, found with `isExternal=true` through
+`com.google.android.mosey` — the AirDrop interop provider. Not Nearby at all.
+So "it finds my Mac" was never evidence that our path should work.
+
+What being discoverable actually requires is a Nearby Connections **BLE
+endpoint advertisement**, whose format is in google/nearby at
+`connections/implementation/mediums/ble/ble_advertisement.cc`:
+
+```
+byte 0   (version << 5) | (socket_version << 2) | (fast << 1) | second_profile
+fast:    u8 data length, data, 2-byte device token
+regular: 3-byte service id hash, u32 data length, data, 2-byte device token
+```
+
+with a hard 27-byte ceiling on the fast form — which our 30-byte endpoint
+info already exceeds, so the name would have to be trimmed or the non-fast
+GATT form used instead. That is the next piece of work, and it is not small.
+
 ### Still rough
 
-- **Receiving from a phone is not implemented.**
+- **A phone cannot discover this machine.** Receiving *works* — the server
+  half is built and verified — but a Galaxy Z Fold7 never lists the laptop,
+  and `adb logcat` finally said why. See below.
 - **The phone has to be willing to advertise.** The BLE nudge wakes a
   *dormant* Nearby stack, and that is genuinely what it does — a phone that
   has been idle appears within seconds of it. It does not conjure one out of

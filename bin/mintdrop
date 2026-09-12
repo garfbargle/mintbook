@@ -582,11 +582,20 @@ def cmd_visible(args):
     except ImportError as exc:
         print(f'mintdrop: no Bluetooth support ({exc})', file=sys.stderr)
         return 1
+    qs = quickshare()
+    name = drop.config()['name'] or drop.device_name()
     try:
-        ble.hold(args.seconds,
-                 announce=lambda data: print(
-                     f'Visible to nearby phones for {args.seconds}s '
-                     f'(FE2C {data.hex(" ")})', file=sys.stderr))
+        # Announce over mDNS *and* nudge over BLE for the whole window.
+        # Android ignores an mDNS service that was already registered when it
+        # started looking, so being visible means re-announcing, not merely
+        # having been announced once at boot.
+        with qs.Announcement(name):
+            print(f'Announcing "{name}" to nearby phones for '
+                  f'{args.seconds}s', file=sys.stderr)
+            ble.hold(args.seconds,
+                     announce=lambda data: print(
+                         f'  BLE nudge up (FE2C {data.hex(" ")})',
+                         file=sys.stderr))
     except ble.NotAvailable as exc:
         print(f'mintdrop: cannot advertise — {exc}', file=sys.stderr)
         print('         turn Bluetooth on in Control Center', file=sys.stderr)

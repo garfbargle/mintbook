@@ -955,3 +955,111 @@ def receive_from_phone(sock, ask=None, on_progress=None, directory=None):
         except Exception:
             pass
     return landed
+
+
+# ---------------------------------------------------------------------------
+# being findable by a phone
+# ---------------------------------------------------------------------------
+
+class Announcement:
+    """Publish the Quick Share service *now*, and keep re-announcing it.
+
+    A static file in /etc/avahi/services is registered once, at boot. Android
+    frequently never sees such a service: it misses anything announced before
+    its own discovery phase started, and its query does not reliably shake one
+    loose. rquickshare says so outright in mdns.rs —
+
+        "Android can sometime not see the mDNS service if the service was
+         running BEFORE Android started the Discovery phase for QuickShare.
+         So resend a broadcast if there's a android device sending."
+
+    — and re-announces whenever its BLE scanner hears a phone. This does the
+    same with the tool avahi already ships: `avahi-publish`, which registers
+    from a user process and announces the moment it starts. Re-run on an
+    interval, so a phone that starts looking at any point during a visibility
+    window hears an announcement within a few seconds.
+
+    Deliberately temporary, like the BLE advertisement it accompanies: a
+    laptop that announces itself to every phone in the building all day is
+    the thing this is careful not to be.
+
+    **Measured, and sobering.** Over fifteen minutes of a Galaxy Z Fold7
+    sitting on its share sheet, this sent 579 announcements and the phone
+    asked for `_FC9F5ED42C8A._tcp` exactly zero times. It queried Samsung's
+    own `_quickshare._tcp` once. Re-announcing is still correct for the
+    phones that do look — but on that evidence it is not what is stopping a
+    Samsung phone from listing this machine, so the interval is 20 s rather
+    than the 8 s that produced the flood.
+    """
+
+    def __init__(self, name=None, port=PORT, every=20, endpoint=None):
+        self.name = name
+        self.port = port
+        self.every = every
+        # A *different* endpoint id from the one in the static file. Publishing
+        # the same instance name that /etc/avahi/services already holds fails
+        # with "Local name collision" — silently, if you are not reading
+        # avahi-publish's stderr — and then nothing is ever re-announced,
+        # which is the whole point of this class. The id only has to be
+        # consistent for the length of a visibility window: it tells the
+        # phone which endpoint to address, and the port is what it connects
+        # to either way.
+        self.endpoint = endpoint or ''.join(
+            random.choice(string.ascii_uppercase + string.digits)
+            for _ in range(4))
+        self.process = None
+        self.stop_flag = False
+        self.thread = None
+        self.failed = None
+
+    def _publish_once(self):
+        import subprocess
+        info = b64(endpoint_info(self.name or 'Mintbook'))
+        argv = ['avahi-publish', '-s', instance_name(self.endpoint), SERVICE,
+                str(self.port), f'n={info}']
+        return subprocess.Popen(argv, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.PIPE, text=True)
+
+    def _run(self):
+        while not self.stop_flag:
+            try:
+                self.process = self._publish_once()
+            except OSError:
+                return
+            # Let it register and announce, then replace it. Killing and
+            # restarting is what produces a *new* announcement; leaving one
+            # running just repeats the situation Android already ignores.
+            for _ in range(int(self.every * 10)):
+                if self.stop_flag:
+                    break
+                time.sleep(0.1)
+            if self.process is not None:
+                if self.process.poll() is not None:
+                    # It exited on its own: a collision, or no daemon. Say so
+                    # rather than looping in silence.
+                    self.failed = (self.process.stderr.read() or '').strip()
+                    return
+                self.process.terminate()
+                try:
+                    self.process.wait(timeout=2)
+                except Exception:
+                    self.process.kill()
+                self.process = None
+
+    def __enter__(self):
+        import threading
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+        time.sleep(1.0)
+        return self
+
+    def __exit__(self, *_exc):
+        self.stop_flag = True
+        if self.process is not None:
+            try:
+                self.process.terminate()
+            except Exception:
+                pass
+        if self.thread is not None:
+            self.thread.join(timeout=3)
+        return False
