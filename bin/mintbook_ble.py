@@ -10,19 +10,20 @@ the Linux machine at all.
 
     0000fe2c-0000-1000-8000-00805f9b34fb
 
-**The payload here is unverified and probably wrong.** It is documented
-nowhere I could find. A BLE scan with Bluetooth on did capture an FE2C
-advertisement from something a metre away:
+The payload is a fixed 24-byte constant, not something derived from this
+machine. It is the Nearby "fast initiation" advertisement, taken from
+rquickshare's BleAdvertiser (`core_lib/src/hdl/blea.rs`), which is the
+implementation known to make Android wake up:
 
-    FE2C service data = 00 40 10 2a 05 00 11 5d      (8 bytes, 2026-09-12)
+    fc 12 8e 01 42 00 00 00 00 00 00 00 00 00
+    bf 2d 5b a0 e1 d8 75 24 ca 00
 
-and this advertises the same shape with its own random tail. But nothing
-established that the capture came from the phone: a leading 0x00 followed by
-seven bytes is equally the shape of a Fast Pair account-key-filter
-advertisement, which is what earbuds broadcast, and 0xFE2C is the Fast Pair
-UUID that Nearby Share borrows. A phone asked to share afterwards never
-connected — the socket counted zero connections — so on the only evidence
-available this does not yet do its job. See docs/mintdrop.md.
+An earlier version of this file advertised eight bytes captured off the air
+instead, on the theory that they came from the phone. They did not: a leading
+0x00 followed by seven bytes is a Fast Pair account-key-filter advertisement,
+which is what earbuds broadcast, and 0xFE2C is the Fast Pair UUID that Nearby
+borrows. Advertising those bytes did nothing at all — the phone sat in
+receive mode with its mDNS dormant while we broadcast a headphone's hello.
 
 **This is the one resident thing in mintdrop, and it is deliberately
 temporary.** A BLE advertisement lives as long as the D-Bus connection that
@@ -33,7 +34,6 @@ advertises in the background, which is the difference between a laptop that
 can be found when you want it and one that broadcasts its presence all day.
 """
 import os
-import random
 
 import dbus
 import dbus.mainloop.glib
@@ -48,14 +48,17 @@ PROPERTIES = 'org.freedesktop.DBus.Properties'
 NEARBY_UUID = '0000fe2c-0000-1000-8000-00805f9b34fb'
 PATH = '/org/mintbook/mintdrop/advertisement0'
 
-# The first byte of what a real device broadcasts; the rest identifies it.
-VERSION_BYTE = 0x00
-PAYLOAD_BYTES = 8
+# Nearby "fast initiation". A constant: it says "somebody nearby wants to
+# share", not who. From rquickshare's blea.rs — see the module docstring.
+FAST_INITIATION = bytes([
+    0xfc, 0x12, 0x8e, 0x01, 0x42, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0xbf, 0x2d, 0x5b, 0xa0, 0xe1, 0xd8, 0x75, 0x24, 0xca, 0x00,
+])
 
 
 def payload():
-    """One advertisement's worth of service data, in the measured shape."""
-    return bytes([VERSION_BYTE]) + os.urandom(PAYLOAD_BYTES - 1)
+    """One advertisement's worth of service data."""
+    return FAST_INITIATION
 
 
 class NotAvailable(Exception):
@@ -92,10 +95,13 @@ class Advertisement(dbus.service.Object):
         # register. A name in the packet would only cost room in an
         # advertisement with 31 bytes to spend, and the phone is being woken
         # rather than connected to.
+        # Service data only, no ServiceUUIDs. A BLE advertisement is 31
+        # bytes total: the service-data structure alone is 1 + 1 + 2 + 24 =
+        # 28, and adding a 16-bit UUID list costs another 4 and overflows —
+        # which BlueZ reports as 'Failed to register advertisement' without
+        # mentioning length. rquickshare sets service data and nothing else.
         return {
             'Type': dbus.String('broadcast'),
-            'ServiceUUIDs': dbus.Array([dbus.String(NEARBY_UUID)],
-                                       signature='s'),
             'ServiceData': dbus.Dictionary(
                 {dbus.String(NEARBY_UUID):
                  dbus.Array([dbus.Byte(b) for b in self.data],

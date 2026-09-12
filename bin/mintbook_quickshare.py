@@ -560,22 +560,21 @@ class Connection:
                 raise ProtocolError('the phone stopped answering')
 
     def pair(self):
-        """Exchange the paired-key frames. We have no certificate, so this
-        only establishes that we are a stranger — which is the whole reason
-        the phone then asks its owner."""
+        """Exchange the paired-key frames.
+
+        We have no certificate, so this only establishes that we are a
+        stranger — which is the whole reason the phone then asks its owner.
+
+        It answers the phone's PAIRED_KEY_ENCRYPTION and returns *without*
+        waiting for a PAIRED_KEY_RESULT. The phone does not send one until it
+        has heard the introduction, so waiting for it here deadlocks: both
+        ends sit holding the connection open until the read times out, which
+        is what "the phone stopped answering" was.
+        """
         self.send_sharing(paired_key_encryption())
-        seen = set()
-        # The phone sends its own encryption frame and a result frame. Both
-        # arrive before anything else will, and neither needs an answer
-        # beyond ours.
-        while len(seen) < 2:
-            frame = self.next_sharing(timeout=20)
-            kind = pb.one(frame, 1)
-            seen.add(kind)
-            if kind == PAIRED_KEY_ENCRYPTION:
-                self.send_sharing(paired_key_result())
-            elif kind not in (PAIRED_KEY_RESULT,):
-                return frame          # something else already: hand it back
+        frame = self.next_sharing(timeout=20)
+        if pb.one(frame, 1) == PAIRED_KEY_ENCRYPTION:
+            self.send_sharing(paired_key_result())
         return None
 
     def introduce(self, files, timeout=120):
