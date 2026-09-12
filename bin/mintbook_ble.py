@@ -10,17 +10,19 @@ the Linux machine at all.
 
     0000fe2c-0000-1000-8000-00805f9b34fb
 
-The payload was not documented anywhere I could find, so it was **measured
-instead of guessed**: with Bluetooth on, a real Quick Share device a metre
-away broadcasts
+**The payload here is unverified and probably wrong.** It is documented
+nowhere I could find. A BLE scan with Bluetooth on did capture an FE2C
+advertisement from something a metre away:
 
     FE2C service data = 00 40 10 2a 05 00 11 5d      (8 bytes, 2026-09-12)
 
-so this advertises the same shape — a zero version byte and seven bytes that
-identify the sender — rather than a length invented here. The trailing bytes
-are ours and random: they stand in for an account this machine does not have,
-the same as the sixteen in the mDNS record. Copying the captured bytes
-verbatim would be claiming to be that phone.
+and this advertises the same shape with its own random tail. But nothing
+established that the capture came from the phone: a leading 0x00 followed by
+seven bytes is equally the shape of a Fast Pair account-key-filter
+advertisement, which is what earbuds broadcast, and 0xFE2C is the Fast Pair
+UUID that Nearby Share borrows. A phone asked to share afterwards never
+connected — the socket counted zero connections — so on the only evidence
+available this does not yet do its job. See docs/mintdrop.md.
 
 **This is the one resident thing in mintdrop, and it is deliberately
 temporary.** A BLE advertisement lives as long as the D-Bus connection that

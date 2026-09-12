@@ -333,7 +333,10 @@ So Bluetooth is **required** for a phone to find this machine, and the
 machine had it rfkill soft-blocked — which is a fine way to run a laptop, and
 means Quick Share cannot work until it is on.
 
-#### The payload was measured, not guessed
+#### The payload is NOT confirmed — read this before trusting it
+
+**Correction, 2026-09-12.** This section first said the payload was "measured,
+not guessed". That claim was too strong and is withdrawn.
 
 Nothing documents the service data. With Bluetooth on, a real Quick Share
 device a metre away broadcasts:
@@ -342,11 +345,26 @@ device a metre away broadcasts:
 FE2C service data = 00 40 10 2a 05 00 11 5d      (8 bytes, 2026-09-12)
 ```
 
-`bin/mintbook_ble.py` advertises the same shape — a zero version byte and
-seven identifying bytes — with its own random tail. Copying those bytes
-verbatim would be claiming to be that phone. **What the seven bytes mean is
-still unknown**, and if a phone sees the machine but refuses to talk to it,
-this is the first thing to suspect.
+but there is no evidence that capture came from the phone rather than from
+some other device in the room. A leading `0x00` followed by seven bytes is
+also the shape of a **Fast Pair account-key-filter** advertisement, which is
+what earbuds and speakers broadcast — and `0xFE2C` is Google's Fast Pair
+UUID that Nearby Share borrows, so both land on the same service. At
+RSSI -56 the likeliest source is a pair of headphones.
+
+So `bin/mintbook_ble.py` currently advertises a shape that may belong to an
+entirely different protocol, with a random tail. **Treat it as unverified.**
+
+The evidence that it does not work: with the mDNS record live, the BLE
+advertisement registered and on air, and Bluetooth on, a Galaxy S24 and an
+iPhone were both asked to share. The socket's own counters afterwards:
+
+```
+Accepted: 0; Connected: 0
+```
+
+The phone never connected — so it never discovered the machine. This is not
+a phone that finds us and then gives up; it is a phone that never sees us.
 
 #### Two things BlueZ will not tell you
 
