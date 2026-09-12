@@ -620,6 +620,34 @@ class Connection:
                              entry['name'], sent, b'', last=True))
         return sent
 
+    def settle(self, timeout=20):
+        """Stay on the line until the phone is done with the payload.
+
+        It answers with its own frames — keep-alives, and a disconnection
+        once it has committed the file. Either that, or the socket closing
+        under us, means it is safe to go.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                self.sock.settimeout(max(deadline - time.monotonic(), 0.1))
+                blob = self.recv()
+            except (socket.timeout, OSError):
+                return
+            except ProtocolError:
+                return
+            v1 = pb.submessage(pb.unpack(blob), 2)
+            if v1 is None:
+                continue
+            kind = pb.one(v1, 1)
+            if kind == KEEP_ALIVE:
+                try:
+                    self.send(keep_alive(ack=True))
+                except OSError:
+                    return
+            elif kind == DISCONNECTION:
+                return
+
     def close(self):
         try:
             self.send(disconnection())
@@ -656,7 +684,8 @@ def send_files(peer, paths, name=None, on_wait=None, progress=None):
     started = time.monotonic()
     try:
         connection.connect_as_client(
-            endpoint_id(), endpoint_info(name or drop.device_name()))
+            endpoint_id(),
+            endpoint_info(name or drop.config()['name'] or drop.device_name()))
         connection.pair()
         if on_wait:
             on_wait()
@@ -668,6 +697,12 @@ def send_files(peer, paths, name=None, on_wait=None, progress=None):
         total = 0
         for entry in files:
             total += connection.send_file(entry, progress)
+        # Do not hang up on the last byte. The phone finishes writing the
+        # file and then says so — closing the socket the instant the final
+        # chunk is out gets the prompt accepted and no file saved, which is
+        # exactly what it looks like from the other end: a transfer that
+        # "worked" and left nothing behind.
+        connection.settle()
         return total, time.monotonic() - started
     finally:
         connection.close()
