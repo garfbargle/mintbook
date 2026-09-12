@@ -212,6 +212,7 @@ def discover(timeout=4.0):
                     device_type, name = parse_endpoint_info(info)
                 except ValueError:
                     pass
+            named = bool(name)
             if not name:
                 name = host.removesuffix('.local').replace('_', ' ')
             try:
@@ -221,7 +222,8 @@ def discover(timeout=4.0):
             current = found.get(label)
             if current is None or (parts[2] == 'IPv4'
                                    and ':' in current['address']):
-                found[label] = {'name': name, 'address': address, 'port': port,
+                found[label] = {'name': name, 'named': named,
+                                'address': address, 'port': port,
                                 'endpoint': label, 'protocol': 'quickshare',
                                 'device_type': (device_type
                                                 if device_type is not None
@@ -232,7 +234,22 @@ def discover(timeout=4.0):
             browse.wait(timeout=2)
         except Exception:
             browse.kill()
-    return sorted(found.values(), key=lambda p: p['name'].lower())
+    # One device, one entry. A phone gets a new endpoint id every time its
+    # sheet reopens and avahi keeps serving the old records, so the same
+    # phone arrives three or four times over — which would be three or four
+    # tiles in the sheet, all but one of them dead.
+    #
+    # Keyed on where it actually is, and the record carrying a real name
+    # wins: only a visible device puts its name in the TXT record, so
+    # "Codi's Z Fold7" is a live announcement while "Android JUQDHNE8" is
+    # a host label standing in for one that withheld it.
+    best = {}
+    for peer in found.values():
+        key = (peer['address'], peer['port'])
+        current = best.get(key)
+        if current is None or (peer['named'] and not current['named']):
+            best[key] = peer
+    return sorted(best.values(), key=lambda p: p['name'].lower())
 
 
 def _local_addresses():
@@ -659,21 +676,44 @@ class Connection:
             pass
 
 
-def send_files(peer, paths, name=None, on_wait=None, progress=None):
+def send_files(peer, paths, name=None, on_wait=None, progress=None,
+               attempts=4):
     """Send files to a Quick Share device. Returns (sent bytes, seconds).
 
     `on_wait` is called once the offer is out and the phone is showing its
-    prompt — there is nothing to report for as long as somebody takes to
-    pick the notification up, and a progress bar that sits at zero for that
-    whole time looks broken.
+    prompt — nothing is reportable for as long as somebody takes to pick the
+    notification up, and a progress bar sitting at zero for that whole time
+    looks broken.
+
+    Retries, because a phone refuses a fair share of connection attempts
+    outright and the next one goes through. It is not understood why; it
+    happens more just after a session that ended badly, so it may be the
+    phone still cleaning one up. **Only failures before the offer was
+    accepted are retried** — once a person has tapped Accept, trying again
+    would put the file on their phone twice.
     """
     files = []
     for path in paths:
         size = os.stat(path).st_size
         files.append({'path': path, 'name': os.path.basename(path),
-                      'size': size,
+                      'size': size, 'mime': _mime_type(path),
                       'payload_id': random.randint(1, 2 ** 62)})
 
+    last = None
+    for attempt in range(max(attempts, 1)):
+        accepted = []
+        try:
+            return _send_once(peer, files, name, on_wait, progress, accepted)
+        except (ProtocolError, OSError) as exc:
+            last = exc
+            if accepted:
+                raise                    # past the prompt; never send twice
+            if attempt + 1 < max(attempts, 1):
+                time.sleep(1.5)
+    raise last if last else ProtocolError('could not reach the device')
+
+
+def _send_once(peer, files, name, on_wait, progress, accepted):
     family = socket.AF_INET6 if ':' in peer['address'] else socket.AF_INET
     sock = socket.socket(family, socket.SOCK_STREAM)
     sock.settimeout(15)
@@ -694,6 +734,7 @@ def send_files(peer, paths, name=None, on_wait=None, progress=None):
             raise ProtocolError('declined on the phone'
                                 if status == SHARING_REJECT
                                 else f'the phone answered {status}')
+        accepted.append(True)
         total = 0
         for entry in files:
             total += connection.send_file(entry, progress)
@@ -706,3 +747,10 @@ def send_files(peer, paths, name=None, on_wait=None, progress=None):
         return total, time.monotonic() - started
     finally:
         connection.close()
+
+
+def _mime_type(path):
+    """What the phone should call this. It decides the icon and the app."""
+    import mimetypes
+    guess, _encoding = mimetypes.guess_type(path)
+    return guess or 'application/octet-stream'

@@ -326,6 +326,26 @@ class Bar:
         return time.monotonic() - self.started
 
 
+def nudge():
+    """A BLE advertisement held for as long as we are looking.
+
+    Android sleeps its Nearby stack; without this a phone is simply not on
+    the air, and `mintdrop peers` truthfully reports nothing while a phone
+    sits a foot away. Degrades to a no-op without Bluetooth.
+    """
+    here = os.path.dirname(os.path.realpath(__file__))
+    loader = importlib.machinery.SourceFileLoader(
+        'mintbook_ble', os.path.join(here, 'mintbook_ble.py'))
+    try:
+        module = importlib.util.module_from_spec(
+            importlib.util.spec_from_loader(loader.name, loader))
+        loader.exec_module(module)
+        return module.BackgroundNudge()
+    except Exception:
+        import contextlib
+        return contextlib.nullcontext()
+
+
 def quickshare():
     here = os.path.dirname(os.path.realpath(__file__))
     loader = importlib.machinery.SourceFileLoader(
@@ -346,7 +366,8 @@ def resolve_peer(target):
         return None
     peers = drop.discover()
     try:
-        peers = peers + quickshare().discover()
+        with nudge():
+            peers = peers + quickshare().discover()
     except Exception:
         pass
     lowered = target.lower()
@@ -524,9 +545,14 @@ def cmd_visible(args):
 def cmd_peers(args):
     peers = drop.discover(args.wait)
     try:
-        peers = peers + quickshare().discover()
-    except Exception:
-        pass
+        with nudge():
+            peers = peers + quickshare().discover()
+    except Exception as exc:
+        # Not silent. A bare pass here hid a broken Quick Share lookup behind
+        # a truthful-looking "No devices nearby", which is the most
+        # expensive kind of wrong answer.
+        print(f'mintdrop: Quick Share discovery failed: {exc}',
+              file=sys.stderr)
     if not peers:
         print('No devices nearby.', file=sys.stderr)
         return 1

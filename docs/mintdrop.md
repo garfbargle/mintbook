@@ -273,7 +273,8 @@ showing a real peer. Both need a second machine running mintdrop.
 
 ## The phone half — Quick Share
 
-**Working, 2026-09-12: a file sent from this machine lands on a Galaxy S24.**
+**Working, 2026-09-12: a file sent from this machine lands on a Galaxy
+Z Fold7.**
 Real Quick Share — Google's handshake, an unmodified phone, no app on it.
 
 ```
@@ -404,6 +405,13 @@ reason the mintdrop path between two Linux machines keeps its zero-copy send.
 ### Still rough
 
 - **Receiving from a phone is not implemented.**
+- **The phone has to be willing to advertise.** The BLE nudge wakes a
+  *dormant* Nearby stack, and that is genuinely what it does — a phone that
+  has been idle appears within seconds of it. It does not conjure one out of
+  a phone whose Quick Share is closed: with the sheet shut, nothing is on the
+  air however long you nudge. Opening Quick Share on the phone remains part
+  of sending to it, which is the wrong way round and is what building the
+  receiving half fixes.
 - **The phone refuses a share of connection attempts outright**, and a retry
   gets through. Not understood; it happens more after a session that ended
   badly, so it may be the phone still cleaning up. Anything driving this

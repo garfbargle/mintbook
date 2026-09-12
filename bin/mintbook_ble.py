@@ -210,3 +210,55 @@ def hold(seconds, data=None, announce=None):
     if failure:
         raise failure[0]
     return visibility.data
+
+
+class BackgroundNudge:
+    """Advertise from a program that has no main loop of its own.
+
+    The CLI is the case: `mintdrop peers` wants to be advertising *while* it
+    browses, because a phone whose Nearby stack is asleep never answers. But
+    RegisterAdvertisement needs a running GLib loop to serve BlueZ's callback,
+    and a CLI has none — so this runs one on a thread for as long as the
+    block lasts.
+
+        with BackgroundNudge():
+            peers = discover()
+
+    A machine with no Bluetooth, or no python3-dbus, gets an object that does
+    nothing: mintdrop between Linux machines never needed the radio, and a
+    phone that cannot be woken is a phone that does not appear, not an error.
+    """
+
+    def __init__(self, data=None):
+        self.data = data
+        self.visibility = None
+        self.loop = None
+        self.thread = None
+
+    def __enter__(self):
+        try:
+            from gi.repository import GLib
+        except Exception:
+            return self
+        try:
+            self.visibility = Visibility(self.data).start(
+                on_error=lambda exc: None)
+        except NotAvailable:
+            self.visibility = None
+            return self
+        self.loop = GLib.MainLoop()
+        import threading
+        self.thread = threading.Thread(target=self.loop.run, daemon=True)
+        self.thread.start()
+        # BlueZ answers on the loop; give it the moment it needs before the
+        # caller starts looking for something the nudge was meant to wake.
+        import time
+        time.sleep(1.5)
+        return self
+
+    def __exit__(self, *_exc):
+        if self.visibility is not None:
+            self.visibility.stop()
+        if self.loop is not None:
+            self.loop.quit()
+        return False
