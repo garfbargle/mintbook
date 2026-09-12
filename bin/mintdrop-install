@@ -135,10 +135,19 @@ def advert_files():
     Generated here rather than shipped because both carry this machine's
     identity: the Quick Share endpoint id, and the name the phone will show.
     """
-    quickshare = load('mintbook_quickshare')
+    # Only the mintdrop advertisement is static now.
+    #
+    # The Quick Share one used to be written here too, and it actively got in
+    # the way: it holds one endpoint id forever, while a phone matches the
+    # BLE advertisement it discovered against the mDNS record by endpoint id.
+    # A stale second record with a different id is a machine the phone
+    # believes is two devices, and the connection goes to the wrong one.
+    #
+    # Quick Share visibility is `mintdrop visible` now — announced, listed
+    # over BLE and served over GATT with one identity, for as long as you
+    # asked and no longer.
     plain = (ROOT / 'config/avahi/mintdrop.service').read_text()
-    return [(ADVERT, plain),
-            (QS_ADVERT, quickshare.avahi_service(device_name()))]
+    return [(ADVERT, plain)]
 
 
 def install_advert():
@@ -153,7 +162,7 @@ def install_advert():
         for dest, text in advert_files():
             dest.write_text(text)
         run('systemctl', 'reload-or-restart', 'avahi-daemon', check=False)
-        print(f'[+] advertised as _mintdrop._tcp and {load("mintbook_quickshare").SERVICE}')
+        print('[+] advertised as _mintdrop._tcp')
         return True
 
     print('[*] the advertisements need root; asking sudo once')
@@ -173,8 +182,8 @@ def install_advert():
             return False
         subprocess.run(['sudo', 'systemctl', 'reload-or-restart',
                         'avahi-daemon'], check=False)
-        print(f'[+] advertised as _mintdrop._tcp (Linux peers) and '
-              f'{load("mintbook_quickshare").SERVICE} (Quick Share)')
+        print('[+] advertised as _mintdrop._tcp (Linux peers); phones are '
+              'served by `mintdrop visible`')
         return True
     finally:
         shutil.rmtree(staged, ignore_errors=True)
