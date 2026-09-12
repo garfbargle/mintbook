@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+"""The picker — the devices that are nearby, so you can click one.
+
+    mintdrop-menu --pick          print the chosen peer's name and exit
+    mintdrop-menu FILE...         pick a peer, then send those files
+
+Discovery runs only while this window is open. avahi-daemon is already
+running for the rest of the system, so browsing costs one short-lived
+`avahi-browse --terminate` per refresh and nothing between them — there is no
+resident discovery process on this machine, which is rule 3 in CONTRIBUTING
+and the reason this feature costs nothing when it is not in use.
+
+The browse happens on a thread because it takes about a second and a window
+that paints after its own discovery is a window that looks broken. The list
+appears immediately saying it is looking, then fills in.
+"""
+import argparse
+import importlib.machinery
+import importlib.util
+import os
+import subprocess
+import sys
+import threading
+
+import gi
+gi.require_version('Gtk', '3.0')
+from gi.repository import Gtk, Gdk, GLib
+
+BIN = os.path.dirname(os.path.realpath(__file__))
+APPLIED = os.path.expanduser('~/.config/mintbook/appearance.applied')
+
+DARK = {'bg': '#212124', 'fg': '#ffffff', 'dim': 'rgba(255,255,255,0.55)',
+        'hover': 'rgba(255,255,255,0.12)', 'line': 'rgba(255,255,255,0.10)'}
+LIGHT = {'bg': '#f5f5f7', 'fg': '#1d1d1f', 'dim': 'rgba(0,0,0,0.55)',
+         'hover': 'rgba(0,0,0,0.07)', 'line': 'rgba(0,0,0,0.10)'}
+
+
+def load_drop():
+    loader = importlib.machinery.SourceFileLoader(
+        'mintbook_drop', os.path.join(BIN, 'mintbook_drop.py'))
+    module = importlib.util.module_from_spec(
+        importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(module)
+    return module
+
+
+drop = load_drop()
+
+
+def appearance():
+    try:
+        with open(APPLIED) as f:
+            return DARK if f.read().strip() == 'dark' else LIGHT
+    except OSError:
+        return LIGHT
+
+
+class Picker:
+    def __init__(self, files):
+        self.files = files
+        self.colors = appearance()
+        self.chosen = None
+        self.rows = None
+        self.win = None
+
+    # -- window ------------------------------------------------------------
+
+    def build(self):
+        colors = self.colors
+        win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
+        win.set_decorated(False)
+        win.set_skip_taskbar_hint(True)
+        win.set_keep_above(True)
+        win.set_resizable(False)
+        win.set_accept_focus(True)
+        win.set_type_hint(Gdk.WindowTypeHint.DIALOG)
+        win.set_position(Gtk.WindowPosition.CENTER_ALWAYS)
+        win.set_size_request(300, -1)
+
+        css = Gtk.CssProvider()
+        css.load_from_data(f"""
+            window {{ background-color: {colors['bg']}; border-radius: 12px; }}
+            label {{ color: {colors['fg']}; }}
+            label.title {{ font-weight: 600; font-size: 13px; }}
+            label.sub {{ color: {colors['dim']}; font-size: 11px; }}
+            button {{
+                color: {colors['fg']};
+                background-image: none;
+                background-color: transparent;
+                border: none;
+                border-radius: 9px;
+                padding: 7px 10px;
+                box-shadow: none;
+            }}
+            button:hover {{ background-color: {colors['hover']}; }}
+        """.encode())
+        Gtk.StyleContext.add_provider_for_screen(
+            Gdk.Screen.get_default(), css,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        for side in ('top', 'bottom', 'start', 'end'):
+            getattr(box, f'set_margin_{side}')(14)
+        win.add(box)
+
+        what = 'Send to' if not self.files else (
+            f'Send {os.path.basename(self.files[0])}' if len(self.files) == 1
+            else f'Send {len(self.files)} files')
+        title = Gtk.Label(label=what, xalign=0)
+        title.get_style_context().add_class('title')
+        title.set_max_width_chars(34)
+        title.set_ellipsize(3)
+        box.pack_start(title, False, False, 0)
+
+        self.rows = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        box.pack_start(self.rows, False, False, 0)
+
+        self.set_status('Looking for devices…')
+        win.connect('key-press-event', self.on_key)
+        win.connect('destroy', lambda *_: Gtk.main_quit())
+        self.win = win
+        return win
+
+    def set_status(self, text):
+        for child in self.rows.get_children():
+            self.rows.remove(child)
+        label = Gtk.Label(label=text, xalign=0)
+        label.get_style_context().add_class('sub')
+        label.set_margin_top(6)
+        label.set_margin_bottom(2)
+        self.rows.pack_start(label, False, False, 0)
+        self.rows.show_all()
+
+    def on_key(self, _w, event):
+        if event.keyval == Gdk.KEY_Escape:
+            Gtk.main_quit()
+            return True
+        return False
+
+    # -- discovery ---------------------------------------------------------
+
+    def search(self):
+        """Browse off the main loop, then hand the result back to it.
+
+        GLib.idle_add is the handoff: Gtk is not thread-safe, and touching the
+        widgets from the browse thread is the kind of bug that shows up as a
+        blank popup once a week rather than every time.
+        """
+        peers = drop.discover()
+        GLib.idle_add(self.show_peers, peers)
+
+    def show_peers(self, peers):
+        if not peers:
+            self.set_status('No devices nearby.\nThe other machine needs '
+                            'mintdrop installed and running.')
+            return False
+        for child in self.rows.get_children():
+            self.rows.remove(child)
+        for peer in peers:
+            button = Gtk.Button()
+            inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+            name = Gtk.Label(label=peer['name'], xalign=0)
+            name.get_style_context().add_class('title')
+            where = Gtk.Label(label=peer['address'], xalign=0)
+            where.get_style_context().add_class('sub')
+            inner.pack_start(name, False, False, 0)
+            inner.pack_start(where, False, False, 0)
+            button.add(inner)
+            button.connect('clicked', self.pick, peer)
+            self.rows.pack_start(button, False, False, 0)
+        self.rows.show_all()
+        return False
+
+    def pick(self, _button, peer):
+        self.chosen = peer
+        Gtk.main_quit()
+
+    def run(self):
+        win = self.build()
+        win.show_all()
+        win.present()
+        gdk_win = win.get_window()
+        if gdk_win is not None:
+            gdk_win.focus(GLib.get_monotonic_time() // 1000 & 0xffffffff)
+        threading.Thread(target=self.search, daemon=True).start()
+        Gtk.main()
+        return self.chosen
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
+    parser.add_argument('--pick', action='store_true',
+                        help='print the chosen peer and exit')
+    parser.add_argument('files', nargs='*')
+    args = parser.parse_args()
+
+    chosen = Picker(args.files).run()
+    if chosen is None:
+        return 1
+    if args.pick or not args.files:
+        print(chosen['name'])
+        return 0
+    # Hand off to the sender. exec rather than spawn: this window is gone, and
+    # a picker sitting in the process tree for the length of a transfer is a
+    # process this machine does not need to be running.
+    address = chosen['address']
+    where = (f'[{address}]:{chosen["port"]}' if ':' in address
+             else f'{address}:{chosen["port"]}')
+    argv = [os.path.join(BIN, 'mintdrop'), 'send', where] + args.files
+    os.execv(argv[0], argv)
+
+
+if __name__ == '__main__':
+    Gdk.set_program_class('mintbook-mintdrop')
+    sys.exit(main())

@@ -1,0 +1,517 @@
+#!/usr/bin/env python3
+"""mintdrop — send a file to a machine that is nearby, and receive one.
+
+    mintdrop peers                       what is nearby
+    mintdrop send "Studio iMac" a.pdf    send to a peer by name, address or ip
+    mintdrop send --pick a.pdf           open the picker and choose
+    mintdrop receive                     one connection, from socket activation
+    mintdrop serve                       stand-alone listener, for machines
+                                         without the systemd user socket
+    mintdrop status                      is the socket armed, what is advertised
+
+Nothing here runs when nothing is happening. `receive` is started by
+systemd's socket unit at the moment a connection arrives and exits when the
+file has landed, and the advertisement is a static file avahi-daemon already
+serves. Idle cost is a listening socket in the kernel and no process at all —
+which is the shape CONTRIBUTING rule 3 asks for, reached by not having a
+daemon rather than by making one cheap.
+"""
+import argparse
+import importlib.machinery
+import json
+import importlib.util
+import os
+import resource
+import socket
+import subprocess
+import sys
+import time
+
+
+def _load():
+    here = os.path.dirname(os.path.realpath(__file__))
+    loader = importlib.machinery.SourceFileLoader(
+        'mintbook_drop', os.path.join(here, 'mintbook_drop.py'))
+    module = importlib.util.module_from_spec(
+        importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(module)
+    return module
+
+
+drop = _load()
+DropError = drop.DropError
+
+KNOWN = f'{drop.HOME}/.config/mintbook/mintdrop.known'
+PROMPT_SECONDS = 45
+
+
+def log(message):
+    """Receiving happens with no terminal attached; the journal is the log."""
+    print(message, file=sys.stderr, flush=True)
+
+
+def stat(**fields):
+    """One machine-readable line per phase, for bin/mintdrop-probe.
+
+    The probe used to time the two processes from the outside, which meant it
+    was mostly timing two Python interpreters starting up — about 0.6 s of CPU
+    that has nothing to do with the copy and was large enough to hide the
+    difference between the two receive paths entirely. These numbers bracket
+    the bulk loop and nothing else.
+    """
+    print('mintdrop-stat ' + json.dumps(fields), file=sys.stderr, flush=True)
+
+
+def cpu_seconds():
+    used = resource.getrusage(resource.RUSAGE_SELF)
+    return used.ru_utime + used.ru_stime
+
+
+def notify(summary, body='', action_dir=None):
+    argv = ['notify-send', '-a', 'Mintdrop', '-i', 'document-send', summary]
+    if body:
+        argv.append(body)
+    try:
+        subprocess.run(argv, timeout=5, check=False)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+# ---------------------------------------------------------------------------
+# receiving
+# ---------------------------------------------------------------------------
+
+def inherited_socket():
+    """The connection systemd handed us.
+
+    Accept=yes spawns one instance per connection. Which descriptor it lands
+    on has moved over systemd's life — fd 3 with LISTEN_FDS set, or stdin in
+    the inetd shape — so this asks both rather than believing either.
+    """
+    if os.environ.get('LISTEN_FDS'):
+        try:
+            return socket.socket(fileno=3)
+        except OSError:
+            pass
+    try:
+        sock = socket.socket(fileno=0)
+        sock.getpeername()
+        return sock
+    except OSError:
+        return None
+
+
+def known_senders():
+    try:
+        with open(KNOWN) as f:
+            return {line.strip() for line in f if line.strip()
+                    and not line.startswith('#')}
+    except OSError:
+        return set()
+
+
+def remember(name):
+    os.makedirs(os.path.dirname(KNOWN), exist_ok=True)
+    with open(KNOWN, 'a') as f:
+        f.write(name + '\n')
+
+
+def ask(name, files, total, peer_ip):
+    """Accept, decline, or accept and remember.
+
+    A receiver that writes files to disk because a stranger asked is a bug
+    with a filename, so the default answer is no: the prompt times out into a
+    decline, a prompt that cannot be shown declines, and only `accept = off`
+    or a name already in mintdrop.known skips it.
+    """
+    policy = drop.config()['accept']
+    if policy == 'off':
+        return False
+    if policy == 'known' and name in known_senders():
+        log(f'accepting {name}: known sender')
+        return True
+
+    summary = files[0]['name'] if len(files) == 1 else f'{len(files)} files'
+    prompt = os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                          'mintdrop-accept')
+    if not os.access(prompt, os.X_OK):
+        prompt = os.path.expanduser('~/.local/bin/mintdrop-accept')
+    argv = [prompt, '--from', name, '--what', summary,
+            '--size', drop.human(total), '--address', peer_ip]
+    try:
+        result = subprocess.run(argv, timeout=PROMPT_SECONDS, check=False)
+    except subprocess.TimeoutExpired:
+        log('declined: nobody answered the prompt')
+        return False
+    except OSError as exc:
+        log(f'declined: no prompt available ({exc.strerror})')
+        return False
+    if result.returncode == 2:          # accept, and stop asking for this name
+        remember(name)
+        return True
+    return result.returncode == 0
+
+
+def receive_on(sock, use_splice=True, auto=False):
+    """One transfer, start to finish, on an already-connected socket.
+
+    `auto` skips the prompt. It is reachable only from `serve --yes`, which
+    exists for bin/mintdrop-probe and the tests — never from an installed
+    unit, because a receiver that accepts silently is the thing the prompt is
+    there to prevent.
+    """
+    peer = sock.getpeername()
+    peer_ip = drop.unmap(peer[0])
+    if not drop.is_local_address(peer_ip):
+        log(f'refused {peer_ip}: not a local address')
+        return 1
+    sock.settimeout(60)
+    name, files, total = drop.read_header(sock)
+    log(f'offer from {name} ({peer_ip}): {len(files)} file(s), '
+        f'{drop.human(total)}')
+
+    if not (auto or ask(name, files, total, peer_ip)):
+        sock.sendall(drop.DECLINE)
+        log('declined')
+        return 0
+    sock.sendall(drop.ACCEPT)
+
+    # Back to blocking for the bulk phase: splice() needs it, and the stall
+    # deadline moves to the poll() inside the splicer.
+    sock.setblocking(True)
+    directory = drop.download_dir()
+    os.makedirs(directory, exist_ok=True)
+    splicer = drop.Splicer() if use_splice else None
+    started = time.monotonic()
+    cpu0 = cpu_seconds()
+    landed = []
+    try:
+        for entry in files:
+            final = drop.unique_path(directory, entry['name'])
+            partial = final + '.part'
+            fd = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            try:
+                drop.allocate(fd, entry['size'])
+                if splicer is not None:
+                    splicer.recv_to(sock, fd, entry['size'])
+                else:
+                    sock.settimeout(90)
+                    drop.recv_to_plain(sock, fd, entry['size'])
+                    sock.setblocking(True)
+                # Truncate away anything fallocate reserved past the end; a
+                # zero-length file that was preallocated would otherwise
+                # arrive the right size and the wrong length.
+                os.ftruncate(fd, entry['size'])
+            finally:
+                os.close(fd)
+            os.chmod(partial, 0o644)
+            os.rename(partial, final)
+            landed.append(final)
+            log(f'received {os.path.basename(final)}')
+        sock.sendall(drop.ACCEPT)
+    except (DropError, OSError) as exc:
+        # A failed transfer leaves nothing that looks finished behind.
+        try:
+            os.unlink(partial)
+        except (OSError, NameError, UnboundLocalError):
+            pass
+        log(f'failed: {exc}')
+        notify('Mintdrop transfer failed', str(exc))
+        return 1
+    finally:
+        if splicer is not None:
+            splicer.close()
+
+    seconds = max(time.monotonic() - started, 1e-6)
+    stat(phase='receive', bytes=total, seconds=seconds,
+         cpu=cpu_seconds() - cpu0, splice=bool(use_splice))
+    rate = total / seconds / (1 << 20)
+    log(f'{drop.human(total)} in {seconds:.2f}s ({rate:.1f} MB/s)')
+    what = (os.path.basename(landed[0]) if len(landed) == 1
+            else f'{len(landed)} files')
+    notify(f'Received {what}', f'From {name} · {drop.human(total)} '
+                               f'· {rate:.0f} MB/s')
+    return 0
+
+
+def cmd_receive(args):
+    sock = inherited_socket()
+    if sock is None:
+        log('mintdrop receive: no connection on stdin or fd 3 — '
+            'run `mintdrop serve` for a stand-alone listener')
+        return 2
+    try:
+        return receive_on(sock, use_splice=not args.no_splice)
+    except DropError as exc:
+        log(f'failed: {exc}')
+        return 1
+    finally:
+        sock.close()
+
+
+def cmd_serve(args):
+    """A listener for machines without the systemd user socket.
+
+    Same code path per connection; it is the socket that is set up here rather
+    than by systemd. Serial on purpose — two transfers at once on one radio
+    are slower than the same two in a row, and the second sender gets a
+    'busy' byte instead of a stalled bar.
+    """
+    family = socket.AF_INET6
+    try:
+        listener = socket.socket(family, socket.SOCK_STREAM)
+        listener.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+    except OSError:
+        family = socket.AF_INET
+        listener = socket.socket(family, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(('' if family is socket.AF_INET else '::', args.port))
+    listener.listen(8)
+    log(f'mintdrop listening on {args.port}')
+    while True:
+        conn, _ = listener.accept()
+        conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        try:
+            receive_on(conn, use_splice=not args.no_splice, auto=args.yes)
+        except DropError as exc:
+            log(f'failed: {exc}')
+        finally:
+            conn.close()
+        if args.once:
+            return 0
+
+
+# ---------------------------------------------------------------------------
+# sending
+# ---------------------------------------------------------------------------
+
+class Bar:
+    """One line of progress, redrawn no more than 20 times a second.
+
+    A progress bar that repaints per megabyte costs more than the transfer on
+    a Core M with a terminal in front of it.
+    """
+
+    def __init__(self, total, quiet=False):
+        self.total = total
+        self.done = 0
+        self.last = 0.0
+        self.started = time.monotonic()
+        self.quiet = quiet or not sys.stderr.isatty()
+
+    def __call__(self, moved):
+        self.done += moved
+        now = time.monotonic()
+        if self.quiet or (now - self.last < 0.05 and self.done < self.total):
+            return
+        self.last = now
+        elapsed = max(now - self.started, 1e-6)
+        rate = self.done / elapsed / (1 << 20)
+        share = self.done / self.total if self.total else 1.0
+        width = 24
+        filled = int(share * width)
+        sys.stderr.write(f'\r  [{"█" * filled}{" " * (width - filled)}] '
+                         f'{share * 100:3.0f}%  {rate:5.1f} MB/s ')
+        sys.stderr.flush()
+
+    def finish(self):
+        if not self.quiet:
+            sys.stderr.write('\n')
+        return time.monotonic() - self.started
+
+
+def resolve_peer(target):
+    """A peer name, a hostname or an address — whatever the user typed."""
+    if target is None:
+        return None
+    peers = drop.discover()
+    lowered = target.lower()
+    for peer in peers:
+        if peer['name'].lower() == lowered:
+            return peer
+    for peer in peers:
+        if peer['name'].lower().startswith(lowered):
+            return peer
+    # Not advertised, or avahi is not running on this side: treat it as a
+    # host. An IPv6 literal is full of colons, so the port only counts when
+    # it is bracketed — `[fe80::1]:8771` — or when there is exactly one colon
+    # in the whole string. Splitting naively sent every IPv6 peer the picker
+    # offered to a host called 'fe80' on port ':1:8771'.
+    if target.startswith('['):
+        host, _, rest = target[1:].partition(']')
+        port = rest.lstrip(':')
+    elif target.count(':') == 1:
+        host, _, port = target.partition(':')
+    else:
+        host, port = target, ''
+    try:
+        port = int(port) if port else drop.PORT
+        info = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except (OSError, ValueError):
+        return None
+    return {'name': host, 'address': info[0][4][0], 'port': port,
+            'family': '', 'interface': ''}
+
+
+def cmd_send(args):
+    files = []
+    for path in args.files:
+        path = os.path.abspath(os.path.expanduser(path))
+        if os.path.isdir(path):
+            print(f'mintdrop: {path} is a directory — zip it first',
+                  file=sys.stderr)
+            return 2
+        try:
+            size = os.stat(path).st_size
+        except OSError as exc:
+            print(f'mintdrop: {path}: {exc.strerror}', file=sys.stderr)
+            return 2
+        files.append({'path': path, 'name': os.path.basename(path),
+                      'size': size})
+    total = sum(f['size'] for f in files)
+
+    target = args.to
+    if args.pick or not target:
+        picker = os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                              'mintdrop-menu')
+        if not os.access(picker, os.X_OK):
+            picker = os.path.expanduser('~/.local/bin/mintdrop-menu')
+        try:
+            chosen = subprocess.run([picker, '--pick'], text=True,
+                                    capture_output=True, check=False)
+            target = chosen.stdout.strip() or None
+        except OSError:
+            target = None
+        if not target:
+            print('mintdrop: no peer chosen', file=sys.stderr)
+            return 1
+
+    peer = resolve_peer(target)
+    if peer is None:
+        print(f'mintdrop: no peer called {target}', file=sys.stderr)
+        return 1
+
+    print(f'{"Sending" if len(files) == 1 else f"Sending {len(files)} files"} '
+          f'{drop.human(total)} to {peer["name"]}', file=sys.stderr)
+    try:
+        sock = drop.connect(peer['address'], peer['port'])
+    except OSError as exc:
+        print(f'mintdrop: cannot reach {peer["name"]}: {exc.strerror}',
+              file=sys.stderr)
+        return 1
+    try:
+        drop.write_header(sock, {
+            'name': drop.config()['name'] or drop.device_name(),
+            'files': [{'name': f['name'], 'size': f['size']} for f in files],
+        })
+        sock.settimeout(PROMPT_SECONDS + 15)
+        answer = drop.read_exactly(sock, 1)
+        if answer == drop.DECLINE:
+            print(f'{peer["name"]} declined', file=sys.stderr)
+            return 1
+        if answer != drop.ACCEPT:
+            print(f'{peer["name"]} is busy', file=sys.stderr)
+            return 1
+
+        sock.settimeout(None)
+        bar = Bar(total, quiet=args.quiet)
+        cpu0 = cpu_seconds()
+        for entry in files:
+            drop.send_file(sock, entry['path'], entry['size'], bar)
+        sock.settimeout(120)
+        drop.read_exactly(sock, 1)
+        seconds = bar.finish()
+        stat(phase='send', bytes=total, seconds=seconds,
+             cpu=cpu_seconds() - cpu0)
+    except DropError as exc:
+        print(f'\nmintdrop: {exc}', file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f'\nmintdrop: {exc.strerror}', file=sys.stderr)
+        return 1
+    finally:
+        sock.close()
+
+    rate = total / max(seconds, 1e-6) / (1 << 20)
+    print(f'Sent {drop.human(total)} in {seconds:.2f}s ({rate:.1f} MB/s)',
+          file=sys.stderr)
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# looking around
+# ---------------------------------------------------------------------------
+
+def cmd_peers(args):
+    peers = drop.discover(args.wait)
+    if not peers:
+        print('No devices nearby.', file=sys.stderr)
+        return 1
+    for peer in peers:
+        print(f'{peer["name"]}\t{peer["address"]}\t{peer["port"]}')
+    return 0
+
+
+def cmd_status(args):
+    unit = subprocess.run(['systemctl', '--user', 'is-active',
+                           'mintbook-drop.socket'], text=True,
+                          capture_output=True, check=False)
+    state = unit.stdout.strip() or 'not installed'
+    print(f'receiver        {state} (port {drop.PORT})')
+    print(f'this device     {drop.config()["name"] or drop.device_name()}')
+    print(f'accept policy   {drop.config()["accept"]}')
+    print(f'downloads to    {drop.download_dir()}')
+    advert = '/etc/avahi/services/mintdrop.service'
+    print(f'advertised      {"yes" if os.path.exists(advert) else "no"}'
+          f' ({advert})')
+    peers = drop.discover()
+    print(f'nearby          {", ".join(p["name"] for p in peers) or "nothing"}')
+    return 0
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        prog='mintdrop', description=__doc__.split('\n\n')[0],
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = parser.add_subparsers(dest='command')
+
+    send = sub.add_parser('send', help='send files to a nearby device')
+    send.add_argument('to', nargs='?', help='peer name, hostname or address')
+    send.add_argument('files', nargs='+')
+    send.add_argument('--pick', action='store_true',
+                      help='choose the peer in the picker')
+    send.add_argument('--quiet', action='store_true')
+    send.set_defaults(func=cmd_send)
+
+    recv = sub.add_parser('receive', help='handle one socket-activated connection')
+    recv.add_argument('--no-splice', action='store_true',
+                      help='use a user-space buffer instead of splice()')
+    recv.set_defaults(func=cmd_receive)
+
+    serve = sub.add_parser('serve', help='stand-alone listener')
+    serve.add_argument('--port', type=int, default=drop.PORT)
+    serve.add_argument('--once', action='store_true')
+    serve.add_argument('--no-splice', action='store_true')
+    serve.add_argument('--yes', action='store_true',
+                       help='accept without prompting (bin/mintdrop-probe, tests)')
+    serve.set_defaults(func=cmd_serve)
+
+    peers = sub.add_parser('peers', help='list nearby devices')
+    peers.add_argument('--wait', type=float, default=1.2)
+    peers.set_defaults(func=cmd_peers)
+
+    status = sub.add_parser('status', help='what is armed and advertised')
+    status.set_defaults(func=cmd_status)
+
+    args = parser.parse_args(argv)
+    if not getattr(args, 'func', None):
+        parser.print_help()
+        return 2
+    try:
+        return args.func(args)
+    except KeyboardInterrupt:
+        return 130
+
+
+if __name__ == '__main__':
+    sys.exit(main())

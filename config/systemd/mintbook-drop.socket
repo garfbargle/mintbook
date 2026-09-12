@@ -1,0 +1,25 @@
+# Mintdrop's receiver, armed without anything running.
+#
+# This is the whole reason receiving costs nothing on this machine: the kernel
+# holds the listening socket, and systemd starts mintbook-drop@.service only
+# when a connection actually arrives. Between transfers there is no process,
+# no timer and no poll — CONTRIBUTING rule 3 reached by not having a daemon
+# rather than by making one cheap. See docs/mintdrop.md.
+[Unit]
+Description=Mintdrop — accept files from nearby devices
+Documentation=file:///home/cobo/mintbook/docs/mintdrop.md
+
+[Socket]
+ListenStream=8771
+# One instance per connection, so a failed transfer cannot take the listener
+# down with it and the next sender still gets a prompt.
+Accept=yes
+# One socket for both families: v4 peers arrive as ::ffff:a.b.c.d and
+# bin/mintbook_drop.py unwraps them.
+BindIPv6Only=both
+# Two at once on one radio is slower than the same two in a row.
+MaxConnectionsPerSource=2
+MaxConnections=4
+
+[Install]
+WantedBy=sockets.target

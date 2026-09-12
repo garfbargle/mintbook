@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Send with Mintdrop
+Comment=Send these files to a device that is nearby
+Icon=document-send
+Exec=mintdrop-menu %F
+NoDisplay=true
+MimeType=application/octet-stream;

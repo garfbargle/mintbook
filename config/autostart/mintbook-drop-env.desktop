@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Mintdrop session environment
+Comment=Let the socket-activated receiver find the display for its prompt
+Exec=systemctl --user import-environment DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS
+NoDisplay=true
+X-GNOME-Autostart-Phase=Initialization

@@ -1,0 +1,211 @@
+#!/usr/bin/env python3
+"""Install mintdrop, with a persistent undo snapshot.
+
+    bin/mintdrop-install            # symlink the scripts, arm the socket
+    bin/mintdrop-install --revert   # put everything back
+    bin/mintdrop-install --advert   # the one step that needs root
+
+Follows bin/daily-install: repository symlinks into ~/.local/bin, the
+pre-install state of every file recorded once, and a rerun that adds newly
+introduced files to the original snapshot rather than replacing it.
+
+Only the mDNS advertisement needs root, because /etc/avahi/services is root's.
+Everything else — the scripts, the user socket, the Thunar entry — is yours,
+and skipping the advertisement only means other machines cannot *find* this
+one. Sending from it, and receiving from a peer told where to look, still work.
+"""
+import argparse
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import time
+
+ROOT = Path(__file__).resolve().parent.parent
+HOME = Path.home()
+SAVED = HOME / '.config/mintbook/mintdrop-install.json'
+BIN = HOME / '.local/bin'
+UNIT_DIR = HOME / '.config/systemd/user'
+AUTOSTART = HOME / '.config/autostart'
+ACTIONS = HOME / '.local/share/file-manager/actions'
+ADVERT = Path('/etc/avahi/services/mintdrop.service')
+
+SCRIPTS = ('mintdrop', 'mintdrop-accept', 'mintdrop-menu', 'mintdrop-probe',
+           'mintbook_drop.py')
+UNITS = ('mintbook-drop.socket', 'mintbook-drop@.service')
+SOCKET = 'mintbook-drop.socket'
+
+
+def run(*argv, check=True):
+    return subprocess.run(argv, check=check, text=True, capture_output=True)
+
+
+def targets():
+    result = [(ROOT / 'bin' / name, BIN / name) for name in SCRIPTS]
+    result += [(ROOT / 'config/systemd' / name, UNIT_DIR / name)
+               for name in UNITS]
+    result += [(ROOT / 'config/autostart/mintbook-drop-env.desktop',
+                AUTOSTART / 'mintbook-drop-env.desktop')]
+    result += [(ROOT / 'config/applications/mintbook-mintdrop.desktop',
+                ACTIONS / 'mintbook-mintdrop.desktop')]
+    return result
+
+
+def snapshot():
+    """Record what was there before, once, and keep it across reruns."""
+    if SAVED.exists():
+        data = json.loads(SAVED.read_text())
+        known = {entry['path'] for entry in data['files']}
+        added = [(src, dst) for src, dst in targets() if str(dst) not in known]
+        if not added:
+            return data
+        backup = (HOME / '.local/state/mintbook' /
+                  ('mintdrop-added-' + time.strftime('%Y%m%d-%H%M%S')))
+        backup.mkdir(parents=True, exist_ok=True)
+        for i, (_src, dst) in enumerate(added):
+            entry = dict(path=str(dst), backup=None)
+            if dst.exists() or dst.is_symlink():
+                copy = backup / str(i)
+                shutil.copy2(dst, copy, follow_symlinks=False)
+                entry['backup'] = str(copy)
+            data['files'].append(entry)
+        SAVED.write_text(json.dumps(data, indent=2))
+        return data
+
+    backup = (HOME / '.local/state/mintbook' /
+              ('mintdrop-before-' + time.strftime('%Y%m%d-%H%M%S')))
+    backup.mkdir(parents=True, exist_ok=True)
+    data = dict(files=[], socket=run('systemctl', '--user', 'is-enabled',
+                                     SOCKET, check=False).returncode == 0)
+    for i, (_src, dst) in enumerate(targets()):
+        entry = dict(path=str(dst), backup=None)
+        if dst.exists() or dst.is_symlink():
+            copy = backup / str(i)
+            shutil.copy2(dst, copy, follow_symlinks=False)
+            entry['backup'] = str(copy)
+        data['files'].append(entry)
+    SAVED.parent.mkdir(parents=True, exist_ok=True)
+    SAVED.write_text(json.dumps(data, indent=2))
+    return data
+
+
+def link(source, dest):
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists() or dest.is_symlink():
+        dest.unlink()
+    dest.symlink_to(source)
+
+
+def install_advert():
+    """The mDNS advertisement — the only root step.
+
+    Copied rather than symlinked: avahi-daemon reads this directory as root
+    and a link into a home directory is a link it may not be able to follow.
+    """
+    source = ROOT / 'config/avahi/mintdrop.service'
+    if os.geteuid() == 0:
+        shutil.copy2(source, ADVERT)
+        run('systemctl', 'reload-or-restart', 'avahi-daemon', check=False)
+        print(f'[+] advertised as _mintdrop._tcp ({ADVERT})')
+        return True
+    print('[*] the advertisement needs root; asking sudo for this one file')
+    result = subprocess.run(['sudo', sys.executable, str(Path(__file__).resolve()),
+                             '--advert'], check=False)
+    return result.returncode == 0
+
+
+def install(args):
+    snapshot()
+    for source, dest in targets():
+        if not source.exists():
+            print(f'[!] missing from the checkout: {source}', file=sys.stderr)
+            continue
+        link(source, dest)
+    print(f'[+] linked {len(SCRIPTS)} scripts into {BIN}')
+
+    run('systemctl', '--user', 'daemon-reload', check=False)
+    enabled = run('systemctl', '--user', 'enable', '--now', SOCKET, check=False)
+    if enabled.returncode == 0:
+        print(f'[+] {SOCKET} armed on port 8771 — nothing runs until a '
+              f'connection arrives')
+    else:
+        print(f'[!] could not arm the socket: {enabled.stderr.strip()}',
+              file=sys.stderr)
+
+    # The socket-activated receiver needs to find the display to show its
+    # prompt. The autostart file does this at every login; do it now too, so
+    # the first transfer works without logging out first.
+    run('systemctl', '--user', 'import-environment', 'DISPLAY', 'XAUTHORITY',
+        'DBUS_SESSION_BUS_ADDRESS', check=False)
+
+    if not args.no_advert:
+        install_advert()
+
+    print('\nDone. Try it:')
+    print('  mintdrop status            what is armed here')
+    print('  mintdrop peers             what is nearby')
+    print('  mintdrop send NAME file    send it')
+    print('\nRevert with:  bin/mintdrop-install --revert')
+    return 0
+
+
+def revert(args):
+    if not SAVED.exists():
+        print('nothing to revert: no snapshot from an earlier install',
+              file=sys.stderr)
+        return 1
+    data = json.loads(SAVED.read_text())
+
+    run('systemctl', '--user', 'disable', '--now', SOCKET, check=False)
+    for entry in data['files']:
+        path = Path(entry['path'])
+        if path.exists() or path.is_symlink():
+            path.unlink()
+        if entry['backup']:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(entry['backup'], path, follow_symlinks=False)
+    run('systemctl', '--user', 'daemon-reload', check=False)
+    print(f'[+] removed {len(data["files"])} files and disarmed {SOCKET}')
+
+    if ADVERT.exists():
+        if os.geteuid() == 0:
+            ADVERT.unlink()
+            run('systemctl', 'reload-or-restart', 'avahi-daemon', check=False)
+            print(f'[+] removed {ADVERT}')
+        else:
+            print(f'[*] still advertised; remove it with:\n'
+                  f'    sudo rm {ADVERT} && '
+                  f'sudo systemctl reload-or-restart avahi-daemon')
+    SAVED.unlink()
+    print('[+] snapshot consumed; this checkout is no longer installed')
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=__doc__.split('\n\n')[0],
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--revert', action='store_true')
+    parser.add_argument('--advert', action='store_true',
+                        help='install only the mDNS advertisement (root)')
+    parser.add_argument('--no-advert', action='store_true',
+                        help='skip the advertisement and its sudo prompt')
+    args = parser.parse_args()
+
+    if args.advert:
+        if os.geteuid() != 0:
+            print('--advert must run as root', file=sys.stderr)
+            return 1
+        shutil.copy2(ROOT / 'config/avahi/mintdrop.service', ADVERT)
+        run('systemctl', 'reload-or-restart', 'avahi-daemon', check=False)
+        print(f'[+] advertised as _mintdrop._tcp ({ADVERT})')
+        return 0
+    if args.revert:
+        return revert(args)
+    return install(args)
+
+
+if __name__ == '__main__':
+    sys.exit(main())

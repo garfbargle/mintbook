@@ -1,0 +1,185 @@
+#!/usr/bin/env python3
+"""mintdrop-probe — what the transfer path actually costs on this machine.
+
+    bin/mintdrop-probe                # both receive paths, loopback
+    bin/mintdrop-probe --peer NAME    # over the real radio, to a nearby peer
+    bin/mintdrop-probe --size 1024    # MB per trial
+
+Read-only apart from the payload it writes and deletes. Nothing is installed
+and no unit is touched; it drives `mintdrop serve --once --yes` on a spare
+port, in this checkout, and measures what comes out.
+
+The question it answers is not "how fast is the network" — the AP settles
+that. It is whether ``os.splice()`` on the receive side earns its complexity
+over an ordinary buffered read. On a fanless Core M the number that decides
+that is CPU seconds per gigabyte, not MB/s: throughput on Wi-Fi is pinned by
+the radio long before either path runs out of CPU, but the path that burns
+less of it is the one that does not warm the machine up or take the cores
+away from whatever you are doing while the file lands.
+
+Loopback is deliberately the default. It removes the radio, which is the
+variable that is not under test, and it is the only way to see the two paths
+at a rate high enough to tell them apart.
+"""
+import argparse
+import json
+import os
+import shutil
+import signal
+import statistics
+import subprocess
+import sys
+import tempfile
+import time
+
+BIN = os.path.dirname(os.path.realpath(__file__))
+MINTDROP = os.path.join(BIN, 'mintdrop')
+PORT = 8879
+
+
+def stats_in(text):
+    """The mintdrop-stat lines a run left on stderr."""
+    found = []
+    for line in text.splitlines():
+        if line.startswith('mintdrop-stat '):
+            try:
+                found.append(json.loads(line[len('mintdrop-stat '):]))
+            except ValueError:
+                pass
+    return found
+
+
+def one_trial(payload, size, splice, port, peer=None):
+    """One transfer. Returns (seconds, cpu_seconds, MB/s).
+
+    Both numbers come from the two processes' own mintdrop-stat lines, which
+    bracket the bulk loop only. Timing them from out here instead measures two
+    Python interpreters starting up, and that is ~0.6 s of CPU — larger than
+    the whole difference between the receive paths, which is why the first
+    version of this probe reported "not measurable" for everything.
+
+    CPU is the sender's plus the receiver's: the whole cost to the machine of
+    moving the file, which on loopback is genuinely both ends.
+    """
+    if peer:
+        target = peer
+        server = None
+    else:
+        argv = [MINTDROP, 'serve', '--once', '--yes', '--port', str(port)]
+        if not splice:
+            argv.append('--no-splice')
+        server = subprocess.Popen(argv, stderr=subprocess.PIPE, text=True)
+        target = f'127.0.0.1:{port}'
+        # Wait for the listener's own ready line, not for a successful
+        # connect: `serve --once` takes exactly one connection, and the
+        # obvious connect-and-close readiness probe *is* that connection —
+        # which left every trial sending into a closed port.
+        while True:
+            line = server.stderr.readline()
+            if not line:
+                raise SystemExit('listener exited before it was ready')
+            if 'listening' in line:
+                break
+
+    send = subprocess.run([MINTDROP, 'send', '--quiet', target, payload],
+                          capture_output=True, text=True)
+    server_err = ''
+    if server is not None:
+        server_err = server.stderr.read()
+        server.wait(timeout=120)
+    if send.returncode != 0:
+        raise SystemExit(f'transfer failed:\n{send.stderr}\n{server_err}')
+
+    measured = stats_in(send.stderr) + stats_in(server_err)
+    if not measured:
+        raise SystemExit('no mintdrop-stat lines — is this an older mintdrop?')
+    cpu = sum(m['cpu'] for m in measured)
+    # The receiver's clock is the transfer: it stops when the last byte has
+    # been written, which is after the sender's last sendfile() returns.
+    elapsed = max(m['seconds'] for m in measured)
+    return elapsed, cpu, size / (1 << 20) / elapsed
+
+
+def arm(name, payload, size, splice, trials, port, peer):
+    rates, cpus = [], []
+    for i in range(trials):
+        elapsed, cpu, rate = one_trial(payload, size, splice, port + i, peer)
+        rates.append(rate)
+        cpus.append(cpu)
+        print(f'  {name:<18} trial {i + 1}: {rate:7.1f} MB/s   '
+              f'{cpu:5.2f} s CPU   {cpu / (size / (1 << 30)):5.2f} s/GB')
+    return rates, cpus
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0],
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--size', type=int, default=512, help='MB per trial')
+    parser.add_argument('--trials', type=int, default=3)
+    parser.add_argument('--peer', help='send over the radio to this peer '
+                                       'instead of to loopback')
+    args = parser.parse_args()
+
+    size = args.size << 20
+    free = shutil.disk_usage(tempfile.gettempdir()).free
+    if free < size * 3:
+        raise SystemExit(f'need {size * 3 >> 20} MB free for a '
+                         f'{args.size} MB payload; have {free >> 20} MB')
+
+    work = tempfile.mkdtemp(prefix='mintdrop-probe-')
+    payload = os.path.join(work, 'payload.bin')
+    print(f'payload: {args.size} MB of urandom in {work}')
+    with open(payload, 'wb') as f, open('/dev/urandom', 'rb') as r:
+        left = size
+        while left:
+            block = r.read(min(1 << 22, left))
+            f.write(block)
+            left -= len(block)
+        f.flush()
+        os.fsync(f.fileno())
+
+    # Read it once so every trial starts with the payload equally warm in the
+    # page cache. Without this the first trial measures the NVMe — one command
+    # in flight, see bin/io-probe — and not the transfer path.
+    with open(payload, 'rb') as f:
+        while f.read(1 << 22):
+            pass
+
+    try:
+        if args.peer:
+            print(f'\nover the radio to {args.peer}:')
+            rates, cpus = arm('radio', payload, size, True, args.trials,
+                              PORT, args.peer)
+            print(f'\n  median {statistics.median(rates):.1f} MB/s   '
+                  f'{statistics.median(cpus) / (size / (1 << 30)):.2f} s CPU/GB')
+            return 0
+
+        print(f'\nloopback, {args.trials} trials each:')
+        splice_rates, splice_cpu = arm('splice()', payload, size, True,
+                                       args.trials, PORT, None)
+        plain_rates, plain_cpu = arm('buffered read', payload, size, False,
+                                     args.trials, PORT + 50, None)
+
+        gigabytes = size / (1 << 30)
+        sr, pr = statistics.median(splice_rates), statistics.median(plain_rates)
+        sc = statistics.median(splice_cpu) / gigabytes
+        pc = statistics.median(plain_cpu) / gigabytes
+        spread = max(max(splice_rates) - min(splice_rates),
+                     max(plain_rates) - min(plain_rates))
+        print(f'\n  splice()        {sr:7.1f} MB/s   {sc:5.2f} s CPU/GB')
+        print(f'  buffered read   {pr:7.1f} MB/s   {pc:5.2f} s CPU/GB')
+        print(f'\n  splice is {(sr / pr - 1) * 100:+.0f}% on throughput '
+              f'and {(sc / pc - 1) * 100:+.0f}% on CPU')
+        print(f'  worst within-arm spread: {spread:.1f} MB/s')
+        if abs(sr - pr) <= spread:
+            print('  NOT MEASURABLE on throughput: the difference is inside '
+                  'one arm\'s own spread.')
+        print('\n  The radio tops out near 55 MB/s, so the CPU column is the '
+              'one that decides this.')
+        return 0
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+if __name__ == '__main__':
+    sys.exit(main())

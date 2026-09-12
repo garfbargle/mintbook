@@ -1,0 +1,24 @@
+# One incoming transfer. Started by mintbook-drop.socket, exits when the file
+# has landed. %i is the connection's peer, which is what the journal shows.
+#
+# Nice=10 and the idle I/O class are deliberate: a 2 GB file arriving must not
+# make the desktop stutter on two cores, and a transfer nobody is watching has
+# no claim on the machine ahead of the window someone is typing in. The radio
+# caps throughput long before the scheduler does, so this costs the transfer
+# nothing it was going to get. Same reasoning as docs/priority.md.
+[Unit]
+Description=Mintdrop transfer from %i
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/mintdrop receive
+# Accept=yes hands the connection over as stdin.
+StandardInput=socket
+StandardOutput=journal
+StandardError=journal
+Nice=10
+IOSchedulingClass=idle
+# A stalled sender must not hold an instance open forever. The prompt itself
+# times out at 45 s inside mintdrop; this is the outer bound for the whole
+# transfer, generous enough for a large file over a weak signal.
+TimeoutStartSec=4h
