@@ -79,6 +79,41 @@ when updates exist, with apt and Flatpak together in one clean list.
   <img src="docs/images/battery-menu.jpg" alt="Battery menu" width="31%">
 </p>
 
+## Send it to the machine next to you.
+
+Right-click a file in Files and choose **Send with Mintdrop**, or run
+`mintdrop send`. Pick a name from the devices that are nearby and the file
+goes straight across the network—no cloud, no cable, no account, no app on
+either end.
+
+Anything arriving here says so first. Who is sending, what it is, how big,
+and from which address—and the default answer is no. Escape declines, a
+prompt nobody answers declines, and a sender that cannot be shown a prompt
+is declined too.
+
+<p align="center">
+  <img src="docs/images/mintdrop-accept-light.png" alt="The Mintdrop prompt in the light appearance: Galaxy S24 wants to send you a file, with Decline and Accept" width="283">
+  &nbsp;
+  <img src="docs/images/mintdrop-accept-dark.png" alt="The same prompt in the dark appearance" width="283">
+</p>
+
+**It costs nothing while you are not using it.** There is no daemon and no
+timer: the kernel holds the listening socket, and systemd starts a receiver
+only at the moment a connection arrives. Being discoverable is one static
+file read by the Avahi daemon that is already running for the rest of the
+system. A file that is landing runs niced and in the idle I/O class, so an
+arriving gigabyte cannot stall the desktop on two cores.
+
+This is not Apple's AirDrop, and on this machine it cannot be: AirDrop puts
+its data on AWDL, which needs the wireless card in monitor mode with frame
+injection, and the BCM4350 here has neither. Quick Share—Samsung's and
+Google's—announces over BLE and mDNS and then moves bytes over an ordinary
+TCP connection, which any card can do. That is the shape Mintdrop follows.
+Today it talks to other Linux machines running it; speaking Quick Share
+itself, so a phone sees this machine in its own share sheet, is being built.
+
+[How it works, and what it does not protect](docs/mintdrop.md)
+
 ## Tuned by evidence.
 
 This is more than a desktop theme. It is the hardware work that makes this
@@ -133,7 +168,7 @@ failure here, and the card does not pretend otherwise.
 | | |
 |---|---|
 | **Desktop** | [Look and behavior](docs/desktop.md) · [Control Center and System menu](docs/control-center.md) · [Software updates](docs/updates.md) · [HiDPI display](docs/display.md) |
-| **Daily use** | [Shortcuts and search](docs/daily.md) · [Battery](docs/battery.md) · [Video](docs/video.md) |
+| **Daily use** | [Shortcuts and search](docs/daily.md) · [Battery](docs/battery.md) · [Video](docs/video.md) · [Nearby sharing](docs/mintdrop.md) |
 | **Hardware** | [Input and sleep](docs/input.md) · [Hibernation](docs/hibernate.md) · [Audio](docs/audio.md) · [Camera](docs/camera.md) · [Bluetooth](docs/bluetooth.md) |
 | **System** | [Boot and kernels](docs/boot.md) · [App performance](docs/app-performance.md) · [Implementation guide](CONTRIBUTING.md) |
 
