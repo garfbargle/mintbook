@@ -39,6 +39,7 @@ APPLIED = os.path.expanduser('~/.config/mintbook/appearance.applied')
 # window never reads a rule from. Every colour here is drawn or set below.
 os.environ.setdefault('GTK_THEME', 'Adwaita')
 
+import cairo
 import gi
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, Gdk, GLib
@@ -73,9 +74,21 @@ DARK = {
     'bad': (1.0, 0.27, 0.23),
 }
 
-TILE = 92           # the drawing area, square
+# This display runs at 168 DPI, so every size below is a *logical* one and
+# gets multiplied by SC before it reaches a pixel — the same constant and the
+# same reason as bin/bt-menu. Hardcoding pixels here is what made the first
+# version of this window render at 57% of its intended size: readable on a
+# 96 DPI screen, and far too small on the one this machine actually has.
+SC = round((Gdk.Screen.get_default().get_resolution() or 96) / 96.0, 3) or 1.0
+
+TILE = 92           # the drawing area, square, logical
 RADIUS = 33         # the circle inside it
+CORNER = 14         # the window's own rounded corner
 IDLE, SENDING, DONE, FAILED = 'idle', 'sending', 'done', 'failed'
+
+
+def px(value):
+    return int(round(value * SC))
 
 
 def appearance():
@@ -179,7 +192,7 @@ class Tile:
         self.supported = peer.get('protocol', 'mintdrop') == 'mintdrop'
 
         self.area = Gtk.DrawingArea()
-        self.area.set_size_request(TILE, TILE)
+        self.area.set_size_request(px(TILE), px(TILE))
         self.area.connect('draw', self.draw)
 
         self.label = Gtk.Label(label=peer['name'])
@@ -220,6 +233,7 @@ class Tile:
 
     def draw(self, area, cr):
         colours = self.sheet.colours
+        cr.scale(SC, SC)              # everything below is in logical units
         cx = cy = TILE / 2
         lit = (self.hover or self.dropping) and self.state is IDLE
 
@@ -387,6 +401,7 @@ class Sheet:
         self.colours = appearance()
         self.chosen = None
         self.tiles = []
+        self.closed = False
 
     def build(self):
         dark = self.colours is DARK
@@ -398,6 +413,15 @@ class Sheet:
         win.set_accept_focus(True)
         win.set_type_hint(Gdk.WindowTypeHint.DIALOG)
         win.set_position(Gtk.WindowPosition.CENTER_ALWAYS)
+        # Rounded corners are only rounded if something transparent is behind
+        # them. Without an RGBA visual and a background this window paints
+        # itself, GTK fills an opaque square first and the CSS radius just
+        # reveals it — which is the black right-angle behind each corner.
+        win.set_app_paintable(True)
+        visual = Gdk.Screen.get_default().get_rgba_visual()
+        if visual is not None:
+            win.set_visual(visual)
+        win.connect('draw', self.draw_background)
 
         def css_rgb(key, alpha=None):
             c = self.colours[key]
@@ -409,23 +433,41 @@ class Sheet:
 
         css = Gtk.CssProvider()
         css.load_from_data(f'''
-            window {{ background-color: {css_rgb('bg')}; border-radius: 14px; }}
+            window {{ background-color: transparent; }}
             label {{ color: {css_rgb('fg')}; }}
-            label.title {{ font-weight: 600; font-size: 13px; }}
-            label.name {{ font-size: 12px; }}
+            label.title {{ font-weight: 600; font-size: {px(13)}px; }}
+            label.name {{ font-size: {px(12)}px; }}
             label.status, label.hint {{
-                color: {css_rgb('dim')}; font-size: 10px;
+                color: {css_rgb('dim')}; font-size: {px(10)}px;
             }}
-            label.hint {{ font-size: 11px; }}
+            label.hint {{ font-size: {px(11)}px; }}
+            button.close {{
+                background-image: none; background-color: transparent;
+                border: none; box-shadow: none; padding: {px(2)}px {px(6)}px;
+                color: {css_rgb('dim')}; font-size: {px(15)}px;
+            }}
+            button.close:hover {{ color: {css_rgb('fg')}; }}
         '''.encode())
         Gtk.StyleContext.add_provider_for_screen(
             Gdk.Screen.get_default(), css,
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
-        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=px(8))
         for side in ('top', 'bottom', 'start', 'end'):
-            getattr(outer, f'set_margin_{side}')(18)
+            getattr(outer, f'set_margin_{side}')(px(16))
         win.add(outer)
+
+        # A window that can only be dismissed with Escape is a window with no
+        # way out the moment it loses focus — which is exactly what happens
+        # when you click another window to drag a file from it. It kept itself
+        # above everything with no way to close. Hence a visible close.
+        top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        close = Gtk.Button(label='\u00d7')
+        close.get_style_context().add_class('close')
+        close.set_relief(Gtk.ReliefStyle.NONE)
+        close.connect('clicked', lambda _b: Gtk.main_quit())
+        top.pack_end(close, False, False, 0)
+        outer.pack_start(top, False, False, 0)
 
         if self.files:
             what = (os.path.basename(self.files[0]) if len(self.files) == 1
@@ -444,8 +486,8 @@ class Sheet:
         self.flow.set_max_children_per_line(4)
         self.flow.set_min_children_per_line(1)
         self.flow.set_homogeneous(True)
-        self.flow.set_column_spacing(6)
-        self.flow.set_row_spacing(6)
+        self.flow.set_column_spacing(px(6))
+        self.flow.set_row_spacing(px(6))
         # Centre the tiles rather than letting the FlowBox fill: with one
         # device the window is as wide as its hint text, and a single tile
         # pinned to the left of all that space looks like a mistake.
@@ -467,6 +509,31 @@ class Sheet:
         self.win = win
         return win
 
+    def draw_background(self, widget, cr):
+        """The glass: a rounded rectangle on a cleared surface.
+
+        OPERATOR_SOURCE to clear rather than paint over, so the corners are
+        genuinely empty and the window manager shows what is behind them.
+        """
+        allocation = widget.get_allocation()
+        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.set_source_rgba(0, 0, 0, 0)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_OVER)
+        w, h, r = allocation.width, allocation.height, px(CORNER)
+        cr.new_sub_path()
+        cr.arc(w - r, r, r, -math.pi / 2, 0)
+        cr.arc(w - r, h - r, r, 0, math.pi / 2)
+        cr.arc(r, h - r, r, math.pi / 2, math.pi)
+        cr.arc(r, r, r, math.pi, 3 * math.pi / 2)
+        cr.close_path()
+        rgba(cr, self.colours['bg'])
+        cr.fill_preserve()
+        rgba(cr, self.colours['track'])
+        cr.set_line_width(1)
+        cr.stroke()
+        return False
+
     def say(self, text):
         self.hint.set_text(text)
 
@@ -478,7 +545,14 @@ class Sheet:
 
     # -- discovery ---------------------------------------------------------
 
-    def search(self):
+    def search(self, repeat=False):
+        """Browse now, and keep browsing while the window is open.
+
+        A phone advertises only while its own share sheet is up, so a single
+        browse at open time finds nothing if the phone was a second behind —
+        which is what 'it isn't showing the device' looks like. Still nothing
+        resident: this stops when the window closes.
+        """
         peers = list(drop.discover())
         for peer in peers:
             peer.setdefault('protocol', 'mintdrop')
@@ -488,8 +562,19 @@ class Sheet:
         except Exception:
             pass                      # a phone we cannot list is not an error
         GLib.idle_add(self.show, peers)
+        if repeat and not self.closed:
+            GLib.timeout_add_seconds(3, lambda: (
+                threading.Thread(target=self.search, args=(True,),
+                                 daemon=True).start(), False)[1])
 
     def show(self, peers):
+        # Leave a tile that is mid-transfer alone: rebuilding the grid under a
+        # running send would drop the widget its progress is drawn on.
+        if any(tile.state is SENDING for tile in self.tiles):
+            return False
+        if [p['address'] for p in peers] == [t.peer['address']
+                                             for t in self.tiles]:
+            return False
         for tile in self.tiles:
             parent = tile.widget.get_parent()
             if parent is not None:
@@ -524,8 +609,10 @@ class Sheet:
         gdk_win = win.get_window()
         if gdk_win is not None:
             gdk_win.focus(GLib.get_monotonic_time() // 1000 & 0xffffffff)
-        threading.Thread(target=self.search, daemon=True).start()
+        threading.Thread(target=self.search, args=(True,),
+                         daemon=True).start()
         Gtk.main()
+        self.closed = True
         return self.chosen
 
 
