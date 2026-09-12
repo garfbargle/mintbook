@@ -49,6 +49,12 @@ STATE = os.path.expanduser('~/.local/state/mintbook')
 ENDPOINT_FILE = os.path.join(STATE, 'quickshare-endpoint')
 
 
+def fresh_endpoint_id():
+    """Four characters, for one visibility window."""
+    return ''.join(random.choice(string.ascii_uppercase + string.digits)
+                   for _ in range(4))
+
+
 def endpoint_id():
     """Four characters identifying this machine for the length of a session.
 
@@ -992,7 +998,8 @@ class Announcement:
     than the 8 s that produced the flood.
     """
 
-    def __init__(self, name=None, port=PORT, every=20, endpoint=None):
+    def __init__(self, name=None, port=PORT, every=20, endpoint=None,
+                 info=None):
         self.name = name
         self.port = port
         self.every = every
@@ -1004,9 +1011,12 @@ class Announcement:
         # consistent for the length of a visibility window: it tells the
         # phone which endpoint to address, and the port is what it connects
         # to either way.
-        self.endpoint = endpoint or ''.join(
-            random.choice(string.ascii_uppercase + string.digits)
-            for _ in range(4))
+        self.endpoint = endpoint or fresh_endpoint_id()
+        # The same endpoint info the BLE advertisement carries, when there is
+        # one: a phone that found this machine over BLE matches the two by
+        # endpoint id, and handing it a different identity in the mDNS record
+        # is how a transfer gets as far as "connecting" and then fails.
+        self.info = info
         self.process = None
         self.stop_flag = False
         self.thread = None
@@ -1014,7 +1024,8 @@ class Announcement:
 
     def _publish_once(self):
         import subprocess
-        info = b64(endpoint_info(self.name or 'Mintbook'))
+        info = b64(self.info if self.info is not None
+                   else endpoint_info(self.name or 'Mintbook'))
         argv = ['avahi-publish', '-s', instance_name(self.endpoint), SERVICE,
                 str(self.port), f'n={info}']
         return subprocess.Popen(argv, stdout=subprocess.DEVNULL,

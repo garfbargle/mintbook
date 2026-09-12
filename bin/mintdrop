@@ -589,6 +589,19 @@ def cmd_visible(args):
     # in somebody's share sheet: a Nearby advertisement header over BLE and a
     # GATT server holding the real advertisement, because a legacy BLE packet
     # cannot carry it. See bin/mintbook_gatt.py.
+    # One identity for both advertisements. The phone finds this machine
+    # over BLE and then has to recognise the mDNS record as the *same*
+    # endpoint before it will connect over the network — the endpoint id is
+    # what ties them together. Two different ids means it discovers us, tries
+    # a Bluetooth transport we do not serve, and the transfer fails with
+    # "disconnected" on one side and "failed" on the other.
+    #
+    # A fresh id rather than the stored one, because the static file in
+    # /etc/avahi/services already holds that name and avahi refuses the
+    # duplicate.
+    endpoint = qs.fresh_endpoint_id()
+    info = qs.endpoint_info(name)
+
     here = os.path.dirname(os.path.realpath(__file__))
     listed = None
     try:
@@ -597,7 +610,7 @@ def cmd_visible(args):
         gatt = importlib.util.module_from_spec(
             importlib.util.spec_from_loader(loader.name, loader))
         loader.exec_module(gatt)
-        listed = gatt.Listed(qs.endpoint_id(), qs.endpoint_info(name))
+        listed = gatt.Listed(endpoint, info)
     except Exception as exc:
         print(f'mintdrop: cannot be listed on a phone ({exc})', file=sys.stderr)
 
@@ -606,7 +619,7 @@ def cmd_visible(args):
         # Android ignores an mDNS service that was already registered when it
         # started looking, so being visible means re-announcing, not merely
         # having been announced once at boot.
-        with qs.Announcement(name):
+        with qs.Announcement(name, endpoint=endpoint, info=info):
             print(f'Announcing "{name}" to nearby phones for '
                   f'{args.seconds}s', file=sys.stderr)
             if listed is not None:
