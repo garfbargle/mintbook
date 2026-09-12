@@ -262,3 +262,83 @@ class BackgroundNudge:
         if self.loop is not None:
             self.loop.quit()
         return False
+
+
+# ---------------------------------------------------------------------------
+# being discovered by a phone
+# ---------------------------------------------------------------------------
+#
+# Fast initiation (above) says "somebody here wants to send" — it is what a
+# *sender* broadcasts, and the phone emits it too while it scans. It does not
+# put this machine in anybody's list. To be listed, a device broadcasts a
+# Nearby Connections **endpoint advertisement**, and the phone's own log is
+# unambiguous about the difference:
+#
+#     NearbyMediums:  No BLE Fast/GATT advertisements found in the latest cycle
+#     NearbySharing:  Starting Fast Init advertisement because we're currently
+#                     scanning/connecting
+#
+# Two layers, both from google/nearby, and both verified against a Galaxy
+# Z Fold7 that parsed what this builds:
+#
+#     connections/implementation/ble_advertisement.cc         (inner)
+#     connections/implementation/mediums/ble/ble_advertisement.cc  (outer)
+#
+# **The service UUID is 0xFEF3, not 0xFE2C.** That one substitution is what
+# turned "No BLE advertisements found" into EndpointDiscovered(MB01) — FE2C
+# is Fast Pair, which Nearby borrows only for fast initiation.
+
+NEARBY_UUID_FEF3 = '0000fef3-0000-1000-8000-00805f9b34fb'
+
+# P2P_CLUSTER, and version 1 — the same byte that opens the mDNS instance name.
+PCP_BYTE = 0x23
+
+
+def endpoint_advertisement(endpoint_id, endpoint_info, version=2,
+                           socket_version=2, token=None):
+    """The advertisement a phone lists as a device you can send to.
+
+        inner:  (version<<5)|pcp , endpoint_id(4) , len(info) , info
+        outer:  (version<<5)|(socket<<2)|(fast<<1)|second , len , inner , token
+
+    A Galaxy Z Fold7 decoded exactly this and reported
+
+        BleAdvertisement { version=2, socketVersion=2, isFast=true,
+                           data=[0x23 'MB01' ...] }
+        EndpointDiscovered(endpointId=MB01)
+
+    so the framing is right. What it then said was
+    `EndpointParsingFailure`, because the endpoint info it was handed was a
+    shortened one — see the size problem in the docstring below.
+    """
+    endpoint = endpoint_id.encode() if isinstance(endpoint_id, str) else endpoint_id
+    if len(endpoint) != 4:
+        raise ValueError('endpoint id must be 4 characters')
+    inner = (bytes([PCP_BYTE]) + endpoint
+             + bytes([len(endpoint_info)]) + endpoint_info)
+    head = (((version << 5) & 0xE0) | ((socket_version << 2) & 0x1C) | 0x02)
+    return bytes([head, len(inner)]) + inner + (token or os.urandom(2))
+
+
+def advertisement_header(bloom_filter, advertisement_hash, slots=1, psm=0,
+                         version=1, extended=False):
+    """The 17-byte stand-in that points at a GATT server.
+
+        (version<<5)|(extended<<4)|slots , bloom filter(10) , hash(4) , psm(2)
+
+    Needed because a full endpoint advertisement does not fit in a legacy BLE
+    packet, and this adapter is HCI 4.2 — no extended advertising, and BlueZ
+    reports `SupportedSecondaryChannels` empty. The arithmetic is unforgiving:
+    a 31-byte packet leaves 24 bytes of service data, the outer and inner
+    headers cost 10, and a valid endpoint info is at least 18 bytes before
+    the device even has a name. So a device on 4.2 has to serve the real
+    advertisement over GATT and broadcast this instead.
+    """
+    if len(bloom_filter) != 10:
+        raise ValueError('service id bloom filter must be 10 bytes')
+    if len(advertisement_hash) != 4:
+        raise ValueError('advertisement hash must be 4 bytes')
+    head = (((version << 5) & 0xE0) | ((1 if extended else 0) << 4)
+            | (slots & 0x0F))
+    return (bytes([head]) + bloom_filter + advertisement_hash
+            + bytes([(psm >> 8) & 0xFF, psm & 0xFF]))

@@ -245,3 +245,65 @@ class BleTests(unittest.TestCase):
         self.assertEqual(ble.payload().hex(),
                          'fc128e0142000000000000000000bf2d5ba0e1d87524ca00')
         self.assertEqual(len(ble.payload()), 24)
+
+
+class EndpointAdvertisementTests(unittest.TestCase):
+    """The BLE advertisement a phone lists, pinned to what one actually parsed.
+
+    A Galaxy Z Fold7 decoded the bytes below and logged
+    EndpointDiscovered(endpointId=MB01), so these are not a reading of the
+    specification — they are a reading of the specification that a device
+    agreed with.
+    """
+
+    def setUp(self):
+        loader = importlib.machinery.SourceFileLoader(
+            'mintbook_ble', str(ROOT / 'bin' / 'mintbook_ble.py'))
+        self.ble = importlib.util.module_from_spec(
+            importlib.util.spec_from_loader(loader.name, loader))
+        loader.exec_module(self.ble)
+
+    def test_the_bytes_a_phone_accepted(self):
+        info = bytes([0x06, 0x09]) + b'Mintbook1'
+        blob = self.ble.endpoint_advertisement('MB01', info,
+                                               token=bytes([0x8a, 0x89]))
+        self.assertEqual(blob.hex(), '4a11234d42303' + '10b06094d696e74626f6f6b318a89')
+
+    def test_the_outer_header_encodes_version_socket_and_fast(self):
+        blob = self.ble.endpoint_advertisement('AB12', b'\x06', version=2,
+                                               socket_version=2)
+        head = blob[0]
+        self.assertEqual((head >> 5) & 0b111, 2)      # version
+        self.assertEqual((head >> 2) & 0b111, 2)      # socket version
+        self.assertEqual((head >> 1) & 1, 1)          # fast advertisement
+
+    def test_the_inner_advertisement_opens_with_the_pcp_byte(self):
+        # 0x23 — the same byte that opens the mDNS instance name.
+        blob = self.ble.endpoint_advertisement('AB12', b'\x06')
+        self.assertEqual(blob[2], 0x23)
+        self.assertEqual(blob[3:7], b'AB12')
+
+    def test_a_wrong_length_endpoint_is_refused(self):
+        for bad in ('ABC', 'ABCDE'):
+            with self.assertRaises(ValueError):
+                self.ble.endpoint_advertisement(bad, b'\x06')
+
+    def test_the_header_is_seventeen_bytes(self):
+        header = self.ble.advertisement_header(b'\x00' * 10, b'\x01\x02\x03\x04')
+        self.assertEqual(len(header), 17)
+        self.assertEqual((header[0] >> 5) & 0b111, 1)     # version
+        self.assertEqual(header[0] & 0x0F, 1)             # one slot
+
+    def test_the_header_refuses_wrong_field_widths(self):
+        with self.assertRaises(ValueError):
+            self.ble.advertisement_header(b'\x00' * 9, b'\x01\x02\x03\x04')
+        with self.assertRaises(ValueError):
+            self.ble.advertisement_header(b'\x00' * 10, b'\x01\x02\x03')
+
+    def test_a_full_endpoint_info_cannot_fit_a_legacy_packet(self):
+        # The arithmetic that forces the GATT path on this machine: 24 bytes
+        # of service data, 10 spent on headers, and a valid endpoint info is
+        # 18 before the device has a name.
+        full_info = bytes([0x06]) + b'\x00' * 16 + bytes([1]) + b'M'
+        blob = self.ble.endpoint_advertisement('MB01', full_info)
+        self.assertGreater(len(blob), 24)
