@@ -566,84 +566,79 @@ def send_quickshare(peer, files, total, args):
 
 
 def cmd_visible(args):
-    """Be findable by a phone for a couple of minutes, then stop.
+    """Be a device a phone can pick, for a couple of minutes.
 
-    Android sleeps its Nearby stack, so mDNS alone often never gets this
-    machine listed; a BLE advertisement wakes it. Time-boxed on purpose —
-    see bin/mintbook_ble.py. Nothing advertises in the background.
+    Three things, one identity:
+
+      * an mDNS record, re-announced, so the phone has a network address
+      * a Nearby advertisement header over BLE, so it lists this machine
+      * a GATT server holding the real advertisement, because a legacy BLE
+        packet cannot carry one
+
+    Deliberately *not* the fast-initiation beacon. That announces "somebody
+    here wants to send" — it is what a phone broadcasts while scanning, and
+    what mintdrop broadcasts when it is the one sending. Advertising both
+    roles at once got this machine listed exactly zero times, where the
+    header alone got it listed every time. They are opposite claims and the
+    phone believes the wrong one.
     """
-    here = os.path.dirname(os.path.realpath(__file__))
-    loader = importlib.machinery.SourceFileLoader(
-        'mintbook_ble', os.path.join(here, 'mintbook_ble.py'))
-    try:
-        ble = importlib.util.module_from_spec(
-            importlib.util.spec_from_loader(loader.name, loader))
-        loader.exec_module(ble)
-    except ImportError as exc:
-        print(f'mintdrop: no Bluetooth support ({exc})', file=sys.stderr)
-        return 1
     qs = quickshare()
     name = drop.config()['name'] or drop.device_name()
 
-    # Be listed on a phone. This is the piece that actually puts the machine
-    # in somebody's share sheet: a Nearby advertisement header over BLE and a
-    # GATT server holding the real advertisement, because a legacy BLE packet
-    # cannot carry it. See bin/mintbook_gatt.py.
-    # One identity for both advertisements. The phone finds this machine
-    # over BLE and then has to recognise the mDNS record as the *same*
-    # endpoint before it will connect over the network — the endpoint id is
-    # what ties them together. Two different ids means it discovers us, tries
-    # a Bluetooth transport we do not serve, and the transfer fails with
-    # "disconnected" on one side and "failed" on the other.
+    # One identity for both advertisements, and the *same* one every time.
     #
-    # A fresh id rather than the stored one, because the static file in
-    # /etc/avahi/services already holds that name and avahi refuses the
-    # duplicate.
-    endpoint = qs.fresh_endpoint_id()
+    # The phone finds this machine over BLE and has to recognise the mDNS
+    # record as the same endpoint before it will connect over the network, so
+    # the two must agree. They must also agree with the last visibility
+    # window: a phone keeps discovered receivers in its share sheet for a
+    # while, and a new id per window means the entry somebody taps points at
+    # an endpoint that no longer exists — which fails instantly, with nothing
+    # reaching this machine at all.
+    #
+    # This was a fresh id for a while to dodge a name collision with the
+    # static file in /etc/avahi/services. That file is no longer installed,
+    # so the stored id — stable across boots — is usable again.
+    endpoint = qs.endpoint_id()
     info = qs.endpoint_info(name)
 
     here = os.path.dirname(os.path.realpath(__file__))
-    listed = None
     try:
         loader = importlib.machinery.SourceFileLoader(
             'mintbook_gatt', os.path.join(here, 'mintbook_gatt.py'))
         gatt = importlib.util.module_from_spec(
             importlib.util.spec_from_loader(loader.name, loader))
         loader.exec_module(gatt)
-        listed = gatt.Listed(endpoint, info)
     except Exception as exc:
         print(f'mintdrop: cannot be listed on a phone ({exc})', file=sys.stderr)
+        return 1
 
+    from gi.repository import GLib
+    listed = gatt.Listed(endpoint, info)
+    loop = GLib.MainLoop()
     try:
-        # Announce over mDNS *and* nudge over BLE for the whole window.
-        # Android ignores an mDNS service that was already registered when it
-        # started looking, so being visible means re-announcing, not merely
-        # having been announced once at boot.
         with qs.Announcement(name, endpoint=endpoint, info=info):
-            print(f'Announcing "{name}" to nearby phones for '
-                  f'{args.seconds}s', file=sys.stderr)
-            if listed is not None:
-                listed.start(
-                    on_ready=lambda: print('  listed over BLE — pick '
-                                           f'"{name}" on the phone',
-                                           file=sys.stderr),
-                    on_error=lambda exc: print(f'  not listed: {exc}',
-                                               file=sys.stderr))
+            print(f'Announcing "{name}" to nearby phones for {args.seconds}s',
+                  file=sys.stderr)
+            print(f'  endpoint {endpoint} on {drop.PORT}', file=sys.stderr)
+            listed.start(
+                on_ready=lambda: print(f'  listed over BLE — pick "{name}" '
+                                       f'on the phone', file=sys.stderr),
+                on_error=lambda exc: print(f'  not listed: {exc}',
+                                           file=sys.stderr))
+            GLib.timeout_add_seconds(args.seconds, loop.quit)
             try:
-                ble.hold(args.seconds,
-                         announce=lambda data: print(
-                             f'  BLE nudge up (FE2C {data.hex(" ")})',
-                             file=sys.stderr))
-            finally:
-                if listed is not None:
-                    if listed.reads:
-                        print(f'  a phone read the advertisement '
-                              f'{listed.reads} time(s)', file=sys.stderr)
-                    listed.stop()
-    except ble.NotAvailable as exc:
+                loop.run()
+            except KeyboardInterrupt:
+                pass
+    except gatt.NotAvailable as exc:
         print(f'mintdrop: cannot advertise — {exc}', file=sys.stderr)
         print('         turn Bluetooth on in Control Center', file=sys.stderr)
         return 1
+    finally:
+        if listed.reads:
+            print(f'  a phone read the advertisement {listed.reads} time(s)',
+                  file=sys.stderr)
+        listed.stop()
     print('No longer advertising.', file=sys.stderr)
     return 0
 
