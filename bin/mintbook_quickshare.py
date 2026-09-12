@@ -26,7 +26,9 @@ never lists the machine. The tests pin the layout for that reason.
 import base64
 import os
 import random
+import socket
 import string
+import time
 
 # SHA-256("NearbySharing"), first three bytes, as everyone's service type.
 SERVICE = '_FC9F5ED42C8A._tcp'
@@ -256,3 +258,384 @@ def avahi_service(name, port=PORT, device_type=LAPTOP, endpoint=None):
   </service>
 </service-group>
 '''
+
+
+# ===========================================================================
+# The conversation
+# ===========================================================================
+#
+# Everything below talks to a phone. The shape, once the socket is open:
+#
+#     ->  OfflineFrame CONNECTION_REQUEST      who we are          plaintext
+#     ->  Ukey2 CLIENT_INIT                                        plaintext
+#     <-  Ukey2 SERVER_INIT                                        plaintext
+#     ->  Ukey2 CLIENT_FINISH                                      plaintext
+#     ->  OfflineFrame CONNECTION_RESPONSE     accept              plaintext
+#     <-  OfflineFrame CONNECTION_RESPONSE                         plaintext
+#     -><- PAIRED_KEY_ENCRYPTION / _RESULT     who we claim to be  encrypted
+#     ->  INTRODUCTION                         these files         encrypted
+#     <-  RESPONSE  ACCEPT                     the phone's prompt  encrypted
+#     ->  PAYLOAD_TRANSFER ...                 the bytes           encrypted
+#
+# Two layers of frame share the word. `OfflineFrame` is Nearby Connections —
+# the transport. The sharing `Frame` is the application on top, and it does
+# not get its own socket: it travels as the body of a BYTES payload inside a
+# PAYLOAD_TRANSFER OfflineFrame. Files travel the same way with a FILE
+# payload. Everything after the handshake is inside a SecureMessage.
+#
+# Every field number is from vendor/nearby-protobufs.
+
+import struct
+
+# offline_wire_formats.proto — V1Frame.FrameType
+CONNECTION_REQUEST, CONNECTION_RESPONSE, PAYLOAD_TRANSFER = 1, 2, 3
+KEEP_ALIVE, DISCONNECTION = 5, 6
+WIFI_LAN = 5                                   # ConnectionRequestFrame.Medium
+ACCEPT_RESPONSE = 1                            # ResponseStatus.ACCEPT
+OS_LINUX = 100                                 # OsInfo.OsType
+
+# PayloadTransferFrame
+PACKET_DATA = 1
+PAYLOAD_BYTES, PAYLOAD_FILE = 1, 2
+LAST_CHUNK = 1
+
+# wire_format.proto — V1Frame.FrameType
+INTRODUCTION, RESPONSE, PAIRED_KEY_ENCRYPTION, PAIRED_KEY_RESULT = 1, 2, 3, 4
+SHARING_ACCEPT, SHARING_REJECT = 1, 2           # ConnectionResponseFrame.Status
+PAIRED_KEY_UNABLE = 3                           # PairedKeyResultFrame.Status
+
+# Nearby moves files in chunks. 512 KiB is what the Android side uses; a
+# larger one is not faster over a radio that is the bottleneck anyway, and a
+# smaller one multiplies the per-frame encryption cost.
+CHUNK = 512 * 1024
+MAX_FRAME = 8 << 20
+
+
+class ProtocolError(Exception):
+    """The phone said something we cannot continue from."""
+
+
+def _load(name):
+    import importlib.machinery
+    import importlib.util
+    loader = importlib.machinery.SourceFileLoader(
+        name, os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                           name + '.py'))
+    module = importlib.util.module_from_spec(
+        importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(module)
+    return module
+
+
+pb = _load('mintbook_protobuf')
+ukey2 = _load('mintbook_ukey2')
+
+
+# ---------------------------------------------------------------------------
+# frames
+# ---------------------------------------------------------------------------
+
+def offline_frame(frame_type, **bodies):
+    """OfflineFrame{version=V1, v1=V1Frame{type, <one body>}}."""
+    fields = [(1, frame_type)]
+    for number, body in bodies.values():
+        fields.append((number, body))
+    return pb.pack((1, 1), (2, pb.pack(*fields)))
+
+
+def connection_request(endpoint, info):
+    body = pb.pack(
+        (1, endpoint),                 # endpoint_id
+        (5, [WIFI_LAN]),               # mediums: we are on the LAN
+        (6, info),                     # endpoint_info — carries our name
+        (8, 10_000),                   # keep_alive_interval_millis
+        (9, 30_000))                   # keep_alive_timeout_millis
+    return offline_frame(CONNECTION_REQUEST, connection_request=(2, body))
+
+
+def connection_response_accept():
+    body = pb.pack((1, 0),             # status, deprecated but still read
+                   (3, ACCEPT_RESPONSE),
+                   (4, pb.pack((1, OS_LINUX))))     # os_info
+    return offline_frame(CONNECTION_RESPONSE, connection_response=(3, body))
+
+
+def keep_alive(ack=False):
+    return offline_frame(KEEP_ALIVE, keep_alive=(6, pb.pack((1, bool(ack)))))
+
+
+def disconnection():
+    return offline_frame(DISCONNECTION, disconnection=(7, pb.pack()))
+
+
+def bytes_payload(payload_id, blob):
+    """A sharing frame, wrapped so the transport will carry it."""
+    header = pb.pack((1, payload_id), (2, PAYLOAD_BYTES), (3, len(blob)))
+    chunk = pb.pack((1, LAST_CHUNK), (2, 0), (3, blob))
+    body = pb.pack((1, PACKET_DATA), (2, header), (3, chunk))
+    return offline_frame(PAYLOAD_TRANSFER, payload_transfer=(4, body))
+
+
+def file_chunk(payload_id, size, name, offset, blob, last=False):
+    header = pb.pack((1, payload_id), (2, PAYLOAD_FILE), (3, size), (5, name))
+    chunk = pb.pack((1, LAST_CHUNK if last else 0), (2, offset),
+                    (3, blob if blob else None))
+    body = pb.pack((1, PACKET_DATA), (2, header), (3, chunk))
+    return offline_frame(PAYLOAD_TRANSFER, payload_transfer=(4, body))
+
+
+def sharing_frame(frame_type, **bodies):
+    fields = [(1, frame_type)]
+    for number, body in bodies.values():
+        fields.append((number, body))
+    return pb.pack((1, 1), (2, pb.pack(*fields)))
+
+
+def paired_key_encryption():
+    """We have no certificate, so this says so in the only way the protocol
+    allows: random bytes the phone cannot match against a contact. It then
+    treats us as an unknown device and asks the person holding it."""
+    return sharing_frame(PAIRED_KEY_ENCRYPTION,
+                         paired_key_encryption=(4, pb.pack(
+                             (1, os.urandom(72)),      # signed_data
+                             (2, os.urandom(6)))))     # secret_id_hash
+
+
+def paired_key_result():
+    return sharing_frame(PAIRED_KEY_RESULT,
+                         paired_key_result=(5, pb.pack((1, PAIRED_KEY_UNABLE))))
+
+
+def introduction(files):
+    """'Here is what I would like to send you' — this is what raises the
+    prompt on the phone."""
+    metadata = [pb.pack((1, f['name']),
+                        (2, f.get('kind', 0)),
+                        (3, f['payload_id']),
+                        (4, f['size']),
+                        (5, f.get('mime', 'application/octet-stream')))
+                for f in files]
+    return sharing_frame(INTRODUCTION,
+                         introduction=(2, pb.pack((1, metadata))))
+
+
+# ---------------------------------------------------------------------------
+# the connection
+# ---------------------------------------------------------------------------
+
+class Connection:
+    """One conversation with a phone, framed and then encrypted.
+
+    Every message on this socket — handshake, transport frame, file chunk —
+    is a 4-byte big-endian length followed by that many bytes. After UKEY2
+    the bytes are a SecureMessage wrapping what would otherwise be there.
+    """
+
+    def __init__(self, sock):
+        self.sock = sock
+        self.context = None
+        self.payload_id = random.randint(1, 2 ** 31)
+
+    # -- framing -----------------------------------------------------------
+
+    def send_raw(self, blob):
+        self.sock.sendall(struct.pack('>I', len(blob)) + blob)
+
+    def recv_exactly(self, count):
+        parts = []
+        while count:
+            chunk = self.sock.recv(count)
+            if not chunk:
+                raise ProtocolError('the phone closed the connection')
+            parts.append(chunk)
+            count -= len(chunk)
+        return b''.join(parts)
+
+    def recv_raw(self):
+        length, = struct.unpack('>I', self.recv_exactly(4))
+        if length > MAX_FRAME:
+            # The length is the first thing a broken or hostile peer controls.
+            raise ProtocolError(f'frame of {length} bytes is implausible')
+        return self.recv_exactly(length)
+
+    def send(self, frame):
+        self.send_raw(self.context.encrypt(frame) if self.context else frame)
+
+    def recv(self):
+        blob = self.recv_raw()
+        return self.context.decrypt(blob) if self.context else blob
+
+    # -- handshake ---------------------------------------------------------
+
+    def connect_as_client(self, endpoint, info):
+        """Introduce ourselves and put the channel up.
+
+        The order is not negotiable: CONNECTION_REQUEST is plaintext and must
+        come first, the three UKEY2 messages follow, and only then does
+        CONNECTION_RESPONSE — still plaintext — close the plaintext phase.
+        """
+        self.send_raw(connection_request(endpoint, info))
+
+        handshake = ukey2.ClientHandshake()
+        self.send_raw(handshake.client_init())
+        handshake.accept_server_init(self.recv_raw())
+        self.send_raw(handshake.client_finish())
+
+        self.send_raw(connection_response_accept())
+        their_response = pb.submessage(pb.unpack(self.recv_raw()), 2)
+        if their_response is None or pb.one(their_response, 1) != CONNECTION_RESPONSE:
+            raise ProtocolError('the phone did not answer the connection')
+
+        # Everything from here is encrypted.
+        self.context = handshake.context()
+        return self.context
+
+    # -- the sharing layer -------------------------------------------------
+
+    def send_sharing(self, frame):
+        self.payload_id += 1
+        self.send(bytes_payload(self.payload_id, frame))
+
+    def next_sharing(self, timeout=60):
+        """The next sharing frame, answering keep-alives while we wait.
+
+        Android sends KEEP_ALIVE every ten seconds and expects one back. It
+        arrives interleaved with everything else, so it is handled here
+        rather than by every caller — a transfer waiting on a person to tap
+        Accept is mostly a transfer exchanging keep-alives.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            self.sock.settimeout(max(deadline - time.monotonic(), 0.1))
+            try:
+                blob = self.recv()
+            except socket.timeout:
+                raise ProtocolError('the phone stopped answering')
+            v1 = pb.submessage(pb.unpack(blob), 2)
+            if v1 is None:
+                continue
+            kind = pb.one(v1, 1)
+            if kind == KEEP_ALIVE:
+                self.send(keep_alive(ack=True))
+            elif kind == DISCONNECTION:
+                raise ProtocolError('the phone hung up')
+            elif kind == PAYLOAD_TRANSFER:
+                transfer = pb.submessage(v1, 4)
+                header = pb.submessage(transfer or {}, 2)
+                chunk = pb.submessage(transfer or {}, 3)
+                if not header or not chunk:
+                    continue
+                if pb.one(header, 2) != PAYLOAD_BYTES:
+                    continue
+                body = pb.one(chunk, 3)
+                if not body:
+                    continue
+                inner = pb.submessage(pb.unpack(body), 2)
+                if inner is not None:
+                    return inner
+            if time.monotonic() > deadline:
+                raise ProtocolError('the phone stopped answering')
+
+    def pair(self):
+        """Exchange the paired-key frames. We have no certificate, so this
+        only establishes that we are a stranger — which is the whole reason
+        the phone then asks its owner."""
+        self.send_sharing(paired_key_encryption())
+        seen = set()
+        # The phone sends its own encryption frame and a result frame. Both
+        # arrive before anything else will, and neither needs an answer
+        # beyond ours.
+        while len(seen) < 2:
+            frame = self.next_sharing(timeout=20)
+            kind = pb.one(frame, 1)
+            seen.add(kind)
+            if kind == PAIRED_KEY_ENCRYPTION:
+                self.send_sharing(paired_key_result())
+            elif kind not in (PAIRED_KEY_RESULT,):
+                return frame          # something else already: hand it back
+        return None
+
+    def introduce(self, files, timeout=120):
+        """Offer the files, and wait for the person to answer the prompt."""
+        self.send_sharing(introduction(files))
+        while True:
+            frame = self.next_sharing(timeout=timeout)
+            if pb.one(frame, 1) != RESPONSE:
+                continue
+            response = pb.submessage(frame, 3)
+            return pb.one(response or {}, 1)
+
+    def send_file(self, entry, progress=None):
+        """The bytes, in chunks, then an empty last chunk.
+
+        Not sendfile(): every chunk is encrypted and framed, so the bytes
+        have to come through this process. That is the protocol's price, not
+        a choice — the mintdrop path between two Linux machines keeps its
+        zero-copy send precisely because it does not have to do this.
+        """
+        sent = 0
+        with open(entry['path'], 'rb') as f:
+            while True:
+                block = f.read(CHUNK)
+                if not block:
+                    break
+                self.send(file_chunk(entry['payload_id'], entry['size'],
+                                     entry['name'], sent, block))
+                sent += len(block)
+                if progress:
+                    progress(len(block))
+        self.send(file_chunk(entry['payload_id'], entry['size'],
+                             entry['name'], sent, b'', last=True))
+        return sent
+
+    def close(self):
+        try:
+            self.send(disconnection())
+        except (OSError, ProtocolError, AttributeError):
+            pass
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
+
+def send_files(peer, paths, name=None, on_wait=None, progress=None):
+    """Send files to a Quick Share device. Returns (sent bytes, seconds).
+
+    `on_wait` is called once the offer is out and the phone is showing its
+    prompt — there is nothing to report for as long as somebody takes to
+    pick the notification up, and a progress bar that sits at zero for that
+    whole time looks broken.
+    """
+    files = []
+    for path in paths:
+        size = os.stat(path).st_size
+        files.append({'path': path, 'name': os.path.basename(path),
+                      'size': size,
+                      'payload_id': random.randint(1, 2 ** 62)})
+
+    family = socket.AF_INET6 if ':' in peer['address'] else socket.AF_INET
+    sock = socket.socket(family, socket.SOCK_STREAM)
+    sock.settimeout(15)
+    sock.connect((peer['address'], peer['port']))
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+    connection = Connection(sock)
+    started = time.monotonic()
+    try:
+        connection.connect_as_client(
+            endpoint_id(), endpoint_info(name or device_name()))
+        connection.pair()
+        if on_wait:
+            on_wait()
+        status = connection.introduce(files)
+        if status != SHARING_ACCEPT:
+            raise ProtocolError('declined on the phone'
+                                if status == SHARING_REJECT
+                                else f'the phone answered {status}')
+        total = 0
+        for entry in files:
+            total += connection.send_file(entry, progress)
+        return total, time.monotonic() - started
+    finally:
+        connection.close()

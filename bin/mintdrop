@@ -326,11 +326,29 @@ class Bar:
         return time.monotonic() - self.started
 
 
+def quickshare():
+    here = os.path.dirname(os.path.realpath(__file__))
+    loader = importlib.machinery.SourceFileLoader(
+        'mintbook_quickshare', os.path.join(here, 'mintbook_quickshare.py'))
+    module = importlib.util.module_from_spec(
+        importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(module)
+    return module
+
+
 def resolve_peer(target):
-    """A peer name, a hostname or an address — whatever the user typed."""
+    """A peer name, a hostname or an address — whatever the user typed.
+
+    Quick Share devices are searched alongside mintdrop ones: from here a
+    phone is just another name you can send to.
+    """
     if target is None:
         return None
     peers = drop.discover()
+    try:
+        peers = peers + quickshare().discover()
+    except Exception:
+        pass
     lowered = target.lower()
     for peer in peers:
         if peer['name'].lower() == lowered:
@@ -399,6 +417,9 @@ def cmd_send(args):
 
     print(f'{"Sending" if len(files) == 1 else f"Sending {len(files)} files"} '
           f'{drop.human(total)} to {peer["name"]}', file=sys.stderr)
+
+    if peer.get('protocol') == 'quickshare':
+        return send_quickshare(peer, files, total, args)
     try:
         sock = drop.connect(peer['address'], peer['port'])
     except OSError as exc:
@@ -448,6 +469,28 @@ def cmd_send(args):
 # looking around
 # ---------------------------------------------------------------------------
 
+def send_quickshare(peer, files, total, args):
+    """Send to a phone. The protocol is in bin/mintbook_quickshare.py."""
+    qs = quickshare()
+    bar = Bar(total, quiet=args.quiet)
+    try:
+        sent, seconds = qs.send_files(
+            peer, [f['path'] for f in files],
+            on_wait=lambda: print('Waiting for the phone to accept…',
+                                  file=sys.stderr),
+            progress=bar)
+    except qs.ProtocolError as exc:
+        print(f'\nmintdrop: {exc}', file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f'\nmintdrop: {exc.strerror or exc}', file=sys.stderr)
+        return 1
+    bar.finish()
+    print(f'Sent {drop.human(sent)} in {seconds:.1f}s '
+          f'({sent / max(seconds, 1e-6) / (1 << 20):.1f} MB/s)', file=sys.stderr)
+    return 0
+
+
 def cmd_visible(args):
     """Be findable by a phone for a couple of minutes, then stop.
 
@@ -480,11 +523,16 @@ def cmd_visible(args):
 
 def cmd_peers(args):
     peers = drop.discover(args.wait)
+    try:
+        peers = peers + quickshare().discover()
+    except Exception:
+        pass
     if not peers:
         print('No devices nearby.', file=sys.stderr)
         return 1
     for peer in peers:
-        print(f'{peer["name"]}\t{peer["address"]}\t{peer["port"]}')
+        print(f'{peer["name"]}\t{peer["address"]}\t{peer["port"]}'
+              f'\t{peer.get("protocol", "mintdrop")}')
     return 0
 
 

@@ -193,7 +193,8 @@ class Tile:
         self.hover = False
         self.dropping = False
         self.note = ''
-        self.supported = peer.get('protocol', 'mintdrop') == 'mintdrop'
+        self.protocol = peer.get('protocol', 'mintdrop')
+        self.supported = True
 
         self.area = Gtk.DrawingArea()
         self.area.set_size_request(px(TILE), px(TILE))
@@ -206,7 +207,8 @@ class Tile:
         self.label.set_justify(Gtk.Justification.CENTER)
         self.label.set_line_wrap(False)
 
-        self.status = Gtk.Label(label='Quick Share' if not self.supported else '')
+        self.status = Gtk.Label(
+            label='Quick Share' if self.protocol == 'quickshare' else '')
         self.status.get_style_context().add_class('status')
         self.status.set_max_width_chars(15)
         self.status.set_ellipsize(3)
@@ -306,9 +308,6 @@ class Tile:
     def clicked(self, _widget, _event):
         if self.sheet.files:
             self.send(self.sheet.files)
-        elif not self.supported:
-            self.sheet.say(f'{self.peer["name"]} speaks Quick Share — '
-                           f'sending to phones is not built yet')
         else:
             self.sheet.say('Drag files onto a device to send them')
         return True
@@ -317,10 +316,6 @@ class Tile:
 
     def send(self, paths):
         if self.state is SENDING:
-            return
-        if not self.supported:
-            self.sheet.say(f'{self.peer["name"]} speaks Quick Share — '
-                           f'sending to phones is not built yet')
             return
         self.state = SENDING
         self.share = 0.0
@@ -337,6 +332,8 @@ class Tile:
 
     def transfer(self, paths):
         """Off the main loop. Everything it learns goes back through idle_add."""
+        if self.protocol == 'quickshare':
+            return self.transfer_quickshare(paths)
         try:
             files = []
             for path in paths:
@@ -392,6 +389,41 @@ class Tile:
         seconds = max(time.monotonic() - started, 1e-6)
         GLib.idle_add(self.finish, DONE,
                       f'Sent · {total / seconds / (1 << 20):.0f} MB/s')
+
+    def transfer_quickshare(self, paths):
+        """The same tile, the other protocol.
+
+        The wait between the offer and the first byte is a person picking up
+        a phone, so the tile says so instead of sitting at 0%.
+        """
+        started = [time.monotonic()]
+        total = sum(os.stat(p).st_size for p in paths) or 1
+        moved = [0]
+        last = [0.0]
+
+        def waiting():
+            self.note = 'Waiting for the phone…'
+            GLib.idle_add(self.repaint)
+
+        def progress(chunk):
+            moved[0] += chunk
+            now = time.monotonic()
+            if now - last[0] < 0.05 and moved[0] < total:
+                return
+            last[0] = now
+            self.share = moved[0] / total
+            rate = moved[0] / max(now - started[0], 1e-6) / (1 << 20)
+            self.note = f'{self.share * 100:.0f}%  ·  {rate:.0f} MB/s'
+            GLib.idle_add(self.repaint)
+
+        try:
+            sent, seconds = quickshare.send_files(
+                self.peer, paths, on_wait=waiting, progress=progress)
+        except Exception as exc:
+            GLib.idle_add(self.finish, FAILED, str(exc)[:40])
+            return
+        GLib.idle_add(self.finish, DONE,
+                      f'Sent · {sent / max(seconds, 1e-6) / (1 << 20):.0f} MB/s')
 
 
 # ---------------------------------------------------------------------------
