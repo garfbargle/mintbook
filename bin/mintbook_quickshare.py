@@ -156,27 +156,87 @@ def parse_endpoint_info(blob):
     return device_type, name
 
 
-def discover(timeout=1.5):
+def discover(timeout=4.0):
     """Quick Share devices on this network, from the running avahi-daemon.
 
-    Same browse-while-open rule as mintdrop's own discovery: one short
-    avahi-browse, nothing resident. Our own advertisement is filtered out by
-    endpoint id, which is the one identifier that is ours by construction.
+    Browsed live rather than with `--terminate`. That flag exits as soon as
+    the cache has been dumped, which is *before* the SRV and TXT records of a
+    device announced a moment ago have been resolved — so a phone would show
+    up as an announcement with no address and be dropped. That race is why
+    `mintdrop peers` kept printing nothing while the phone was plainly
+    advertising. Read the stream instead, and stop on a deadline.
+
+    Still nothing resident: the process lives for `timeout` seconds and is
+    killed on the way out.
     """
+    import select
     import subprocess
-    argv = ['avahi-browse', '--resolve', '--terminate', '--parsable',
-            '--no-db-lookup', SERVICE]
-    try:
-        out = subprocess.run(argv, text=True, capture_output=True,
-                             timeout=max(timeout, 1) + 4)
-    except (OSError, subprocess.SubprocessError):
-        return []
-    # Two ways of recognising ourselves, because one is not enough: the
-    # endpoint id is exact but lives in a state file that can be missing, and
-    # a machine that has lost it would otherwise advertise itself, discover
-    # itself, and offer to send files to itself. The addresses catch that.
     ours = instance_name()
-    our_addresses = set()
+    our_addresses = _local_addresses()
+    found = {}
+    try:
+        browse = subprocess.Popen(
+            ['avahi-browse', '--resolve', '--parsable', '--no-db-lookup',
+             SERVICE], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True)
+    except OSError:
+        return []
+    deadline = time.monotonic() + timeout
+    try:
+        while time.monotonic() < deadline:
+            ready, _, _ = select.select([browse.stdout], [], [],
+                                        max(deadline - time.monotonic(), 0.05))
+            if not ready:
+                continue
+            line = browse.stdout.readline()
+            if not line:
+                break
+            parts = line.split(';')
+            if len(parts) < 10 or parts[0] != '=':
+                continue
+            label, host, address, port = parts[3], parts[6], parts[7], parts[8]
+            if label == ours or address.split('%')[0] in our_addresses:
+                continue
+            info = None
+            for item in parts[9].split('" "'):
+                item = item.strip('"')
+                if item.startswith('n='):
+                    try:
+                        info = base64.urlsafe_b64decode(
+                            item[2:] + '=' * (-len(item[2:]) % 4))
+                    except Exception:
+                        info = None
+            device_type, name = (None, None)
+            if info:
+                try:
+                    device_type, name = parse_endpoint_info(info)
+                except ValueError:
+                    pass
+            if not name:
+                name = host.removesuffix('.local').replace('_', ' ')
+            try:
+                port = int(port)
+            except ValueError:
+                continue
+            current = found.get(label)
+            if current is None or (parts[2] == 'IPv4'
+                                   and ':' in current['address']):
+                found[label] = {'name': name, 'address': address, 'port': port,
+                                'endpoint': label, 'protocol': 'quickshare',
+                                'device_type': (device_type
+                                                if device_type is not None
+                                                else PHONE)}
+    finally:
+        browse.terminate()
+        try:
+            browse.wait(timeout=2)
+        except Exception:
+            browse.kill()
+    return sorted(found.values(), key=lambda p: p['name'].lower())
+
+
+def _local_addresses():
+    """This machine's own addresses, so it never offers to send to itself."""
     try:
         import importlib.machinery
         import importlib.util
@@ -186,48 +246,9 @@ def discover(timeout=1.5):
         module = importlib.util.module_from_spec(
             importlib.util.spec_from_loader(loader.name, loader))
         loader.exec_module(module)
-        our_addresses = module.local_addresses()
+        return module.local_addresses()
     except Exception:
-        pass
-    found = {}
-    for line in out.stdout.splitlines():
-        parts = line.split(';')
-        if len(parts) < 10 or parts[0] != '=':
-            continue
-        label, host, address, port = parts[3], parts[6], parts[7], parts[8]
-        if label == ours or address.split('%')[0] in our_addresses:
-            continue
-        info = None
-        for item in parts[9].split('" "'):
-            item = item.strip('"')
-            if item.startswith('n='):
-                try:
-                    info = base64.urlsafe_b64decode(
-                        item[2:] + '=' * (-len(item[2:]) % 4))
-                except Exception:
-                    info = None
-        device_type, name = (None, None)
-        if info:
-            try:
-                device_type, name = parse_endpoint_info(info)
-            except ValueError:
-                pass
-        # A withheld name leaves the mDNS host label, which is the only other
-        # thing the phone has told us. 'Android_GFD7A3R3.local' reads better
-        # with the suffix and the underscore gone.
-        if not name:
-            name = host.removesuffix('.local').replace('_', ' ')
-        try:
-            port = int(port)
-        except ValueError:
-            continue
-        current = found.get(label)
-        if current is None or (parts[2] == 'IPv4' and ':' in current['address']):
-            found[label] = {'name': name, 'address': address, 'port': port,
-                            'endpoint': label, 'protocol': 'quickshare',
-                            'device_type': device_type if device_type is not None
-                            else PHONE}
-    return sorted(found.values(), key=lambda p: p['name'].lower())
+        return {'127.0.0.1', '::1'}
 
 
 def avahi_service(name, port=PORT, device_type=LAPTOP, endpoint=None):
@@ -329,6 +350,7 @@ def _load(name):
 
 pb = _load('mintbook_protobuf')
 ukey2 = _load('mintbook_ukey2')
+drop = _load('mintbook_drop')
 
 
 # ---------------------------------------------------------------------------
@@ -343,9 +365,10 @@ def offline_frame(frame_type, **bodies):
     return pb.pack((1, 1), (2, pb.pack(*fields)))
 
 
-def connection_request(endpoint, info):
+def connection_request(endpoint, info, hostname=None):
     body = pb.pack(
         (1, endpoint),                 # endpoint_id
+        (2, hostname or socket.gethostname()),   # endpoint_name
         (5, [WIFI_LAN]),               # mediums: we are on the LAN
         (6, info),                     # endpoint_info — carries our name
         (8, 10_000),                   # keep_alive_interval_millis
@@ -624,7 +647,7 @@ def send_files(peer, paths, name=None, on_wait=None, progress=None):
     started = time.monotonic()
     try:
         connection.connect_as_client(
-            endpoint_id(), endpoint_info(name or device_name()))
+            endpoint_id(), endpoint_info(name or drop.device_name()))
         connection.pair()
         if on_wait:
             on_wait()
