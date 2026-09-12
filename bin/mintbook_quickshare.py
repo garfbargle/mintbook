@@ -754,3 +754,204 @@ def _mime_type(path):
     import mimetypes
     guess, _encoding = mimetypes.guess_type(path)
     return guess or 'application/octet-stream'
+
+
+# ---------------------------------------------------------------------------
+# receiving from a phone
+# ---------------------------------------------------------------------------
+#
+# The same conversation with the roles swapped. The phone connects to the
+# socket mintdrop already listens on, introduces its files, and waits for
+# somebody here to accept — so this is the direction that does not need the
+# phone to be coaxed into advertising, and the reason it is worth having even
+# though sending already works.
+
+def sharing_response(status):
+    return sharing_frame(RESPONSE, connection_response=(3, pb.pack((1, status))))
+
+
+class Incoming:
+    """One file a phone says it is about to send."""
+
+    def __init__(self, payload_id, name, size):
+        self.payload_id = payload_id
+        self.name = name
+        self.size = size
+        self.path = None
+        self.partial = None
+        self.handle = None
+        self.written = 0
+
+    def open(self, directory):
+        self.path = drop.unique_path(directory, self.name)
+        self.partial = self.path + '.part'
+        self.handle = open(self.partial, 'wb')
+
+    def write(self, offset, blob):
+        if self.handle is None:
+            return
+        # Trust the offset, verify the total: a phone that seeks past the
+        # declared size is not one to hand a file descriptor to.
+        if offset + len(blob) > self.size:
+            raise ProtocolError(f'{self.name}: more data than declared')
+        self.handle.seek(offset)
+        self.handle.write(blob)
+        self.written += len(blob)
+
+    def finish(self):
+        if self.handle is None:
+            return None
+        self.handle.close()
+        self.handle = None
+        if self.written != self.size:
+            os.unlink(self.partial)
+            raise ProtocolError(f'{self.name}: {self.written} of {self.size} '
+                                f'bytes arrived')
+        os.chmod(self.partial, 0o644)
+        os.rename(self.partial, self.path)
+        return self.path
+
+    def abandon(self):
+        if self.handle is not None:
+            self.handle.close()
+            self.handle = None
+        for path in (self.partial,):
+            try:
+                if path:
+                    os.unlink(path)
+            except OSError:
+                pass
+
+
+def receive_from_phone(sock, ask=None, on_progress=None, directory=None):
+    """Serve one Quick Share sender. Returns the list of files that landed.
+
+    `ask(name, files, total)` decides whether to accept, and is the same
+    gate mintdrop uses for a Linux peer — a receiver that writes files
+    because a stranger asked is a bug with a filename, whichever protocol
+    the stranger speaks.
+    """
+    connection = Connection(sock)
+    directory = directory or drop.download_dir()
+    handshake = ukey2.ServerHandshake()
+
+    # --- plaintext -------------------------------------------------------
+    request = pb.submessage(pb.unpack(connection.recv_raw()), 2)
+    if request is None or pb.one(request, 1) != CONNECTION_REQUEST:
+        raise ProtocolError('not a Quick Share sender')
+    body = pb.submessage(request, 2) or {}
+    info = pb.one(body, 6)
+    sender = 'Unknown device'
+    if isinstance(info, bytes):
+        try:
+            _kind, name = parse_endpoint_info(info)
+            sender = name or sender
+        except ValueError:
+            pass
+    if sender == 'Unknown device':
+        label = pb.one(body, 2)
+        if isinstance(label, bytes):
+            sender = label.decode('utf-8', 'replace')[:64] or sender
+
+    handshake.accept_client_init(connection.recv_raw())
+    connection.send_raw(handshake.server_init_message())
+    handshake.accept_client_finish(connection.recv_raw())
+
+    connection.send_raw(connection_response_accept())
+    connection.recv_raw()                       # their CONNECTION_RESPONSE
+    connection.context = handshake.context()
+
+    # --- encrypted -------------------------------------------------------
+    expected = {}
+    landed = []
+    answered = False
+    open_files = {}
+    buffers = {}
+    deadline = time.monotonic() + 900
+    try:
+        while time.monotonic() < deadline:
+            sock.settimeout(120)
+            blob = connection.recv()
+            v1 = pb.submessage(pb.unpack(blob), 2)
+            if v1 is None:
+                continue
+            kind = pb.one(v1, 1)
+            if kind == KEEP_ALIVE:
+                connection.send(keep_alive(ack=True))
+                continue
+            if kind == DISCONNECTION:
+                break
+            if kind != PAYLOAD_TRANSFER:
+                continue
+
+            transfer = pb.submessage(v1, 4)
+            header = pb.submessage(transfer or {}, 2)
+            chunk = pb.submessage(transfer or {}, 3)
+            if not header or not chunk:
+                continue
+            payload_id = pb.one(header, 1)
+            payload_type = pb.one(header, 2)
+            flags = pb.one(chunk, 1, 0)
+            offset = pb.one(chunk, 2, 0)
+            data = pb.one(chunk, 3) or b''
+
+            if payload_type == PAYLOAD_BYTES:
+                buffers[payload_id] = buffers.get(payload_id, b'') + data
+                if not flags & LAST_CHUNK:
+                    continue
+                frame = pb.submessage(pb.unpack(buffers.pop(payload_id)), 2)
+                if frame is None:
+                    continue
+                ftype = pb.one(frame, 1)
+                if ftype == PAIRED_KEY_ENCRYPTION:
+                    connection.send_sharing(paired_key_encryption())
+                    connection.send_sharing(paired_key_result())
+                elif ftype == INTRODUCTION and not answered:
+                    introduction_body = pb.submessage(frame, 2) or {}
+                    for raw in introduction_body.get(1, []):
+                        meta = pb.unpack(raw)
+                        name = pb.one(meta, 1) or b'received'
+                        entry = Incoming(pb.one(meta, 3),
+                                         drop.safe_name(name.decode('utf-8', 'replace')),
+                                         int(pb.one(meta, 4) or 0))
+                        expected[entry.payload_id] = entry
+                    total = sum(e.size for e in expected.values())
+                    accept = True
+                    if ask is not None:
+                        accept = ask(sender, list(expected.values()), total)
+                    answered = True
+                    if not accept:
+                        connection.send_sharing(sharing_response(SHARING_REJECT))
+                        return []
+                    os.makedirs(directory, exist_ok=True)
+                    connection.send_sharing(sharing_response(SHARING_ACCEPT))
+                continue
+
+            if payload_type == PAYLOAD_FILE:
+                entry = expected.get(payload_id)
+                if entry is None:
+                    continue
+                if entry.handle is None and payload_id not in open_files:
+                    entry.open(directory)
+                    open_files[payload_id] = entry
+                if data:
+                    entry.write(offset, data)
+                    if on_progress:
+                        on_progress(len(data))
+                if flags & LAST_CHUNK:
+                    path = entry.finish()
+                    if path:
+                        landed.append(path)
+                    open_files.pop(payload_id, None)
+                    if len(landed) == len(expected):
+                        break
+    except Exception:
+        for entry in open_files.values():
+            entry.abandon()
+        raise
+    finally:
+        try:
+            connection.send(disconnection())
+        except Exception:
+            pass
+    return landed

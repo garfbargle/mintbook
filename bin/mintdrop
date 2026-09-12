@@ -122,6 +122,30 @@ def remember(name):
         f.write(name + '\n')
 
 
+def ask_prompt(name, summary, total, peer_ip):
+    """Show the glass prompt. Shared by both protocols — a receiver that
+    writes files because a stranger asked is a bug with a filename, whichever
+    protocol the stranger speaks."""
+    prompt = os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                          'mintdrop-accept')
+    if not os.access(prompt, os.X_OK):
+        prompt = os.path.expanduser('~/.local/bin/mintdrop-accept')
+    argv = [prompt, '--from', name, '--what', summary,
+            '--size', drop.human(total), '--address', peer_ip]
+    try:
+        result = subprocess.run(argv, timeout=PROMPT_SECONDS, check=False)
+    except subprocess.TimeoutExpired:
+        log('declined: nobody answered the prompt')
+        return False
+    except OSError as exc:
+        log(f'declined: no prompt available ({exc.strerror})')
+        return False
+    if result.returncode == 2:
+        remember(name)
+        return True
+    return result.returncode == 0
+
+
 def ask(name, files, total, peer_ip):
     """Accept, decline, or accept and remember.
 
@@ -138,24 +162,50 @@ def ask(name, files, total, peer_ip):
         return True
 
     summary = files[0]['name'] if len(files) == 1 else f'{len(files)} files'
-    prompt = os.path.join(os.path.dirname(os.path.realpath(__file__)),
-                          'mintdrop-accept')
-    if not os.access(prompt, os.X_OK):
-        prompt = os.path.expanduser('~/.local/bin/mintdrop-accept')
-    argv = [prompt, '--from', name, '--what', summary,
-            '--size', drop.human(total), '--address', peer_ip]
+    return ask_prompt(name, summary, total, peer_ip)
+
+
+def looks_like_quickshare(sock):
+    """Peek at the first four bytes without consuming them.
+
+    'MNTD' is mintdrop. Anything else on this port is a phone: Quick Share
+    opens with a length-prefixed protobuf, and a 4-byte big-endian length can
+    never spell MNTD. One socket, one systemd unit, two protocols — which is
+    why the magic was chosen to be dispatchable in the first place.
+    """
     try:
-        result = subprocess.run(argv, timeout=PROMPT_SECONDS, check=False)
-    except subprocess.TimeoutExpired:
-        log('declined: nobody answered the prompt')
+        head = sock.recv(4, socket.MSG_PEEK)
+    except OSError:
         return False
-    except OSError as exc:
-        log(f'declined: no prompt available ({exc.strerror})')
-        return False
-    if result.returncode == 2:          # accept, and stop asking for this name
-        remember(name)
-        return True
-    return result.returncode == 0
+    return len(head) == 4 and head != drop.MAGIC
+
+
+def receive_quickshare(sock, peer_ip):
+    """Hand this connection to the Quick Share server."""
+    qs = quickshare()
+
+    def gate(sender, files, total):
+        summary = (files[0].name if len(files) == 1
+                   else f'{len(files)} files')
+        log(f'offer from {sender} ({peer_ip}): {summary}, {drop.human(total)}')
+        if drop.config()['accept'] == 'off':
+            return False
+        if drop.config()['accept'] == 'known' and sender in known_senders():
+            return True
+        return ask_prompt(sender, summary, total, peer_ip)
+
+    started = time.monotonic()
+    landed = qs.receive_from_phone(sock, ask=gate)
+    if not landed:
+        log('declined')
+        return 0
+    seconds = max(time.monotonic() - started, 1e-6)
+    total = sum(os.stat(p).st_size for p in landed)
+    what = (os.path.basename(landed[0]) if len(landed) == 1
+            else f'{len(landed)} files')
+    log(f'received {what} ({drop.human(total)})')
+    notify(f'Received {what}', f'From a nearby phone · {drop.human(total)}')
+    return 0
 
 
 def receive_on(sock, use_splice=True, auto=False):
@@ -171,6 +221,9 @@ def receive_on(sock, use_splice=True, auto=False):
     if not drop.is_local_address(peer_ip):
         log(f'refused {peer_ip}: not a local address')
         return 1
+    if looks_like_quickshare(sock):
+        return receive_quickshare(sock, peer_ip)
+
     sock.settimeout(60)
     name, files, total = drop.read_header(sock)
     log(f'offer from {name} ({peer_ip}): {len(files)} file(s), '

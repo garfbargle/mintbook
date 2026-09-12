@@ -175,3 +175,62 @@ def _client_key(client):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ClientMeetsServerTests(unittest.TestCase):
+    """Our client and our server, talking to each other.
+
+    This is the test the sending work never had: until now the "server" in
+    these tests was fifteen lines written to agree with the client, which is
+    exactly how SHA256(shared secret) went unnoticed. Both sides are real
+    implementations here.
+    """
+
+    def handshake(self):
+        client = ukey2.ClientHandshake()
+        server = ukey2.ServerHandshake()
+        server.accept_client_init(client.client_init())
+        client.accept_server_init(server.server_init_message())
+        server.accept_client_finish(client.client_finish())
+        return client.context(), server.context()
+
+    def test_the_two_ends_agree_on_every_key(self):
+        ours, theirs = self.handshake()
+        self.assertEqual(ours.encrypt_key, theirs.decrypt_key)
+        self.assertEqual(ours.decrypt_key, theirs.encrypt_key)
+        self.assertEqual(ours.send_hmac, theirs.receive_hmac)
+        self.assertEqual(ours.receive_hmac, theirs.send_hmac)
+
+    def test_frames_cross_in_both_directions(self):
+        ours, theirs = self.handshake()
+        self.assertEqual(theirs.decrypt(ours.encrypt(b'to the phone')),
+                         b'to the phone')
+        self.assertEqual(ours.decrypt(theirs.encrypt(b'from the phone')),
+                         b'from the phone')
+
+    def test_both_ends_compute_the_same_pin(self):
+        ours, theirs = self.handshake()
+        self.assertEqual(ours.pin(), theirs.pin())
+
+    def test_a_client_finish_that_breaks_its_commitment_is_refused(self):
+        client = ukey2.ClientHandshake()
+        server = ukey2.ServerHandshake()
+        server.accept_client_init(client.client_init())
+        client.accept_server_init(server.server_init_message())
+        # A second client: a valid CLIENT_FINISH, but not the one committed to.
+        other = ukey2.ClientHandshake()
+        with self.assertRaises(ukey2.HandshakeError):
+            server.accept_client_finish(other.client_finish())
+
+    def test_a_client_init_without_a_p256_commitment_is_refused(self):
+        server = ukey2.ServerHandshake()
+        bad = ukey2.message(ukey2.CLIENT_INIT, pb.pack(
+            (1, 1), (2, os.urandom(32)),
+            (3, pb.pack((1, 200), (2, b'x' * 64)))))     # CURVE25519 only
+        with self.assertRaises(ukey2.HandshakeError):
+            server.accept_client_init(bad)
+
+    def test_the_wrong_message_type_is_refused(self):
+        server = ukey2.ServerHandshake()
+        with self.assertRaises(ukey2.HandshakeError):
+            server.accept_client_init(ukey2.message(ukey2.SERVER_INIT, b''))

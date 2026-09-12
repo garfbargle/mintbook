@@ -276,3 +276,77 @@ class D2DContext:
         if not isinstance(payload, bytes):
             raise HandshakeError('DeviceToDeviceMessage carried no message')
         return payload
+
+
+class ServerHandshake:
+    """The other side of UKEY2 — the side a phone connects to.
+
+    Mirror of ClientHandshake, with the one asymmetry that matters: the
+    client committed to its CLIENT_FINISH before seeing our key, and this
+    checks that commitment. Skipping the check would let a phone (or anything
+    else) pick its key after seeing ours, which is the whole reason the
+    commitment is in the protocol.
+    """
+
+    def __init__(self):
+        self.private = ec.generate_private_key(ec.SECP256R1())
+        self.client_init = None
+        self.server_init = None
+        self.commitment = None
+        self.peer = None
+
+    def accept_client_init(self, blob):
+        """Parse CLIENT_INIT and keep both the bytes and the commitment."""
+        outer = pb.unpack(blob)
+        if pb.one(outer, 1) != CLIENT_INIT:
+            raise HandshakeError('expected CLIENT_INIT')
+        body = pb.one(outer, 2)
+        if not isinstance(body, bytes):
+            raise HandshakeError('CLIENT_INIT carried no message data')
+        fields = pb.unpack(body)
+        for raw in fields.get(3, []):            # cipher_commitments
+            commitment = pb.unpack(raw)
+            if pb.one(commitment, 1) == P256_SHA512:
+                self.commitment = pb.one(commitment, 2)
+                break
+        if not self.commitment:
+            raise HandshakeError('no P-256 cipher commitment offered')
+        self.client_init = blob
+        return self
+
+    def server_init_message(self):
+        """SERVER_INIT, built once and kept — the KDF hashes these bytes."""
+        if self.server_init is None:
+            body = pb.pack(
+                (1, UKEY2_VERSION),
+                (2, os.urandom(32)),
+                (3, P256_SHA512),
+                (4, public_key_bytes(self.private.public_key())))
+            self.server_init = message(SERVER_INIT, body)
+        return self.server_init
+
+    def accept_client_finish(self, blob):
+        """Check the commitment, then take their key."""
+        if hashlib.sha512(blob).digest() != self.commitment:
+            raise HandshakeError('CLIENT_FINISH does not match the commitment')
+        outer = pb.unpack(blob)
+        if pb.one(outer, 1) != CLIENT_FINISH:
+            raise HandshakeError('expected CLIENT_FINISH')
+        body = pb.one(outer, 2)
+        if not isinstance(body, bytes):
+            raise HandshakeError('CLIENT_FINISH carried no message data')
+        key = pb.one(pb.unpack(body), 1)
+        if not isinstance(key, bytes):
+            raise HandshakeError('CLIENT_FINISH carried no public key')
+        self.peer = public_key_from(key)
+        return self.peer
+
+    def context(self):
+        if self.peer is None or self.client_init is None:
+            raise HandshakeError('the handshake has not finished')
+        shared = hashlib.sha256(
+            self.private.exchange(ec.ECDH(), self.peer)).digest()
+        transcript = self.client_init + self.server_init_message()
+        next_secret = hkdf(NEXT_SALT, shared, transcript)
+        auth = hkdf(AUTH_SALT, shared, transcript)
+        return D2DContext(next_secret, is_client=False, auth_string=auth)
