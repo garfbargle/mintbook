@@ -284,9 +284,10 @@ tested on their own.
 `/etc/avahi/services/mintdrop-quickshare.service`. It is a static file like
 the mintdrop one, so being discoverable by a phone costs no process either.
 
-Discovery is mDNS. BLE is only a "nudge" that makes a phone start scanning
-sooner, so it is not needed for the phone to find a machine on the same
-Wi-Fi — opening the share sheet is what starts the phone looking.
+Discovery is mDNS **and** BLE. An earlier version of this section said BLE
+was only a nudge and not needed; that was wrong — see *Bluetooth: why mDNS
+alone was not enough* below. Bluetooth must be on, or the phone will not list
+this machine however correct the mDNS record is.
 
 The layouts come from grishka's reverse-engineered
 [PROTOCOL.md](https://github.com/grishka/NearDrop/blob/master/PROTOCOL.md),
@@ -314,6 +315,63 @@ One listener serves both protocols. `bin/mintdrop` reads four bytes before
 deciding anything: `MNTD` is mintdrop, and anything else is a protobuf length
 and belongs to Quick Share. So the phone connects to the same socket unit,
 and the idle cost does not double.
+
+### Bluetooth: why mDNS alone was not enough
+
+**Retracted, 2026-09-12.** This doc previously said discovery was mDNS and
+that "BLE is only a nudge, so it is not needed for a phone on the same
+Wi-Fi". That was wrong, and the phone proved it: the advertisement was live
+and structurally identical to the phone's own, and the phone still never
+listed the machine.
+
+Android sleeps its Nearby stack to save battery, and a sleeping phone does
+not look at the network. A BLE advertisement carrying `0000fe2c` is what
+wakes it. rquickshare carries one for the same reason, and says plainly that
+without Bluetooth a phone often never lists the Linux machine at all.
+
+So Bluetooth is **required** for a phone to find this machine, and the
+machine had it rfkill soft-blocked — which is a fine way to run a laptop, and
+means Quick Share cannot work until it is on.
+
+#### The payload was measured, not guessed
+
+Nothing documents the service data. With Bluetooth on, a real Quick Share
+device a metre away broadcasts:
+
+```
+FE2C service data = 00 40 10 2a 05 00 11 5d      (8 bytes, 2026-09-12)
+```
+
+`bin/mintbook_ble.py` advertises the same shape — a zero version byte and
+seven identifying bytes — with its own random tail. Copying those bytes
+verbatim would be claiming to be that phone. **What the seven bytes mean is
+still unknown**, and if a phone sees the machine but refuses to talk to it,
+this is the first thing to suspect.
+
+#### Two things BlueZ will not tell you
+
+- `RegisterAdvertisement` calls back into the caller for the advertisement's
+  properties *before* it replies. Call it synchronously and it deadlocks
+  against the loop that would serve that callback, then fails with
+  `Did not receive a reply`.
+- It rejects the whole advertisement with `Failed to parse advertisement`,
+  naming no field, unless the service data is `dbus.Byte` elements and
+  `Discoverable`/`IncludeTxPower` are absent. Found by trying variants and
+  watching which registered.
+
+#### It is the one resident thing here, and it is time-boxed
+
+A BLE advertisement lives exactly as long as the D-Bus connection that
+registered it. So visibility costs a process for as long as you asked for and
+not a second longer:
+
+```
+mintdrop visible 120     # findable by a phone for two minutes
+```
+
+and the sheet holds one for exactly as long as it is open. Nothing advertises
+in the background. A laptop that broadcasts its presence all day to save two
+seconds of waiting is the trade this deliberately does not make.
 
 ### Not done: the conversation
 
