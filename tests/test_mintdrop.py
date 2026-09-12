@@ -144,7 +144,7 @@ class TransferTests(unittest.TestCase):
     def send_and_receive(self, payloads, extra=()):
         """Run `serve --once --yes` and `send`, return the receiver's log."""
         port = _free_port()
-        env = dict(os.environ, HOME=self.work)
+        env = dict(os.environ, HOME=self.work, MINTDROP_STAT='1')
         os.makedirs(os.path.join(self.work, '.config/mintbook'), exist_ok=True)
         Path(self.work, '.config/mintbook/mintdrop.conf').write_text(
             f'dir = {self.inbox}\n')

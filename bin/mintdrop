@@ -53,12 +53,18 @@ def log(message):
 def stat(**fields):
     """One machine-readable line per phase, for bin/mintdrop-probe.
 
+    Only when MINTDROP_STAT is set. It went to stderr unconditionally at
+    first, which put a line of JSON under every ordinary `mintdrop send` —
+    debugging output in a tool someone is using, which is noise.
+
     The probe used to time the two processes from the outside, which meant it
     was mostly timing two Python interpreters starting up — about 0.6 s of CPU
     that has nothing to do with the copy and was large enough to hide the
     difference between the two receive paths entirely. These numbers bracket
     the bulk loop and nothing else.
     """
+    if not os.environ.get('MINTDROP_STAT'):
+        return
     print('mintdrop-stat ' + json.dumps(fields), file=sys.stderr, flush=True)
 
 

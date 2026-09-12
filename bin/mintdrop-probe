@@ -61,10 +61,14 @@ def one_trial(payload, size, splice, port, peer=None):
     CPU is the sender's plus the receiver's: the whole cost to the machine of
     moving the file, which on loopback is genuinely both ends.
     """
+    os.environ['MINTDROP_STAT'] = '1'
     if peer:
         target = peer
         server = None
     else:
+        # The stat lines are what this probe measures with; nothing else
+        # asks for them.
+        os.environ['MINTDROP_STAT'] = '1'
         argv = [MINTDROP, 'serve', '--once', '--yes', '--port', str(port)]
         if not splice:
             argv.append('--no-splice')
