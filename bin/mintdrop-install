@@ -15,12 +15,15 @@ and skipping the advertisement only means other machines cannot *find* this
 one. Sending from it, and receiving from a peer told where to look, still work.
 """
 import argparse
+import importlib.machinery
+import importlib.util
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -31,11 +34,27 @@ UNIT_DIR = HOME / '.config/systemd/user'
 AUTOSTART = HOME / '.config/autostart'
 ACTIONS = HOME / '.local/share/file-manager/actions'
 ADVERT = Path('/etc/avahi/services/mintdrop.service')
+QS_ADVERT = Path('/etc/avahi/services/mintdrop-quickshare.service')
 
 SCRIPTS = ('mintdrop', 'mintdrop-accept', 'mintdrop-menu', 'mintdrop-probe',
-           'mintbook_drop.py')
+           'mintbook_drop.py', 'mintbook_quickshare.py')
 UNITS = ('mintbook-drop.socket', 'mintbook-drop@.service')
 SOCKET = 'mintbook-drop.socket'
+
+
+def load(name):
+    loader = importlib.machinery.SourceFileLoader(
+        name, str(ROOT / 'bin' / (name + '.py')))
+    module = importlib.util.module_from_spec(
+        importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(module)
+    return module
+
+
+def device_name():
+    """What both advertisements call this machine."""
+    drop = load('mintbook_drop')
+    return drop.config()['name'] or drop.device_name()
 
 
 def run(*argv, check=True):
@@ -98,22 +117,60 @@ def link(source, dest):
     dest.symlink_to(source)
 
 
-def install_advert():
-    """The mDNS advertisement — the only root step.
+def advert_files():
+    """The two advertisements, as (destination, text) pairs.
 
-    Copied rather than symlinked: avahi-daemon reads this directory as root
-    and a link into a home directory is a link it may not be able to follow.
+    Two service groups rather than one file with two services in it: an avahi
+    service-group has a single instance name, and Quick Share's name is not a
+    hostname — it is ten bytes of endpoint id and service id in base64, which
+    is how the phone learns the endpoint before resolving anything.
+
+    Generated here rather than shipped because both carry this machine's
+    identity: the Quick Share endpoint id, and the name the phone will show.
     """
-    source = ROOT / 'config/avahi/mintdrop.service'
+    quickshare = load('mintbook_quickshare')
+    plain = (ROOT / 'config/avahi/mintdrop.service').read_text()
+    return [(ADVERT, plain),
+            (QS_ADVERT, quickshare.avahi_service(device_name()))]
+
+
+def install_advert():
+    """The mDNS advertisements — the only root step.
+
+    Written as the user into a temporary directory and copied in with one
+    sudo, rather than re-running this script as root: the Quick Share
+    endpoint id lives under the user's ~/.local/state, and root would
+    generate a different one every time it looked.
+    """
     if os.geteuid() == 0:
-        shutil.copy2(source, ADVERT)
+        for dest, text in advert_files():
+            dest.write_text(text)
         run('systemctl', 'reload-or-restart', 'avahi-daemon', check=False)
-        print(f'[+] advertised as _mintdrop._tcp ({ADVERT})')
+        print(f'[+] advertised as _mintdrop._tcp and {load("mintbook_quickshare").SERVICE}')
         return True
-    print('[*] the advertisement needs root; asking sudo for this one file')
-    result = subprocess.run(['sudo', sys.executable, str(Path(__file__).resolve()),
-                             '--advert'], check=False)
-    return result.returncode == 0
+
+    print('[*] the advertisements need root; asking sudo once')
+    staged = Path(tempfile.mkdtemp(prefix='mintdrop-advert-'))
+    try:
+        names = []
+        for dest, text in advert_files():
+            (staged / dest.name).write_text(text)
+            names.append(str(staged / dest.name))
+        (staged).chmod(0o755)
+        for name in names:
+            Path(name).chmod(0o644)
+        result = subprocess.run(['sudo', 'install', '-m', '644', *names,
+                                 str(ADVERT.parent)], check=False)
+        if result.returncode != 0:
+            print('[!] could not install the advertisements', file=sys.stderr)
+            return False
+        subprocess.run(['sudo', 'systemctl', 'reload-or-restart',
+                        'avahi-daemon'], check=False)
+        print(f'[+] advertised as _mintdrop._tcp (Linux peers) and '
+              f'{load("mintbook_quickshare").SERVICE} (Quick Share)')
+        return True
+    finally:
+        shutil.rmtree(staged, ignore_errors=True)
 
 
 def install(args):
@@ -169,14 +226,16 @@ def revert(args):
     run('systemctl', '--user', 'daemon-reload', check=False)
     print(f'[+] removed {len(data["files"])} files and disarmed {SOCKET}')
 
-    if ADVERT.exists():
+    present = [p for p in (ADVERT, QS_ADVERT) if p.exists()]
+    if present:
         if os.geteuid() == 0:
-            ADVERT.unlink()
+            for path in present:
+                path.unlink()
             run('systemctl', 'reload-or-restart', 'avahi-daemon', check=False)
-            print(f'[+] removed {ADVERT}')
+            print(f'[+] removed {len(present)} advertisement(s)')
         else:
-            print(f'[*] still advertised; remove it with:\n'
-                  f'    sudo rm {ADVERT} && '
+            print(f'[*] still advertised; remove them with:\n'
+                  f'    sudo rm {" ".join(str(p) for p in present)} && '
                   f'sudo systemctl reload-or-restart avahi-daemon')
     SAVED.unlink()
     print('[+] snapshot consumed; this checkout is no longer installed')
@@ -198,9 +257,10 @@ def main():
         if os.geteuid() != 0:
             print('--advert must run as root', file=sys.stderr)
             return 1
-        shutil.copy2(ROOT / 'config/avahi/mintdrop.service', ADVERT)
+        for dest, text in advert_files():
+            dest.write_text(text)
         run('systemctl', 'reload-or-restart', 'avahi-daemon', check=False)
-        print(f'[+] advertised as _mintdrop._tcp ({ADVERT})')
+        print(f'[+] advertised: {ADVERT}, {QS_ADVERT}')
         return 0
     if args.revert:
         return revert(args)

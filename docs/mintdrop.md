@@ -227,24 +227,69 @@ showing a real peer. Both need a second machine running mintdrop.
 
 ---
 
-## The phone half
+## The phone half — Quick Share
 
 An unmodified Samsung or Android phone will see this machine only if it
-speaks **Quick Share**, which means, on the same listener and the same
-`_mintdrop._tcp`-shaped discovery:
+speaks **Quick Share**. That work is in progress, in stages that can each be
+tested on their own.
 
-- BLE advertisement of the Quick Share service UUID. BlueZ on this machine
-  exposes `LEAdvertisingManager1` on hci0, so the radio side is available.
-- Google's Offline Wire Protocol: protobuf framing, a Ukey2 handshake, and
-  AES over the resulting session key. `python3-protobuf` is in the archive;
-  `cryptography` is already installed.
+### Done: the phone can see this machine
 
-`bin/mintdrop`'s listener reads four bytes before deciding anything and
-dispatches on them, so a second protocol is an adapter beside the first
-rather than a rewrite — that is why discovery, the accept prompt and the
-receive loop live in `bin/mintbook_drop.py` instead of inside the mintdrop
-wire format. The existing Linux implementation to read first is
-`rquickshare`; nothing here needs to be invented from scratch.
+`bin/mintbook_quickshare.py` builds the advertisement, and
+`bin/mintdrop-install` writes it to
+`/etc/avahi/services/mintdrop-quickshare.service`. It is a static file like
+the mintdrop one, so being discoverable by a phone costs no process either.
 
-This is a real protocol implementation, not an afternoon, and it is not
-started.
+Discovery is mDNS. BLE is only a "nudge" that makes a phone start scanning
+sooner, so it is not needed for the phone to find a machine on the same
+Wi-Fi — opening the share sheet is what starts the phone looking.
+
+The layouts come from grishka's reverse-engineered
+[PROTOCOL.md](https://github.com/grishka/NearDrop/blob/master/PROTOCOL.md),
+and they fail silently: a wrong bit raises nothing, it just means the phone
+never lists the machine. `tests/test_quickshare.py` pins every offset.
+
+| | |
+|---|---|
+| service type | `_FC9F5ED42C8A._tcp`, the first three bytes of SHA-256("NearbySharing") |
+| instance name | 10 bytes, base64url unpadded: `0x23`, endpoint id (4), `FC 9F 5E`, `00 00` |
+| TXT `n` | `version<<5 \| hidden<<4 \| type<<1`, 16 identity bytes, name length, name |
+| port | 8771 — the socket mintdrop already listens on |
+
+Two details worth keeping:
+
+- **The endpoint id is stored**, in `~/.local/state/mintbook/quickshare-endpoint`.
+  Regenerating it each boot would show up on the phone as a new device every
+  time.
+- **The 16 identity bytes are random.** They encode a Google account for
+  "Contacts" visibility, and this machine has no account, so the phone cannot
+  place it as a contact and lists it under Everyone — which is the right
+  visibility for a laptop anyway.
+
+One listener serves both protocols. `bin/mintdrop` reads four bytes before
+deciding anything: `MNTD` is mintdrop, and anything else is a protobuf length
+and belongs to Quick Share. So the phone connects to the same socket unit,
+and the idle cost does not double.
+
+### Not done: the conversation
+
+Being listed is not being able to receive. Still to build, on that same
+connection:
+
+1. length-prefixed protobuf framing (4-byte big-endian) and `OfflineFrame`
+2. the UKEY2 handshake — P-256 ECDH, HKDF-SHA256 with the two fixed salts
+3. the D2D secure-message layer — AES-256-CBC plus HMAC-SHA256, sequence
+   numbered
+4. the sharing frames — paired-key encryption, the introduction listing the
+   files, accept/reject, then chunked `PAYLOAD_TRANSFER`
+5. `KEEP_ALIVE` every 10 seconds, which Android expects both ways
+
+The plan is to hand-roll a small protobuf codec rather than add a dependency:
+the wire format is varints and length-delimited fields, only a handful of
+messages are needed, and this machine does not need a package installed to
+move a file. The accept prompt, the download directory and the name handling
+are already shared, in `bin/mintbook_drop.py`, so Quick Share arrives as an
+adapter beside mintdrop rather than as a second copy of everything.
+
+Reference implementations to read when stuck: `grishka/NearDrop` (macOS,
+Swift), `teaishealthy/pyquickshare` (Linux, Python).
