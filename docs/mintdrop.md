@@ -449,6 +449,52 @@ with a hard 27-byte ceiling on the fast form — which our 30-byte endpoint
 info already exceeds, so the name would have to be trimmed or the non-fast
 GATT form used instead. That is the next piece of work, and it is not small.
 
+### How far discovery got, and exactly where it stops
+
+With adb the feedback loop is seconds rather than guesses, and the phone
+confirmed each step. **It now discovers this machine:**
+
+```
+NearbySharing: EndpointDiscovered(endpointId=MB01)
+BleAdvertisement { version=2, socketVersion=2, isFast=true,
+                   data=[0x23 'MB01' 0x0b 0x06 0x09 'Mintbook1'] }
+NearbySharing: EndpointParsingFailure(endpointId=MB01)
+```
+
+The service UUID was the whole unlock: **0xFEF3**, Nearby Connections. FE2C
+is Fast Pair, borrowed only for fast initiation.
+
+What stops it is arithmetic, not encoding:
+
+| | bytes |
+|---|---|
+| legacy BLE service data | 24 |
+| outer + inner advertisement headers | −10 |
+| left for endpoint info | **14** |
+| smallest valid endpoint info | **18**, before a name |
+
+This adapter is HCI 4.2 with `SupportedSecondaryChannels` empty, so there is
+no extended advertising to escape into, and BlueZ refuses anything longer
+outright.
+
+#### The GATT route is built and not yet accepted
+
+The supported answer for a controller this old is to advertise a 17-byte
+header and serve the real advertisement from a GATT server. All of it exists
+now — a BlueZ GATT application on `0xFEF3` with the advertisement slot
+characteristic at `00000000-0000-3000-8000-0000000000NN`, the header, and
+`bin/mintbook_bloom.py` for the service-id filter (MurmurHash3 x64/128,
+checked against the published "hello" vector rather than against itself).
+
+The phone still logs `No BLE Fast/GATT advertisements found` and never reads
+the characteristic. Untested guesses at this point, in the order worth
+trying: the advertisement type (`broadcast` was what the phone accepted for
+the fast form; the header goes out as `peripheral`), a `psm` of zero where
+L2CAP is expected, and whether `num_slots` means what this assumes.
+
+**Nothing here is a dead end — it is an unfinished one**, and every step now
+has a phone that says yes or no within seconds.
+
 ### Still rough
 
 - **A phone cannot discover this machine.** Receiving *works* — the server
