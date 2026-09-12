@@ -201,11 +201,15 @@ class _Advert(dbus.service.Object):
 class Listed:
     """Be a device a phone can pick. Requires a running GLib main loop."""
 
-    def __init__(self, endpoint_id, endpoint_info):
+    def __init__(self, endpoint_id, endpoint_info, psm=0):
         dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
         self.bus = dbus.SystemBus()
         self.advertisement = endpoint_advertisement(endpoint_id, endpoint_info)
-        self.header = advertisement_header(self.advertisement)
+        # The psm tells the phone where to open a BLE channel. Zero means
+        # "nowhere", and a phone that discovered this machine over BLE then
+        # has nothing to connect to — it gives up without considering the
+        # network at all. See bin/mintbook_l2cap.py.
+        self.header = advertisement_header(self.advertisement, psm=psm)
         self.application = None
         self.advert = None
         self.gatt = None

@@ -565,6 +565,27 @@ def send_quickshare(peer, files, total, args):
     return 0
 
 
+def _on_bluetooth_connection(connection, peer):
+    """A phone opened the BLE channel. Say what it sent.
+
+    Nearby over L2CAP has its own packet framing on top of the channel, which
+    mintdrop does not speak yet — so for now this records what arrives rather
+    than pretending to answer it. The bytes are the thing worth having: they
+    say whether the phone is starting the same conversation the TCP path
+    already handles, or something else.
+    """
+    log(f'BLE channel opened by {peer}')
+    try:
+        connection.settimeout(20)
+        for _ in range(4):
+            packet = connection.recv(4096)
+            if not packet:
+                break
+            log(f'  <- {len(packet)} bytes: {packet[:64].hex(" ")}')
+    except OSError as exc:
+        log(f'  BLE channel closed: {exc}')
+
+
 def cmd_visible(args):
     """Be a device a phone can pick, for a couple of minutes.
 
@@ -612,14 +633,31 @@ def cmd_visible(args):
         print(f'mintdrop: cannot be listed on a phone ({exc})', file=sys.stderr)
         return 1
 
+    # Somewhere for the phone to connect. It connects over the medium it
+    # discovered us on, and that is BLE.
+    listener = None
+    psm = 0
+    try:
+        loader = importlib.machinery.SourceFileLoader(
+            'mintbook_l2cap', os.path.join(here, 'mintbook_l2cap.py'))
+        l2cap = importlib.util.module_from_spec(
+            importlib.util.spec_from_loader(loader.name, loader))
+        loader.exec_module(l2cap)
+        listener = l2cap.Listener(on_connect=_on_bluetooth_connection).start()
+        psm = listener.psm
+    except Exception as exc:
+        print(f'mintdrop: no BLE channel ({exc})', file=sys.stderr)
+
     from gi.repository import GLib
-    listed = gatt.Listed(endpoint, info)
+    listed = gatt.Listed(endpoint, info, psm=psm)
     loop = GLib.MainLoop()
     try:
         with qs.Announcement(name, endpoint=endpoint, info=info):
             print(f'Announcing "{name}" to nearby phones for {args.seconds}s',
                   file=sys.stderr)
-            print(f'  endpoint {endpoint} on {drop.PORT}', file=sys.stderr)
+            print(f'  endpoint {endpoint} on {drop.PORT}'
+                  + (f', BLE channel psm 0x{psm:02x}' if psm else ''),
+                  file=sys.stderr)
             listed.start(
                 on_ready=lambda: print(f'  listed over BLE — pick "{name}" '
                                        f'on the phone', file=sys.stderr),
@@ -638,6 +676,11 @@ def cmd_visible(args):
         if listed.reads:
             print(f'  a phone read the advertisement {listed.reads} time(s)',
                   file=sys.stderr)
+        if listener is not None:
+            if listener.connections:
+                print(f'  a phone opened the BLE channel '
+                      f'{listener.connections} time(s)', file=sys.stderr)
+            listener.stop()
         listed.stop()
     print('No longer advertising.', file=sys.stderr)
     return 0
