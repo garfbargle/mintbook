@@ -448,6 +448,36 @@ def cmd_send(args):
 # looking around
 # ---------------------------------------------------------------------------
 
+def cmd_visible(args):
+    """Be findable by a phone for a couple of minutes, then stop.
+
+    Android sleeps its Nearby stack, so mDNS alone often never gets this
+    machine listed; a BLE advertisement wakes it. Time-boxed on purpose —
+    see bin/mintbook_ble.py. Nothing advertises in the background.
+    """
+    here = os.path.dirname(os.path.realpath(__file__))
+    loader = importlib.machinery.SourceFileLoader(
+        'mintbook_ble', os.path.join(here, 'mintbook_ble.py'))
+    try:
+        ble = importlib.util.module_from_spec(
+            importlib.util.spec_from_loader(loader.name, loader))
+        loader.exec_module(ble)
+    except ImportError as exc:
+        print(f'mintdrop: no Bluetooth support ({exc})', file=sys.stderr)
+        return 1
+    try:
+        ble.hold(args.seconds,
+                 announce=lambda data: print(
+                     f'Visible to nearby phones for {args.seconds}s '
+                     f'(FE2C {data.hex(" ")})', file=sys.stderr))
+    except ble.NotAvailable as exc:
+        print(f'mintdrop: cannot advertise — {exc}', file=sys.stderr)
+        print('         turn Bluetooth on in Control Center', file=sys.stderr)
+        return 1
+    print('No longer advertising.', file=sys.stderr)
+    return 0
+
+
 def cmd_peers(args):
     peers = drop.discover(args.wait)
     if not peers:
@@ -505,6 +535,10 @@ def main(argv=None):
     peers = sub.add_parser('peers', help='list nearby devices')
     peers.add_argument('--wait', type=float, default=1.2)
     peers.set_defaults(func=cmd_peers)
+
+    visible = sub.add_parser('visible', help='be findable by a phone, briefly')
+    visible.add_argument('seconds', nargs='?', type=int, default=120)
+    visible.set_defaults(func=cmd_visible)
 
     status = sub.add_parser('status', help='what is armed and advertised')
     status.set_defaults(func=cmd_status)

@@ -56,6 +56,10 @@ def load(name):
 
 drop = load('mintbook_drop')
 quickshare = load('mintbook_quickshare')
+try:
+    ble = load('mintbook_ble')
+except Exception:            # python3-dbus absent: everything else still works
+    ble = None
 
 # Drawn, not themed. Tuples because cairo wants numbers and because these are
 # shapes rather than widgets — the only CSS below is for the two text labels.
@@ -609,10 +613,24 @@ class Sheet:
         gdk_win = win.get_window()
         if gdk_win is not None:
             gdk_win.focus(GLib.get_monotonic_time() // 1000 & 0xffffffff)
+        # Advertise over BLE for exactly as long as this window is open.
+        # A phone whose Nearby stack is asleep never looks at mDNS, so
+        # without this the sheet can sit there listing nothing while the
+        # phone is a metre away. It stops when the window does.
+        visibility = None
+        if ble is not None:
+            try:
+                visibility = ble.Visibility().start(
+                    on_error=lambda exc: None)
+            except ble.NotAvailable:
+                visibility = None        # no Bluetooth is not an error here
+
         threading.Thread(target=self.search, args=(True,),
                          daemon=True).start()
         Gtk.main()
         self.closed = True
+        if visibility is not None:
+            visibility.stop()
         return self.chosen
 
 
