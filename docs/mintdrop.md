@@ -11,12 +11,56 @@ actually moving.
 ```
 mintdrop peers                       what is nearby
 mintdrop send "Studio iMac" a.pdf    send it
-mintdrop send --pick a.pdf           choose in the picker
 mintdrop status                      what is armed here
 bin/mintdrop-install                 install; --revert puts it all back
 ```
 
-In Files, right-click one or more files and choose **Send with Mintdrop**.
+## Four ways in
+
+| | |
+|---|---|
+| **the dock** | drag files onto the Mintdrop icon in Plank |
+| **Files** | right-click a selection → *Send with Mintdrop* |
+| **the sheet** | `mintdrop-menu`, then drop files onto a device |
+| **a terminal** | `mintdrop send` |
+
+<p align="center">
+  <img src="images/mintdrop-sheet-light.png" alt="The Mintdrop sheet, light" width="239">
+  &nbsp;
+  <img src="images/mintdrop-sheet-dark.png" alt="The Mintdrop sheet, dark" width="232">
+</p>
+
+The sheet is one window: round tiles for the devices that are nearby, a
+glyph saying what kind of thing each one is, and the transfer drawn on the
+tile itself as a ring closing clockwise from twelve. Dropping files on a tile
+sends them; so does clicking one, when the sheet was opened with files
+already. Escape closes it. Nothing is resident — discovery runs while the
+window is open and stops when it closes.
+
+The glyphs are drawn rather than taken from an icon theme, for the reason
+`bin/bt-menu` draws its own: three shapes at one size, which then match the
+appearance exactly and cannot go missing when a theme changes.
+
+**Phones appear here already, marked *Quick Share*, and cannot be sent to
+yet.** They are shown rather than hidden because a device that is genuinely
+there and genuinely not ready is more useful to see than to omit — clicking
+one says so.
+
+### The right-click entry, and where it was wrong
+
+Thunar keeps custom actions in `~/.config/Thunar/uca.xml`. The first version
+of this installed a `.desktop` file into
+`~/.local/share/file-manager/actions/`, which is where Nemo and Caja look and
+where Thunar never does — so the entry the README promised did not exist.
+`bin/mintdrop-install` now edits `uca.xml`, and:
+
+- it **edits rather than replaces**: that file holds the user's own actions
+- it is **idempotent**, keyed on the unique-id `mintbook-mintdrop`
+- `--revert` **removes by that id** rather than restoring a backup, so an
+  action added after the install is not silently deleted
+
+Thunar may need `thunar -q` before the entry appears; Plank picks up its new
+launcher on its own.
 
 ---
 

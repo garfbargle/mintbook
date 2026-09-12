@@ -1,57 +1,81 @@
 #!/usr/bin/env python3
-"""The picker — the devices that are nearby, so you can click one.
+"""The sheet — the devices that are nearby, as things you can drop a file on.
 
+    mintdrop-menu                 open it, then drag files onto a device
+    mintdrop-menu FILE...         open it with those files ready to send
     mintdrop-menu --pick          print the chosen peer's name and exit
-    mintdrop-menu FILE...         pick a peer, then send those files
+
+AirDrop's window is the whole of its interface: a name, a picture, and you
+let go of the file. This is that, drawn for this machine — one row of round
+tiles, a glyph that says what kind of device it is, and the transfer
+happening on the tile itself rather than in a dialog somewhere else.
 
 Discovery runs only while this window is open. avahi-daemon is already
 running for the rest of the system, so browsing costs one short-lived
-`avahi-browse --terminate` per refresh and nothing between them — there is no
-resident discovery process on this machine, which is rule 3 in CONTRIBUTING
-and the reason this feature costs nothing when it is not in use.
+`avahi-browse --terminate` and nothing between them. There is no resident
+process on either side of this feature.
 
-The browse happens on a thread because it takes about a second and a window
-that paints after its own discovery is a window that looks broken. The list
-appears immediately saying it is looking, then fills in.
+The browse happens on a thread because it takes about a second, and so does
+the transfer: a window that paints after its own discovery looks broken, and
+one that freezes while a file moves looks worse. Gtk is not thread-safe, so
+every result comes back through GLib.idle_add and nothing off the main loop
+touches a widget.
 """
 import argparse
 import importlib.machinery
 import importlib.util
+import math
 import os
-import subprocess
 import sys
 import threading
+import time
+
+BIN = os.path.dirname(os.path.realpath(__file__))
+APPLIED = os.path.expanduser('~/.config/mintbook/appearance.applied')
 
 # Adwaita before the Gtk import, for the reason bin/control-center and
 # bin/bt-menu give: Gtk.init parses the GTK theme, WhiteSur's gtk.css is
 # 400 KB, and that is ~120 ms of every launch spent on a stylesheet this
-# window never reads a rule from. Every colour here comes from the CSS below
-# and from appearance.applied.
+# window never reads a rule from. Every colour here is drawn or set below.
 os.environ.setdefault('GTK_THEME', 'Adwaita')
 
 import gi
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, Gdk, GLib
 
-BIN = os.path.dirname(os.path.realpath(__file__))
-APPLIED = os.path.expanduser('~/.config/mintbook/appearance.applied')
 
-DARK = {'bg': '#212124', 'fg': '#ffffff', 'dim': 'rgba(255,255,255,0.55)',
-        'hover': 'rgba(255,255,255,0.12)', 'line': 'rgba(255,255,255,0.10)'}
-LIGHT = {'bg': '#f5f5f7', 'fg': '#1d1d1f', 'dim': 'rgba(0,0,0,0.55)',
-         'hover': 'rgba(0,0,0,0.07)', 'line': 'rgba(0,0,0,0.10)'}
-
-
-def load_drop():
+def load(name):
     loader = importlib.machinery.SourceFileLoader(
-        'mintbook_drop', os.path.join(BIN, 'mintbook_drop.py'))
+        name, os.path.join(BIN, name + '.py'))
     module = importlib.util.module_from_spec(
         importlib.util.spec_from_loader(loader.name, loader))
     loader.exec_module(module)
     return module
 
 
-drop = load_drop()
+drop = load('mintbook_drop')
+quickshare = load('mintbook_quickshare')
+
+# Drawn, not themed. Tuples because cairo wants numbers and because these are
+# shapes rather than widgets — the only CSS below is for the two text labels.
+LIGHT = {
+    'bg': (0.961, 0.961, 0.968), 'fg': (0.11, 0.11, 0.12),
+    'dim': (0.0, 0.0, 0.0, 0.45), 'tile': (0.0, 0.0, 0.0, 0.06),
+    'hover': (0.0, 0.0, 0.0, 0.12), 'accent': (0.04, 0.52, 1.0),
+    'track': (0.0, 0.0, 0.0, 0.10), 'good': (0.20, 0.72, 0.33),
+    'bad': (0.90, 0.26, 0.21),
+}
+DARK = {
+    'bg': (0.129, 0.129, 0.141), 'fg': (1.0, 1.0, 1.0),
+    'dim': (1.0, 1.0, 1.0, 0.45), 'tile': (1.0, 1.0, 1.0, 0.10),
+    'hover': (1.0, 1.0, 1.0, 0.18), 'accent': (0.04, 0.52, 1.0),
+    'track': (1.0, 1.0, 1.0, 0.14), 'good': (0.20, 0.78, 0.35),
+    'bad': (1.0, 0.27, 0.23),
+}
+
+TILE = 92           # the drawing area, square
+RADIUS = 33         # the circle inside it
+IDLE, SENDING, DONE, FAILED = 'idle', 'sending', 'done', 'failed'
 
 
 def appearance():
@@ -62,18 +86,310 @@ def appearance():
         return LIGHT
 
 
-class Picker:
-    def __init__(self, files):
-        self.files = files
-        self.colors = appearance()
-        self.chosen = None
-        self.rows = None
-        self.win = None
+def rgba(cr, colour):
+    if len(colour) == 4:
+        cr.set_source_rgba(*colour)
+    else:
+        cr.set_source_rgb(*colour)
 
-    # -- window ------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# glyphs
+# ---------------------------------------------------------------------------
+# Drawn rather than pulled from an icon theme: three shapes at one size, and
+# this way they inherit the appearance's foreground exactly and cannot go
+# missing when a theme changes. bin/bt-menu draws its device glyphs the same
+# way and for the same reason.
+
+def glyph_phone(cr, cx, cy, colour):
+    rgba(cr, colour)
+    cr.set_line_width(1.8)
+    w, h, r = 19, 32, 4
+    x, y = cx - w / 2, cy - h / 2
+    cr.new_sub_path()
+    cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
+    cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
+    cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
+    cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
+    cr.close_path()
+    cr.stroke()
+    cr.move_to(cx - 3.5, y + 4.5)
+    cr.line_to(cx + 3.5, y + 4.5)
+    cr.stroke()
+
+
+def glyph_laptop(cr, cx, cy, colour):
+    rgba(cr, colour)
+    cr.set_line_width(1.8)
+    w, h = 28, 19
+    x, y = cx - w / 2, cy - h / 2 - 3
+    cr.rectangle(x, y, w, h)
+    cr.stroke()
+    cr.move_to(cx - w / 2 - 4, y + h + 5)
+    cr.line_to(cx + w / 2 + 4, y + h + 5)
+    cr.stroke()
+
+
+def glyph_unknown(cr, cx, cy, colour):
+    rgba(cr, colour)
+    cr.set_line_width(1.8)
+    cr.rectangle(cx - 13, cy - 10, 26, 20)
+    cr.stroke()
+
+
+def glyph_check(cr, cx, cy, colour):
+    rgba(cr, colour)
+    cr.set_line_width(3)
+    cr.set_line_cap(1)                      # cairo.LINE_CAP_ROUND
+    cr.move_to(cx - 8, cy)
+    cr.line_to(cx - 2, cy + 6.5)
+    cr.line_to(cx + 9, cy - 6)
+    cr.stroke()
+
+
+def glyph_cross(cr, cx, cy, colour):
+    rgba(cr, colour)
+    cr.set_line_width(3)
+    cr.set_line_cap(1)
+    for dx in (-1, 1):
+        cr.move_to(cx - 7 * dx, cy - 7)
+        cr.line_to(cx + 7 * dx, cy + 7)
+        cr.stroke()
+
+
+GLYPHS = {quickshare.PHONE: glyph_phone, quickshare.FOLDABLE: glyph_phone,
+          quickshare.TABLET: glyph_phone, quickshare.LAPTOP: glyph_laptop}
+
+
+# ---------------------------------------------------------------------------
+# one device
+# ---------------------------------------------------------------------------
+
+class Tile:
+    """A device, and whatever is currently happening to it."""
+
+    def __init__(self, sheet, peer):
+        self.sheet = sheet
+        self.peer = peer
+        self.state = IDLE
+        self.share = 0.0
+        self.hover = False
+        self.dropping = False
+        self.note = ''
+        self.supported = peer.get('protocol', 'mintdrop') == 'mintdrop'
+
+        self.area = Gtk.DrawingArea()
+        self.area.set_size_request(TILE, TILE)
+        self.area.connect('draw', self.draw)
+
+        self.label = Gtk.Label(label=peer['name'])
+        self.label.get_style_context().add_class('name')
+        self.label.set_max_width_chars(16)
+        self.label.set_ellipsize(3)
+        self.label.set_justify(Gtk.Justification.CENTER)
+        self.label.set_line_wrap(False)
+
+        self.status = Gtk.Label(label='Quick Share' if not self.supported else '')
+        self.status.get_style_context().add_class('status')
+        self.status.set_max_width_chars(15)
+        self.status.set_ellipsize(3)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+        box.pack_start(self.area, False, False, 0)
+        box.pack_start(self.label, False, False, 0)
+        box.pack_start(self.status, False, False, 0)
+
+        self.widget = Gtk.EventBox()
+        self.widget.add(box)
+        self.widget.set_events(Gdk.EventMask.BUTTON_PRESS_MASK
+                               | Gdk.EventMask.ENTER_NOTIFY_MASK
+                               | Gdk.EventMask.LEAVE_NOTIFY_MASK)
+        self.widget.connect('button-press-event', self.clicked)
+        self.widget.connect('enter-notify-event', self.entered, True)
+        self.widget.connect('leave-notify-event', self.entered, False)
+
+        # The whole point of the window: let go of a file on a face.
+        self.widget.drag_dest_set(Gtk.DestDefaults.ALL, [],
+                                  Gdk.DragAction.COPY)
+        self.widget.drag_dest_add_uri_targets()
+        self.widget.connect('drag-data-received', self.dropped)
+        self.widget.connect('drag-motion', self.drag_over, True)
+        self.widget.connect('drag-leave', self.drag_over, False)
+
+    # -- painting ----------------------------------------------------------
+
+    def draw(self, area, cr):
+        colours = self.sheet.colours
+        cx = cy = TILE / 2
+        lit = (self.hover or self.dropping) and self.state is IDLE
+
+        rgba(cr, colours['hover'] if lit else colours['tile'])
+        cr.arc(cx, cy, RADIUS, 0, 2 * math.pi)
+        cr.fill()
+
+        if self.dropping:
+            rgba(cr, colours['accent'])
+            cr.set_line_width(2)
+            cr.arc(cx, cy, RADIUS + 3, 0, 2 * math.pi)
+            cr.stroke()
+
+        foreground = colours['fg'] if self.supported else colours['dim']
+        if self.state is DONE:
+            glyph_check(cr, cx, cy, colours['good'])
+        elif self.state is FAILED:
+            glyph_cross(cr, cx, cy, colours['bad'])
+        else:
+            GLYPHS.get(self.peer.get('device_type'), glyph_unknown)(
+                cr, cx, cy, foreground)
+
+        if self.state is SENDING:
+            # The ring is the progress bar. Starting at twelve o'clock and
+            # going clockwise is the only reading of a circle that does not
+            # need a legend.
+            rgba(cr, colours['track'])
+            cr.set_line_width(3)
+            cr.arc(cx, cy, RADIUS + 5, 0, 2 * math.pi)
+            cr.stroke()
+            rgba(cr, colours['accent'])
+            cr.set_line_width(3)
+            cr.set_line_cap(1)
+            cr.arc(cx, cy, RADIUS + 5, -math.pi / 2,
+                   -math.pi / 2 + 2 * math.pi * max(self.share, 0.01))
+            cr.stroke()
+        return False
+
+    def repaint(self):
+        self.area.queue_draw()
+        self.status.set_text(self.note)
+        return False
+
+    # -- input -------------------------------------------------------------
+
+    def entered(self, _widget, _event, inside):
+        self.hover = inside
+        self.area.queue_draw()
+        return False
+
+    def drag_over(self, _widget, _ctx=None, _x=None, _y=None, _t=None,
+                  inside=False):
+        self.dropping = bool(inside)
+        self.area.queue_draw()
+        return False
+
+    def dropped(self, _widget, _ctx, _x, _y, data, _info, _time):
+        self.dropping = False
+        paths = []
+        for uri in data.get_uris():
+            path, _host = GLib.filename_from_uri(uri)
+            paths.append(path)
+        if paths:
+            self.send(paths)
+
+    def clicked(self, _widget, _event):
+        if self.sheet.files:
+            self.send(self.sheet.files)
+        elif not self.supported:
+            self.sheet.say(f'{self.peer["name"]} speaks Quick Share — '
+                           f'sending to phones is not built yet')
+        else:
+            self.sheet.say('Drag files onto a device to send them')
+        return True
+
+    # -- the transfer ------------------------------------------------------
+
+    def send(self, paths):
+        if self.state is SENDING:
+            return
+        if not self.supported:
+            self.sheet.say(f'{self.peer["name"]} speaks Quick Share — '
+                           f'sending to phones is not built yet')
+            return
+        self.state = SENDING
+        self.share = 0.0
+        self.note = 'Waiting…'
+        self.repaint()
+        threading.Thread(target=self.transfer, args=(paths,),
+                         daemon=True).start()
+
+    def finish(self, state, note):
+        self.state = state
+        self.note = note
+        self.repaint()
+        return False
+
+    def transfer(self, paths):
+        """Off the main loop. Everything it learns goes back through idle_add."""
+        try:
+            files = []
+            for path in paths:
+                if os.path.isdir(path):
+                    raise drop.DropError(f'{os.path.basename(path)} is a folder')
+                files.append({'path': path, 'name': os.path.basename(path),
+                              'size': os.stat(path).st_size})
+            total = sum(f['size'] for f in files) or 1
+
+            sock = drop.connect(self.peer['address'], self.peer['port'])
+            try:
+                drop.write_header(sock, {
+                    'name': drop.config()['name'] or drop.device_name(),
+                    'files': [{'name': f['name'], 'size': f['size']}
+                              for f in files]})
+                sock.settimeout(90)
+                answer = drop.read_exactly(sock, 1)
+                if answer == drop.DECLINE:
+                    GLib.idle_add(self.finish, FAILED, 'Declined')
+                    return
+                if answer != drop.ACCEPT:
+                    GLib.idle_add(self.finish, FAILED, 'Busy')
+                    return
+
+                sock.setblocking(True)
+                moved = [0]
+                last = [0.0]
+                started = time.monotonic()
+
+                def progress(chunk):
+                    moved[0] += chunk
+                    now = time.monotonic()
+                    # Twenty repaints a second is plenty and costs nothing;
+                    # one per megabyte would cost more than the transfer.
+                    if now - last[0] < 0.05 and moved[0] < total:
+                        return
+                    last[0] = now
+                    self.share = moved[0] / total
+                    rate = moved[0] / max(now - started, 1e-6) / (1 << 20)
+                    self.note = f'{self.share * 100:.0f}%  ·  {rate:.0f} MB/s'
+                    GLib.idle_add(self.repaint)
+
+                for entry in files:
+                    drop.send_file(sock, entry['path'], entry['size'], progress)
+                sock.settimeout(120)
+                drop.read_exactly(sock, 1)
+            finally:
+                sock.close()
+        except (drop.DropError, OSError) as exc:
+            message = getattr(exc, 'strerror', None) or str(exc)
+            GLib.idle_add(self.finish, FAILED, message[:40])
+            return
+        seconds = max(time.monotonic() - started, 1e-6)
+        GLib.idle_add(self.finish, DONE,
+                      f'Sent · {total / seconds / (1 << 20):.0f} MB/s')
+
+
+# ---------------------------------------------------------------------------
+# the window
+# ---------------------------------------------------------------------------
+
+class Sheet:
+    def __init__(self, files, pick_only=False):
+        self.files = files
+        self.pick_only = pick_only
+        self.colours = appearance()
+        self.chosen = None
+        self.tiles = []
 
     def build(self):
-        colors = self.colors
+        dark = self.colours is DARK
         win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
         win.set_decorated(False)
         win.set_skip_taskbar_hint(True)
@@ -82,61 +398,77 @@ class Picker:
         win.set_accept_focus(True)
         win.set_type_hint(Gdk.WindowTypeHint.DIALOG)
         win.set_position(Gtk.WindowPosition.CENTER_ALWAYS)
-        win.set_size_request(300, -1)
+
+        def css_rgb(key, alpha=None):
+            c = self.colours[key]
+            if len(c) == 4:
+                return f'rgba({c[0]*255:.0f},{c[1]*255:.0f},{c[2]*255:.0f},{c[3]})'
+            if alpha is not None:
+                return f'rgba({c[0]*255:.0f},{c[1]*255:.0f},{c[2]*255:.0f},{alpha})'
+            return f'rgb({c[0]*255:.0f},{c[1]*255:.0f},{c[2]*255:.0f})'
 
         css = Gtk.CssProvider()
-        css.load_from_data(f"""
-            window {{ background-color: {colors['bg']}; border-radius: 12px; }}
-            label {{ color: {colors['fg']}; }}
+        css.load_from_data(f'''
+            window {{ background-color: {css_rgb('bg')}; border-radius: 14px; }}
+            label {{ color: {css_rgb('fg')}; }}
             label.title {{ font-weight: 600; font-size: 13px; }}
-            label.sub {{ color: {colors['dim']}; font-size: 11px; }}
-            button {{
-                color: {colors['fg']};
-                background-image: none;
-                background-color: transparent;
-                border: none;
-                border-radius: 9px;
-                padding: 7px 10px;
-                box-shadow: none;
+            label.name {{ font-size: 12px; }}
+            label.status, label.hint {{
+                color: {css_rgb('dim')}; font-size: 10px;
             }}
-            button:hover {{ background-color: {colors['hover']}; }}
-        """.encode())
+            label.hint {{ font-size: 11px; }}
+        '''.encode())
         Gtk.StyleContext.add_provider_for_screen(
             Gdk.Screen.get_default(), css,
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         for side in ('top', 'bottom', 'start', 'end'):
-            getattr(box, f'set_margin_{side}')(14)
-        win.add(box)
+            getattr(outer, f'set_margin_{side}')(18)
+        win.add(outer)
 
-        what = 'Send to' if not self.files else (
-            f'Send {os.path.basename(self.files[0])}' if len(self.files) == 1
-            else f'Send {len(self.files)} files')
-        title = Gtk.Label(label=what, xalign=0)
-        title.get_style_context().add_class('title')
-        title.set_max_width_chars(34)
-        title.set_ellipsize(3)
-        box.pack_start(title, False, False, 0)
+        if self.files:
+            what = (os.path.basename(self.files[0]) if len(self.files) == 1
+                    else f'{len(self.files)} files')
+            heading = f'Send {what} to'
+        else:
+            heading = 'Send to'
+        self.title = Gtk.Label(label=heading, xalign=0.5)
+        self.title.get_style_context().add_class('title')
+        self.title.set_max_width_chars(40)
+        self.title.set_ellipsize(3)
+        outer.pack_start(self.title, False, False, 0)
 
-        self.rows = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        box.pack_start(self.rows, False, False, 0)
+        self.flow = Gtk.FlowBox()
+        self.flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.flow.set_max_children_per_line(4)
+        self.flow.set_min_children_per_line(1)
+        self.flow.set_homogeneous(True)
+        self.flow.set_column_spacing(6)
+        self.flow.set_row_spacing(6)
+        # Centre the tiles rather than letting the FlowBox fill: with one
+        # device the window is as wide as its hint text, and a single tile
+        # pinned to the left of all that space looks like a mistake.
+        self.flow.set_halign(Gtk.Align.CENTER)
+        self.flow.set_hexpand(False)
+        centred = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        centred.set_center_widget(self.flow)
+        outer.pack_start(centred, False, False, 0)
 
-        self.set_status('Looking for devices…')
+        self.hint = Gtk.Label(label='Looking for devices…', xalign=0.5)
+        self.hint.get_style_context().add_class('hint')
+        self.hint.set_line_wrap(True)
+        self.hint.set_max_width_chars(34)
+        self.hint.set_justify(Gtk.Justification.CENTER)
+        outer.pack_start(self.hint, False, False, 0)
+
         win.connect('key-press-event', self.on_key)
         win.connect('destroy', lambda *_: Gtk.main_quit())
         self.win = win
         return win
 
-    def set_status(self, text):
-        for child in self.rows.get_children():
-            self.rows.remove(child)
-        label = Gtk.Label(label=text, xalign=0)
-        label.get_style_context().add_class('sub')
-        label.set_margin_top(6)
-        label.set_margin_bottom(2)
-        self.rows.pack_start(label, False, False, 0)
-        self.rows.show_all()
+    def say(self, text):
+        self.hint.set_text(text)
 
     def on_key(self, _w, event):
         if event.keyval == Gdk.KEY_Escape:
@@ -147,40 +479,43 @@ class Picker:
     # -- discovery ---------------------------------------------------------
 
     def search(self):
-        """Browse off the main loop, then hand the result back to it.
-
-        GLib.idle_add is the handoff: Gtk is not thread-safe, and touching the
-        widgets from the browse thread is the kind of bug that shows up as a
-        blank popup once a week rather than every time.
-        """
-        peers = drop.discover()
-        GLib.idle_add(self.show_peers, peers)
-
-    def show_peers(self, peers):
-        if not peers:
-            self.set_status('No devices nearby.\nThe other machine needs '
-                            'mintdrop installed and running.')
-            return False
-        for child in self.rows.get_children():
-            self.rows.remove(child)
+        peers = list(drop.discover())
         for peer in peers:
-            button = Gtk.Button()
-            inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-            name = Gtk.Label(label=peer['name'], xalign=0)
-            name.get_style_context().add_class('title')
-            where = Gtk.Label(label=peer['address'], xalign=0)
-            where.get_style_context().add_class('sub')
-            inner.pack_start(name, False, False, 0)
-            inner.pack_start(where, False, False, 0)
-            button.add(inner)
-            button.connect('clicked', self.pick, peer)
-            self.rows.pack_start(button, False, False, 0)
-        self.rows.show_all()
-        return False
+            peer.setdefault('protocol', 'mintdrop')
+            peer.setdefault('device_type', quickshare.LAPTOP)
+        try:
+            peers += quickshare.discover()
+        except Exception:
+            pass                      # a phone we cannot list is not an error
+        GLib.idle_add(self.show, peers)
 
-    def pick(self, _button, peer):
-        self.chosen = peer
-        Gtk.main_quit()
+    def show(self, peers):
+        for tile in self.tiles:
+            parent = tile.widget.get_parent()
+            if parent is not None:
+                self.flow.remove(parent)
+        self.tiles = []
+        if not peers:
+            self.hint.set_text('No devices nearby.\nA phone needs its Quick '
+                               'Share sheet open.')
+            return False
+        # Size the grid to what is actually here. A FlowBox reserves width
+        # for max_children_per_line whether or not those children exist, so
+        # leaving it at four made one device sit in the left quarter of an
+        # empty four-wide grid — which no amount of centring fixes, because
+        # the grid itself was the right size and the tile was at its edge.
+        self.flow.set_max_children_per_line(max(1, min(len(peers), 4)))
+        for peer in peers:
+            tile = Tile(self, peer)
+            self.tiles.append(tile)
+            self.flow.add(tile.widget)
+        if self.files:
+            self.hint.set_text('Click a device, or drop the files on one.')
+        else:
+            self.hint.set_text('Drag files onto a device to send them.')
+        self.flow.show_all()
+        self.win.resize(1, 1)          # shrink back to what the tiles need
+        return False
 
     def run(self):
         win = self.build()
@@ -201,20 +536,21 @@ def main():
     parser.add_argument('files', nargs='*')
     args = parser.parse_args()
 
-    chosen = Picker(args.files).run()
-    if chosen is None:
-        return 1
-    if args.pick or not args.files:
+    files = [os.path.abspath(os.path.expanduser(f)) for f in args.files]
+    sheet = Sheet(files, pick_only=args.pick)
+    if args.pick:
+        # The old contract, still used by `mintdrop send --pick`: choose a
+        # peer, print its name, send nothing.
+        def choose(tile, paths=None):
+            sheet.chosen = tile.peer
+            Gtk.main_quit()
+        Tile.send = choose
+    chosen = sheet.run()
+    if args.pick:
+        if chosen is None:
+            return 1
         print(chosen['name'])
-        return 0
-    # Hand off to the sender. exec rather than spawn: this window is gone, and
-    # a picker sitting in the process tree for the length of a transfer is a
-    # process this machine does not need to be running.
-    address = chosen['address']
-    where = (f'[{address}]:{chosen["port"]}' if ':' in address
-             else f'{address}:{chosen["port"]}')
-    argv = [os.path.join(BIN, 'mintdrop'), 'send', where] + args.files
-    os.execv(argv[0], argv)
+    return 0
 
 
 if __name__ == '__main__':

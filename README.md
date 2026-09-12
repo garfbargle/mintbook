@@ -81,10 +81,17 @@ when updates exist, with apt and Flatpak together in one clean list.
 
 ## Send it to the machine next to you.
 
-Right-click a file in Files and choose **Send with Mintdrop**, or run
-`mintdrop send`. Pick a name from the devices that are nearby and the file
-goes straight across the network—no cloud, no cable, no account, no app on
-either end.
+Drag files onto the Mintdrop icon in the dock, or right-click them in Files
+and choose **Send with Mintdrop**. A sheet opens with the devices that are
+nearby, as circles you can let go of a file on. The transfer happens on the
+tile—a ring closing around the device you sent to—rather than in a dialog
+somewhere else.
+
+<p align="center">
+  <img src="docs/images/mintdrop-sheet-light.png" alt="The Mintdrop sheet in the light appearance, showing a nearby phone as a round tile" width="239">
+  &nbsp;
+  <img src="docs/images/mintdrop-sheet-dark.png" alt="The same sheet in the dark appearance" width="232">
+</p>
 
 Anything arriving here says so first. Who is sending, what it is, how big,
 and from which address—and the default answer is no. Escape declines, a
@@ -109,8 +116,8 @@ its data on AWDL, which needs the wireless card in monitor mode with frame
 injection, and the BCM4350 here has neither. Quick Share—Samsung's and
 Google's—announces over BLE and mDNS and then moves bytes over an ordinary
 TCP connection, which any card can do. That is the shape Mintdrop follows.
-Today it talks to other Linux machines running it; speaking Quick Share
-itself, so a phone sees this machine in its own share sheet, is being built.
+Phones already **appear** in the sheet, marked *Quick Share*; speaking enough
+of that protocol to actually send them a file is being built.
 
 [How it works, and what it does not protect](docs/mintdrop.md)
 

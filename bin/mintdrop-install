@@ -32,7 +32,12 @@ SAVED = HOME / '.config/mintbook/mintdrop-install.json'
 BIN = HOME / '.local/bin'
 UNIT_DIR = HOME / '.config/systemd/user'
 AUTOSTART = HOME / '.config/autostart'
-ACTIONS = HOME / '.local/share/file-manager/actions'
+APPS = HOME / '.local/share/applications'
+UCA = HOME / '.config/Thunar/uca.xml'
+DOCK = HOME / '.config/plank/dock1/launchers'
+# Stamped into the Thunar action so a rerun can find its own entry and a
+# revert can take out exactly that one, leaving actions added since alone.
+UCA_ID = 'mintbook-mintdrop'
 ADVERT = Path('/etc/avahi/services/mintdrop.service')
 QS_ADVERT = Path('/etc/avahi/services/mintdrop-quickshare.service')
 
@@ -68,7 +73,9 @@ def targets():
     result += [(ROOT / 'config/autostart/mintbook-drop-env.desktop',
                 AUTOSTART / 'mintbook-drop-env.desktop')]
     result += [(ROOT / 'config/applications/mintbook-mintdrop.desktop',
-                ACTIONS / 'mintbook-mintdrop.desktop')]
+                APPS / 'mintbook-mintdrop.desktop')]
+    result += [(ROOT / 'config/plank/07-mintdrop.dockitem',
+                DOCK / '07-mintdrop.dockitem')]
     return result
 
 
@@ -173,6 +180,63 @@ def install_advert():
         shutil.rmtree(staged, ignore_errors=True)
 
 
+def thunar_action(remove=False):
+    """Add (or take out) the Files right-click entry.
+
+    Thunar keeps custom actions in ~/.config/Thunar/uca.xml and reads nothing
+    from ~/.local/share/file-manager/actions — which is where the first
+    version of this put a .desktop file, so the README promised a right-click
+    entry that was never there. Nemo and Caja use that directory; Thunar does
+    not, and Thunar is the file manager on this machine.
+
+    The file belongs to the user and already has their own actions in it, so
+    this edits rather than replaces, and removes by unique-id rather than
+    restoring a backup — a wholesale restore would silently delete any action
+    added after the install.
+    """
+    import xml.etree.ElementTree as ET
+    if not UCA.exists():
+        if remove:
+            return False
+        UCA.parent.mkdir(parents=True, exist_ok=True)
+        UCA.write_text('<?xml version="1.0" encoding="UTF-8"?>\n<actions>\n</actions>\n')
+    try:
+        tree = ET.parse(UCA)
+    except ET.ParseError as exc:
+        print(f'[!] {UCA} will not parse ({exc}); leaving it alone',
+              file=sys.stderr)
+        return False
+    root = tree.getroot()
+
+    existing = [a for a in root.findall('action')
+                if (a.findtext('unique-id') or '').startswith(UCA_ID)]
+    for action in existing:
+        root.remove(action)
+    if remove:
+        if existing:
+            tree.write(UCA, encoding='UTF-8', xml_declaration=True)
+        return bool(existing)
+
+    action = ET.SubElement(root, 'action')
+    for tag, text in (('icon', 'document-send'),
+                      ('name', 'Send with Mintdrop'),
+                      ('submenu', ''),
+                      ('unique-id', UCA_ID),
+                      ('command', 'mintdrop-menu %F'),
+                      ('description', 'Send these files to a device nearby'),
+                      ('range', '*'),
+                      ('patterns', '*')):
+        ET.SubElement(action, tag).text = text
+    # Which selections it appears for. Not directories: the protocol sends
+    # files, and an entry that appears on a folder and then refuses it is
+    # worse than one that does not appear.
+    for tag in ('audio-files', 'image-files', 'other-files', 'text-files',
+                'video-files'):
+        ET.SubElement(action, tag)
+    tree.write(UCA, encoding='UTF-8', xml_declaration=True)
+    return True
+
+
 def install(args):
     snapshot()
     for source, dest in targets():
@@ -197,13 +261,19 @@ def install(args):
     run('systemctl', '--user', 'import-environment', 'DISPLAY', 'XAUTHORITY',
         'DBUS_SESSION_BUS_ADDRESS', check=False)
 
+    if thunar_action():
+        print('[+] Files: right-click → Send with Mintdrop')
+    if DOCK.exists():
+        print('[+] dock: Mintdrop added to Plank — drag files onto it')
+
     if not args.no_advert:
         install_advert()
 
-    print('\nDone. Try it:')
-    print('  mintdrop status            what is armed here')
-    print('  mintdrop peers             what is nearby')
-    print('  mintdrop send NAME file    send it')
+    print('\nDone. Four ways in:')
+    print('  the dock            drag files onto the Mintdrop icon')
+    print('  Files               right-click → Send with Mintdrop')
+    print('  mintdrop-menu       open the sheet and drop files on a device')
+    print('  mintdrop send ...   from a terminal; mintdrop status to check')
     print('\nRevert with:  bin/mintdrop-install --revert')
     return 0
 
@@ -224,6 +294,8 @@ def revert(args):
             path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(entry['backup'], path, follow_symlinks=False)
     run('systemctl', '--user', 'daemon-reload', check=False)
+    if thunar_action(remove=True):
+        print('[+] removed the Files right-click entry')
     print(f'[+] removed {len(data["files"])} files and disarmed {SOCKET}')
 
     present = [p for p in (ADVERT, QS_ADVERT) if p.exists()]

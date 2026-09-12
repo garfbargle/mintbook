@@ -131,6 +131,103 @@ def endpoint_info(name, device_type=LAPTOP, visible=True, version=0):
     return blob
 
 
+def parse_endpoint_info(blob):
+    """The other direction: what a phone's TXT record says about itself.
+
+    Returns (device_type, name or None). A phone set to Contacts-only
+    advertises the flags and the sixteen identity bytes and stops there — the
+    name is withheld from anyone who cannot decrypt the metadata key, which
+    is everyone without the matching Google account. That is not an error and
+    not something to fix; it means the caller shows the mDNS host label
+    instead.
+    """
+    if not blob:
+        raise ValueError('empty endpoint info')
+    flags = blob[0]
+    device_type = (flags >> 1) & 0b111
+    name = None
+    if len(blob) > 17:
+        length = blob[17]
+        raw = blob[18:18 + length]
+        if len(raw) == length:
+            name = raw.decode('utf-8', errors='replace') or None
+    return device_type, name
+
+
+def discover(timeout=1.5):
+    """Quick Share devices on this network, from the running avahi-daemon.
+
+    Same browse-while-open rule as mintdrop's own discovery: one short
+    avahi-browse, nothing resident. Our own advertisement is filtered out by
+    endpoint id, which is the one identifier that is ours by construction.
+    """
+    import subprocess
+    argv = ['avahi-browse', '--resolve', '--terminate', '--parsable',
+            '--no-db-lookup', SERVICE]
+    try:
+        out = subprocess.run(argv, text=True, capture_output=True,
+                             timeout=max(timeout, 1) + 4)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    # Two ways of recognising ourselves, because one is not enough: the
+    # endpoint id is exact but lives in a state file that can be missing, and
+    # a machine that has lost it would otherwise advertise itself, discover
+    # itself, and offer to send files to itself. The addresses catch that.
+    ours = instance_name()
+    our_addresses = set()
+    try:
+        import importlib.machinery
+        import importlib.util
+        loader = importlib.machinery.SourceFileLoader(
+            'mintbook_drop', os.path.join(os.path.dirname(
+                os.path.realpath(__file__)), 'mintbook_drop.py'))
+        module = importlib.util.module_from_spec(
+            importlib.util.spec_from_loader(loader.name, loader))
+        loader.exec_module(module)
+        our_addresses = module.local_addresses()
+    except Exception:
+        pass
+    found = {}
+    for line in out.stdout.splitlines():
+        parts = line.split(';')
+        if len(parts) < 10 or parts[0] != '=':
+            continue
+        label, host, address, port = parts[3], parts[6], parts[7], parts[8]
+        if label == ours or address.split('%')[0] in our_addresses:
+            continue
+        info = None
+        for item in parts[9].split('" "'):
+            item = item.strip('"')
+            if item.startswith('n='):
+                try:
+                    info = base64.urlsafe_b64decode(
+                        item[2:] + '=' * (-len(item[2:]) % 4))
+                except Exception:
+                    info = None
+        device_type, name = (None, None)
+        if info:
+            try:
+                device_type, name = parse_endpoint_info(info)
+            except ValueError:
+                pass
+        # A withheld name leaves the mDNS host label, which is the only other
+        # thing the phone has told us. 'Android_GFD7A3R3.local' reads better
+        # with the suffix and the underscore gone.
+        if not name:
+            name = host.removesuffix('.local').replace('_', ' ')
+        try:
+            port = int(port)
+        except ValueError:
+            continue
+        current = found.get(label)
+        if current is None or (parts[2] == 'IPv4' and ':' in current['address']):
+            found[label] = {'name': name, 'address': address, 'port': port,
+                            'endpoint': label, 'protocol': 'quickshare',
+                            'device_type': device_type if device_type is not None
+                            else PHONE}
+    return sorted(found.values(), key=lambda p: p['name'].lower())
+
+
 def avahi_service(name, port=PORT, device_type=LAPTOP, endpoint=None):
     """The static advertisement, as an avahi service file.
 
