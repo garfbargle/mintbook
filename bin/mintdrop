@@ -584,6 +584,23 @@ def cmd_visible(args):
         return 1
     qs = quickshare()
     name = drop.config()['name'] or drop.device_name()
+
+    # Be listed on a phone. This is the piece that actually puts the machine
+    # in somebody's share sheet: a Nearby advertisement header over BLE and a
+    # GATT server holding the real advertisement, because a legacy BLE packet
+    # cannot carry it. See bin/mintbook_gatt.py.
+    here = os.path.dirname(os.path.realpath(__file__))
+    listed = None
+    try:
+        loader = importlib.machinery.SourceFileLoader(
+            'mintbook_gatt', os.path.join(here, 'mintbook_gatt.py'))
+        gatt = importlib.util.module_from_spec(
+            importlib.util.spec_from_loader(loader.name, loader))
+        loader.exec_module(gatt)
+        listed = gatt.Listed(qs.endpoint_id(), qs.endpoint_info(name))
+    except Exception as exc:
+        print(f'mintdrop: cannot be listed on a phone ({exc})', file=sys.stderr)
+
     try:
         # Announce over mDNS *and* nudge over BLE for the whole window.
         # Android ignores an mDNS service that was already registered when it
@@ -592,10 +609,24 @@ def cmd_visible(args):
         with qs.Announcement(name):
             print(f'Announcing "{name}" to nearby phones for '
                   f'{args.seconds}s', file=sys.stderr)
-            ble.hold(args.seconds,
-                     announce=lambda data: print(
-                         f'  BLE nudge up (FE2C {data.hex(" ")})',
-                         file=sys.stderr))
+            if listed is not None:
+                listed.start(
+                    on_ready=lambda: print('  listed over BLE — pick '
+                                           f'"{name}" on the phone',
+                                           file=sys.stderr),
+                    on_error=lambda exc: print(f'  not listed: {exc}',
+                                               file=sys.stderr))
+            try:
+                ble.hold(args.seconds,
+                         announce=lambda data: print(
+                             f'  BLE nudge up (FE2C {data.hex(" ")})',
+                             file=sys.stderr))
+            finally:
+                if listed is not None:
+                    if listed.reads:
+                        print(f'  a phone read the advertisement '
+                              f'{listed.reads} time(s)', file=sys.stderr)
+                    listed.stop()
     except ble.NotAvailable as exc:
         print(f'mintdrop: cannot advertise — {exc}', file=sys.stderr)
         print('         turn Bluetooth on in Control Center', file=sys.stderr)
