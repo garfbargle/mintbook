@@ -97,7 +97,9 @@ do_check() {
         printf '  %-34s %s  (mintbook: %s)\n' "$key" "${have:-unset}" "$want"; differs=1
       fi
     done < <(sed -n 's/^\([a-z-]*\)=.*/\1/p' "$SRC")
-    [ "$differs" = 0 ] && echo "  matches config/lightdm/slick-greeter.conf, except any --dark or wallpaper edit"
+    if [ "$differs" = 0 ]; then
+      echo "  matches config/lightdm/slick-greeter.conf, except any --dark or wallpaper edit"
+    fi
   else
     echo "  absent — the greeter is on its Mint defaults (Mint-Y-Aqua, Ubuntu 11, 96 dpi, cursor 24)"
   fi
@@ -205,10 +207,13 @@ PY
   fi
 }
 
+# Written as three `if`s rather than three `[ ] && x` lines: the second of
+# those returns 1 when its test is false, and under `set -e` that ends the
+# cleanup halfway through — in the trap that exists to finish it.
 preview_cleanup() {
-  [ -n "${PREVIEW_XPID:-}" ] && kill "$PREVIEW_XPID" 2>/dev/null
-  [ -n "${PREVIEW_TMP:-}" ] && rm -rf "$PREVIEW_TMP"
-  gsettings reset-recursively "$SCHEMA" 2>/dev/null
+  if [ -n "${PREVIEW_XPID:-}" ]; then kill "$PREVIEW_XPID" 2>/dev/null || true; fi
+  if [ -n "${PREVIEW_TMP:-}" ]; then rm -rf "$PREVIEW_TMP"; fi
+  gsettings reset-recursively "$SCHEMA" 2>/dev/null || true
   return 0
 }
 
@@ -229,7 +234,7 @@ do_install() {
   # One backup, of whatever was there the first time. Re-running must not
   # overwrite it with our own file and lose the original.
   if [ ! -e "$STATE/complete" ]; then
-    [ -f "$CONF" ] && cp -a "$CONF" "$STATE/slick-greeter.conf.before"
+    if [ -f "$CONF" ]; then cp -a "$CONF" "$STATE/slick-greeter.conf.before"; fi
     : > "$STATE/installed"
   fi
 
@@ -286,7 +291,7 @@ do_revert() {
     echo "Removed $CONF; the greeter goes back to its Mint defaults."
   fi
   while IFS= read -r path; do
-    [ -n "$path" ] && rm -rf "$path" && echo "Removed $path"
+    if [ -n "$path" ]; then rm -rf "$path"; echo "Removed $path"; fi
   done < "$STATE/installed"
   if [ -f "$STATE/gtk.css.before" ]; then
     install -o lightdm -g lightdm -m644 "$STATE/gtk.css.before" "$CSS"
