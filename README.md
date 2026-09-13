@@ -34,6 +34,11 @@ dock, and the controls you reach for every day.
   <img src="docs/images/files.jpg" alt="Files on the mintbook desktop" width="48%">
 </p>
 
+The machine looks like itself before you log in, too. The greeter wears the
+session's theme, font, wallpaper and cursor size, with the hostname and the
+keyboard indicator taken off it—and since the lock screen is that same program,
+it is the surface you meet every time the lid opens.
+
 Click the search icon at the far right of the bar—or press **Cmd+Space**.
 Overview finds applications and system actions together, in one fast surface,
 and follows the appearance you are in.
@@ -180,7 +185,7 @@ failure here, and the card does not pretend otherwise.
 
 | | |
 |---|---|
-| **Desktop** | [Look and behavior](docs/desktop.md) · [Control Center and System menu](docs/control-center.md) · [Software updates](docs/updates.md) · [HiDPI display](docs/display.md) |
+| **Desktop** | [Look and behavior](docs/desktop.md) · [Control Center and System menu](docs/control-center.md) · [Software updates](docs/updates.md) · [HiDPI display](docs/display.md) · [Login and lock screen](docs/login.md) |
 | **Daily use** | [Shortcuts and search](docs/daily.md) · [Battery](docs/battery.md) · [Video](docs/video.md) · [Nearby sharing](docs/mintdrop.md) |
 | **Hardware** | [Input and sleep](docs/input.md) · [Hibernation](docs/hibernate.md) · [Audio](docs/audio.md) · [Camera](docs/camera.md) · [Bluetooth](docs/bluetooth.md) |
 | **System** | [Boot and kernels](docs/boot.md) · [App performance](docs/app-performance.md) · [Implementation guide](CONTRIBUTING.md) |
