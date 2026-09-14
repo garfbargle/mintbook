@@ -29,6 +29,28 @@ the greeter's own settings, and
 [`config/lightdm/greeter.css`](../config/lightdm/greeter.css) is the half those
 settings cannot reach.
 
+### Two ways in, and what to re-run
+
+`Ctrl+Cmd+Q` locks and `Cmd+Shift+Q` logs out — both land here. They are
+installed by [`bin/daily-install`](../bin/daily-install); the logout one goes
+through a wrapper for a reason worth reading before binding anything else to a
+dialog, in [desktop.md](desktop.md#gotchas--things-that-cost-real-time).
+
+**Re-run `sudo bin/login-install` after pulling changes to any of these.** The
+installer copies rather than links the privileged half, so an edit to
+`bin/login-apply` in a checkout changes nothing on the machine until it is
+installed again — and a machine running an older copy of it looks exactly like
+a machine where the newer behaviour does not work. That is how the dconf fix
+came to be tested against an installed helper that predated it.
+
+| changed | needs |
+|---|---|
+| `config/lightdm/slick-greeter.conf`, `greeter.css` | `sudo bin/login-install` |
+| `bin/login-apply`, the polkit files | `sudo bin/login-install` |
+| `bin/login-settings`, `bin/wallpaper-mode` | `sudo bin/login-install` (installs them into `~/.local/bin`) |
+| `bin/session-logout`, the shortcuts | `bin/daily-install` |
+| the theme in `~/.themes` | `sudo bin/login-install`, which re-copies it |
+
 ---
 
 ## Choosing the picture
