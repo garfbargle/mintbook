@@ -37,18 +37,20 @@ set_desktop() {
 greeter_now() { sed -n 's/^background=//p' "$CONF" 2>/dev/null | head -1; }
 
 set_greeter() {
-  local picture=$1 asked
+  local picture=$1 mode=$2 asked
   [ -f "$CONF" ] || return 0            # the login screen is not installed
   [ -x "$APPLY" ] || return 0
   # Compare against what we last asked for, not against the conf: a picture
   # from your home is copied into /usr/share, so the conf names the copy and a
   # comparison with the original would differ every single time.
   asked=$(cat "$state/wallpaper.greeter" 2>/dev/null || true)
-  if [ "$asked" = "$picture" ] && [ -n "$(greeter_now)" ]; then
+  if [ "$asked" = "$picture$mode" ] && [ -n "$(greeter_now)" ]; then
     return 0
   fi
-  if pkexec "$APPLY" --background "$picture" >/dev/null 2>&1; then
-    printf '%s\n' "$picture" > "$state/wallpaper.greeter"
+  # The appearance goes with it: the greeter's own chrome should be the one the
+  # desktop is wearing, and this is the moment that is known.
+  if pkexec "$APPLY" --background "$picture" --appearance "$mode" >/dev/null 2>&1; then
+    printf '%s\n' "$picture$mode" > "$state/wallpaper.greeter"
   else
     # A refused or unavailable authorisation is not a reason to fail a sunset.
     echo "wallpaper-mode: could not set the login screen (pkexec)" >&2
@@ -61,7 +63,7 @@ apply_mode() {
   [ -n "$picture" ] || return 0          # nothing chosen for this mode yet
   [ -f "$picture" ] || { echo "wallpaper-mode: missing $picture" >&2; return 0; }
   set_desktop "$picture"
-  set_greeter "$picture"
+  set_greeter "$picture" "$mode"
 }
 
 mkdir -p "$state"
