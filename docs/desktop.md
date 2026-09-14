@@ -1071,7 +1071,7 @@ would use in a GTK app.
 /commands/custom/<Shift><Super>percent      = ~/.local/bin/screenshot -w  # Cmd+Shift+5
 /commands/custom/<Shift><Super>asciicircum = ~/.local/bin/appearance-snapshot tweak  # Cmd+Shift+6
 /commands/custom/<Primary><Super>q          = xflock4                # Ctrl+Cmd+Q, lock
-/commands/custom/<Shift><Super>q            = xfce4-session-logout   # Cmd+Shift+Q, log out
+/commands/custom/<Shift><Super>q            = ~/.local/bin/session-logout  # Cmd+Shift+Q
 ```
 
 The two session keys are where macOS keeps them, and both land on the login
@@ -1184,6 +1184,43 @@ reliably appear, so the process sits there until killed. `-s` must be a
 ---
 
 ## Gotchas — things that cost real time
+
+### The logout dialog cannot grab a keyboard you are still holding
+
+**2026-09-14.** `Cmd+Shift+Q` bound straight to `xfce4-session-logout` put the
+dialog on screen, and then made a ragged job of the logout: some applications
+died, some stayed on screen, and it looked like it had failed. The evidence,
+from `~/.xsession-errors.old`:
+
+```
+(xfce4-session:1563): xfce4-session-CRITICAL **: 15:41:17: Failed to grab the keyboard for logout window
+(xfce4-panel:46089):  xfce4-panel-CRITICAL  **: 15:41:28: panel_dbus_service_finalize ... failed
+(xfce4-session:1563): xfce4-session-WARNING **: 15:41:44: ICE connection 0x606c20eacfa0 rejected
+```
+
+The session did finish — the user systemd instance stopped at 15:42:08 — but
+**51 seconds** after the dialog appeared, with the panel gone at +11s and
+Electron applications still being torn down at +50s. A logout that slow is
+indistinguishable from a broken one, which is what it was reported as.
+
+The first line is the cause worth fixing. The dialog wants a keyboard grab;
+the keyboard shortcut that summoned it is *itself* holding a grab for as long
+as the keys are down. So the dialog comes up ungrabbed.
+
+[`bin/session-logout`](../bin/session-logout) waits for every key to be
+released — `xinput query-state` on each device, polled at 50 ms — and only then
+execs the dialog, with a 3 s cap so a wedged modifier cannot mean a logout that
+silently never happens.
+
+This is the same family as the two grab problems already in this file: genmon
+clicks have no Gdk event, so `Gtk.Menu`'s grab is rejected at time 0. **If a
+thing needs a grab, ask what is holding one first.**
+
+What this does *not* explain, and was not measured: why the teardown took 51
+seconds once it started. Electron applications are slow to exit and there were
+several open, which is a plausible cause and no more than that.
+
+
 
 **The panel set no struts, because its snap position was wrong.** For most of this
 config's life `_NET_WM_STRUT_PARTIAL` was absent on every window and `_NET_WORKAREA`

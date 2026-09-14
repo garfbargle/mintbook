@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# session-logout — the XFCE logout dialog, asked for from a keyboard shortcut
+# without the keys still being held.
+#
+# Bound to Cmd+Shift+Q by bin/daily-install. See the gotcha in docs/desktop.md.
+#
+# Why this exists: `xfce4-session-logout` straight off the keybinding logged
+#
+#   xfce4-session-CRITICAL: Failed to grab the keyboard for logout window
+#
+# and then made an ugly job of the logout — the panel went at +11s, a client's
+# ICE connection was rejected at +27s, and the session did not finish tearing
+# down for the best part of a minute. The dialog wants a keyboard grab, and
+# the shortcut that summoned it is still holding one while the keys are down.
+#
+# So: wait for every key to come up, then hand over. The cap matters — a
+# wedged modifier, or a keyboard that never reports the release, must not mean
+# a logout that silently never happens.
+set -euo pipefail
+
+held() {
+  local id
+  for id in $(xinput --list --id-only 2>/dev/null); do
+    xinput query-state "$id" 2>/dev/null | grep -qE '^[[:space:]]*key\[[0-9]+\]=down' && return 0
+  done
+  return 1
+}
+
+if command -v xinput >/dev/null; then
+  for _ in $(seq 60); do            # ~3 s, then go anyway
+    held || break
+    sleep 0.05
+  done
+else
+  sleep 0.3                          # no xinput: the human average, and a guess
+fi
+
+exec xfce4-session-logout "$@"
