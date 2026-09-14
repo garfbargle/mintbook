@@ -389,7 +389,8 @@ class Window:
         y += GRID_H + 16
         status = (PAD, y, W - 2 * PAD, 36)
         return {'hero': hero, 'seg': seg, 'apply': apply_box,
-                'grid': grid, 'status': status}
+                'grid': grid, 'status': status,
+                'close': (W - PAD - 24, PAD - 4, 26, 26)}
 
     def tiles(self):
         """(index, x, y, path, label) for every tile, grid coordinates."""
@@ -403,7 +404,7 @@ class Window:
 
     def hit_test(self, mx, my):
         box = self.layout()
-        for name in ('seg', 'apply'):
+        for name in ('close', 'seg', 'apply'):
             x, y, w, h = box[name]
             if x <= mx <= x + w and y <= my <= y + h:
                 if name == 'seg':
@@ -433,6 +434,9 @@ class Window:
         kind, value = hit
         if kind == 'appearance':
             self.appearance = value
+        elif kind == 'close':
+            self.win.destroy()
+            return
         elif kind == 'apply':
             self.apply()
         elif kind == 'tile':
@@ -503,12 +507,28 @@ class Window:
              PAD, PAD + 19, 10.5, c['fg'], 0.55)
 
         box = self.layout()
+        self.draw_close(cr, *box['close'])
         self.draw_hero(cr, *box['hero'])
         self.draw_segment(cr, *box['seg'])
         self.draw_apply(cr, *box['apply'])
         self.draw_grid(cr, *box['grid'])
         self.draw_status(cr, *box['status'])
         return False
+
+    def draw_close(self, cr, x, y, w, h):
+        c = self.colors
+        cx, cy = (x + w / 2) * SC, (y + h / 2) * SC
+        if self.hit and self.hit[0] == 'close':
+            cr.arc(cx, cy, 13 * SC, 0, 2 * math.pi)
+            rgba(cr, c['fg'], 0.10)
+            cr.fill()
+        rgba(cr, c['fg'], 0.55)
+        cr.set_line_width(1.6 * SC)
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        for dx, dy in ((-1, -1), (-1, 1)):
+            cr.move_to(cx + dx * 5 * SC, cy + dy * 5 * SC)
+            cr.line_to(cx - dx * 5 * SC, cy - dy * 5 * SC)
+        cr.stroke()
 
     def draw_hero(self, cr, x, y, w, h):
         c = self.colors
