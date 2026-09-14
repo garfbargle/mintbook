@@ -37,6 +37,40 @@ DARK = {
     'control_hover': 'rgba(255,255,255,.19)', 'danger': 'rgba(255,105,97,.14)',
 }
 
+# Desktop environments expose each control panel as if it were a standalone
+# application. Keep those entries available without letting them dominate the
+# launcher. The explicit tool list covers advanced helpers whose categories are
+# too generic to classify reliably.
+PRIMARY_SETTINGS_APPS = {
+    'mintinstall.desktop',
+    'mintupdate.desktop',
+}
+SYSTEM_TOOL_APPS = {
+    'btop.desktop',
+    'mintbackup.desktop',
+    'org.gnome.baobab.desktop',
+    'org.gnome.SystemMonitor.desktop',
+    'org.gnome.font-viewer.desktop',
+    'plank.desktop',
+    'redshift-gtk.desktop',
+    'rofi.desktop',
+    'rofi-theme-selector.desktop',
+    'thunar-bulk-rename.desktop',
+    'timeshift-gtk.desktop',
+    'xfce4-appfinder.desktop',
+    'xfce4-run.desktop',
+    'xfce4-session-logout.desktop',
+    'xfce4-taskmanager.desktop',
+    'mintstick.desktop',
+    'mintstick-format.desktop',
+}
+GROUPS = (
+    ('settings', 'Settings', 'preferences-system-symbolic',
+     'Personalize and configure'),
+    ('system', 'System Tools', 'applications-system-symbolic',
+     'Advanced utilities'),
+)
+
 
 def read_mode():
     try:
@@ -90,6 +124,10 @@ class ActionIcon(Gtk.DrawingArea):
             cr.arc(12, 13, 7, -.75, 3.89)
             cr.move_to(12, 3)
             cr.line_to(12, 12)
+        elif self.kind == 'back':
+            cr.move_to(15, 5)
+            cr.line_to(8, 12)
+            cr.line_to(15, 19)
         cr.stroke()
         return False
 
@@ -98,6 +136,7 @@ class AppGrid:
     def __init__(self):
         self.colors = DARK if read_mode() == 'dark' else LIGHT
         self.handing_off = False
+        self.current_group = None
         self.win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
         self.win.set_name('mintbook-app-grid')
         self.win.set_title('Applications')
@@ -157,7 +196,8 @@ class AppGrid:
           outline: none;
         }}
         window#mintbook-app-grid button.session-button,
-        window#mintbook-app-grid button.close-button {{
+        window#mintbook-app-grid button.close-button,
+        window#mintbook-app-grid button.back-button {{
           min-height: 42px;
           padding: 6px 14px;
           margin: 0 4px;
@@ -173,26 +213,33 @@ class AppGrid:
           padding: 6px;
           margin-right: 12px;
         }}
+        window#mintbook-app-grid button.back-button {{
+          min-width: 42px;
+          padding: 6px;
+          margin-right: 4px;
+        }}
         window#mintbook-app-grid button.session-button:hover,
-        window#mintbook-app-grid button.close-button:hover {{
+        window#mintbook-app-grid button.close-button:hover,
+        window#mintbook-app-grid button.back-button:hover {{
           background-color: {c['control_hover']};
         }}
         window#mintbook-app-grid button.session-button:active,
-        window#mintbook-app-grid button.close-button:active {{
+        window#mintbook-app-grid button.close-button:active,
+        window#mintbook-app-grid button.back-button:active {{
           background-color: {c['danger']};
           box-shadow: inset 0 2px 4px rgba(0,0,0,.16);
         }}
         window#mintbook-app-grid button.app-tile {{
-          min-width: 190px;
-          min-height: 172px;
-          padding: 14px 10px;
+          min-width: 230px;
+          min-height: 178px;
+          padding: 12px;
           margin: 0;
           background-color: {c['tile']};
           background-image: none;
           border: 0;
           border-radius: 16px;
           box-shadow: none;
-          font: 500 16px Inter;
+          font: 500 18px Inter;
         }}
         window#mintbook-app-grid button.app-tile:hover,
         window#mintbook-app-grid button.app-tile:focus {{
@@ -201,6 +248,10 @@ class AppGrid:
         }}
         window#mintbook-app-grid button.app-tile:active {{
           background-color: {c['control_hover']};
+        }}
+        window#mintbook-app-grid .folder-subtitle {{
+          color: {c['dim']};
+          font: 500 14px Inter;
         }}
         window#mintbook-app-grid scrollbar slider {{
           min-width: 7px;
@@ -228,6 +279,12 @@ class AppGrid:
         close.connect('clicked', lambda *_: self.win.destroy())
         topbar.pack_start(close, False, False, 0)
 
+        self.back = self.icon_button('back', '', 'Back to all applications')
+        self.back.get_style_context().add_class('back-button')
+        self.back.connect('clicked', lambda *_: self.show_group(None))
+        self.back.set_no_show_all(True)
+        topbar.pack_start(self.back, False, False, 0)
+
         actions = (
             ('lock', 'Lock', ['xflock4'], False),
             ('logout', 'Log Out', ['xfce4-session-logout', '--logout'], True),
@@ -240,10 +297,10 @@ class AppGrid:
             button.connect('clicked', self.session_action, label, command, confirm)
             topbar.pack_start(button, False, False, 0)
 
-        title = Gtk.Label(label='Applications')
-        title.get_style_context().add_class('app-title')
-        title.set_margin_start(22)
-        topbar.pack_start(title, False, False, 0)
+        self.title = Gtk.Label(label='Applications')
+        self.title.get_style_context().add_class('app-title')
+        self.title.set_margin_start(22)
+        topbar.pack_start(self.title, False, False, 0)
 
         hint = Gtk.Label(label='Just start typing  ·  Overview search')
         hint.get_style_context().add_class('search-hint')
@@ -258,19 +315,20 @@ class AppGrid:
         scroll.set_margin_bottom(14)
         root.pack_start(scroll, True, True, 0)
 
-        flow = Gtk.FlowBox()
-        flow.set_homogeneous(True)
-        flow.set_selection_mode(Gtk.SelectionMode.NONE)
-        flow.set_row_spacing(0)
-        flow.set_column_spacing(0)
-        # Keep the grid deliberately spacious: ten sizeable tiles fit on a
-        # 2304px-wide display instead of the previous twelve compact ones.
-        flow.set_min_children_per_line(6)
-        flow.set_max_children_per_line(max(6, min(10, self.geometry.width // 220)))
-        scroll.add(flow)
+        self.scroll = scroll
+        self.flow = Gtk.FlowBox()
+        self.flow.set_homogeneous(True)
+        self.flow.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.flow.set_row_spacing(4)
+        self.flow.set_column_spacing(4)
+        # Eight generous tiles fit on the target 2304px display. Narrower
+        # screens reflow down to four columns instead of shrinking the content.
+        self.flow.set_min_children_per_line(4)
+        self.flow.set_max_children_per_line(max(4, min(8, self.geometry.width // 270)))
+        scroll.add(self.flow)
 
-        for app in self.applications():
-            flow.add(self.app_button(app))
+        self.grouped_apps = self.group_applications(self.applications())
+        self.populate_flow(None)
 
         self.win.show_all()
         self.win.present()
@@ -286,6 +344,78 @@ class AppGrid:
             unique.setdefault(key, app)
         return sorted(unique.values(), key=lambda app: app.get_display_name().casefold())
 
+    @staticmethod
+    def group_for_app(app):
+        app_id = app.get_id() or ''
+        categories = set(filter(None, (app.get_categories() or '').split(';')))
+        if app_id in PRIMARY_SETTINGS_APPS:
+            return None
+        if 'Settings' in categories or 'HardwareSettings' in categories:
+            return 'settings'
+        if app_id in SYSTEM_TOOL_APPS:
+            return 'system'
+        return None
+
+    @classmethod
+    def group_applications(cls, apps):
+        grouped = {None: [], **{key: [] for key, *_rest in GROUPS}}
+        for app in apps:
+            grouped[cls.group_for_app(app)].append(app)
+        return grouped
+
+    def populate_flow(self, group_key):
+        for child in self.flow.get_children():
+            self.flow.remove(child)
+
+        if group_key is None:
+            items = [(app.get_display_name(), self.app_button(app))
+                     for app in self.grouped_apps[None]]
+            for key, label, icon, subtitle in GROUPS:
+                apps = self.grouped_apps[key]
+                if apps:
+                    items.append((label, self.folder_button(
+                        key, label, icon, subtitle, len(apps))))
+            for _label, button in sorted(items, key=lambda item: item[0].casefold()):
+                self.flow.add(button)
+        else:
+            for app in self.grouped_apps[group_key]:
+                self.flow.add(self.app_button(app))
+        self.flow.show_all()
+
+    def show_group(self, group_key):
+        self.current_group = group_key
+        label = next((label for key, label, *_rest in GROUPS if key == group_key), None)
+        self.title.set_text(label or 'Applications')
+        self.title.set_margin_start(8 if group_key else 22)
+        if group_key:
+            self.back.show()
+        else:
+            self.back.hide()
+        self.populate_flow(group_key)
+        adjustment = self.scroll.get_vadjustment()
+        adjustment.set_value(adjustment.get_lower())
+
+    def folder_button(self, key, label, icon_name, subtitle, count):
+        button = Gtk.Button()
+        button.get_style_context().add_class('app-tile')
+        button.set_relief(Gtk.ReliefStyle.NONE)
+        button.set_tooltip_text(f'{label} · {count} applications')
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=7)
+        box.set_valign(Gtk.Align.CENTER)
+        image = Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.DIALOG)
+        image.set_pixel_size(128)
+        box.pack_start(image, False, False, 0)
+        box.pack_start(Gtk.Label(label=label), False, False, 0)
+        detail = Gtk.Label(label=f'{subtitle}  ·  {count}')
+        detail.get_style_context().add_class('folder-subtitle')
+        detail.set_ellipsize(Pango.EllipsizeMode.END)
+        detail.set_max_width_chars(22)
+        box.pack_start(detail, False, False, 0)
+        button.add(box)
+        button.connect('clicked', lambda *_: self.show_group(key))
+        return button
+
     def app_button(self, app):
         button = Gtk.Button()
         button.get_style_context().add_class('app-tile')
@@ -296,7 +426,7 @@ class AppGrid:
         box.set_valign(Gtk.Align.CENTER)
         icon = app.get_icon()
         image = Gtk.Image.new_from_gicon(icon, Gtk.IconSize.DIALOG) if icon else Gtk.Image()
-        image.set_pixel_size(112)
+        image.set_pixel_size(128)
         box.pack_start(image, False, False, 0)
 
         label = Gtk.Label(label=app.get_display_name())
@@ -343,6 +473,9 @@ class AppGrid:
         return False
 
     def on_key(self, _widget, event):
+        if event.keyval == Gdk.KEY_Escape and self.current_group:
+            self.show_group(None)
+            return True
         if event.keyval == Gdk.KEY_Escape or event.keyval in (Gdk.KEY_Super_L, Gdk.KEY_Super_R):
             self.win.destroy()
             return True
