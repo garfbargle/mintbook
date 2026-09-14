@@ -33,8 +33,8 @@ CONF=/etc/lightdm/slick-greeter.conf
 # from passwd rather than assumed, because that is where the greeter's HOME
 # points and a distribution is free to put it somewhere else.
 CSS="$(getent passwd lightdm | cut -d: -f6)/.config/gtk-3.0/gtk.css"
-STATE=/var/lib/mintbook-login
 SCHEMA=x.dm.slick-greeter
+STATE=/var/lib/mintbook-login
 
 # The desktop's chrome. Both have to end up under /usr/share: the greeter runs
 # as `lightdm`, and a 0750 home is a wall it cannot climb. Light first, dark
@@ -161,19 +161,47 @@ do_check() {
 
 # ---------------------------------------------------------------- preview
 
-# The real greeter, in a nested X server, reading the real file. It resets
-# every setting it does not find in /etc/lightdm/slick-greeter.conf back to the
-# Mint default at startup — which is why previewing this by writing GSettings
-# does not work, and why the preview instead shows it the file through a
-# private mount namespace. No root, and /etc is untouched.
+# The real greeter, driven by a real lightdm, on a nested display. Everything
+# here is the way it is because of something that was got wrong first.
 #
-# Two things the preview cannot show. Test mode invents its own monitor
-# geometry (800x600 and 640x480), so the login box sits where that puts it and
-# the wallpaper is scaled to it, not to 2304x1440. And it runs as you, so it
-# can read a theme in ~/.themes that the real greeter could not — --check is
-# what answers that question.
+# `slick-greeter --test-mode` is the obvious way to do this and it is a trap:
+# it invents two monitors (800x600 and 640x480) and a list of fixture users —
+# "Color Background", "Has Password", "Long name (far far too long to fit)" —
+# so what you get is a cramped, split, unrecognisable screen that says nothing
+# about your login screen. Running lightdm itself in its own test mode shows
+# one monitor, the real user list, and the real layout at the panel's real
+# size.
+#
+# Nothing here needs root. lightdm runs unprivileged with its own run, log and
+# cache directories, and /etc/lightdm is replaced inside a bwrap mount
+# namespace, so the real one is never written. The greeter resets every setting
+# it does not find in that file, which is why the file has to be *there* rather
+# than in GSettings.
+#
+# The teardown is deliberate and was learned the hard way: bwrap without
+# --die-with-parent is not the parent of what it starts, so killing it left
+# lightdm and Xephyr running, the next run quietly moved to the next display,
+# and previews piled up on screen to be closed by hand. Hence the PID
+# namespace, the process group, the display number read from the log rather
+# than assumed, and a teardown that checks whether the display still answers
+# instead of trusting that it does not.
+#
+# The one piece of sleight of hand: the greeter does not read its settings
+# from the file directly. It copies them into dconf — "Overriding dconf setting
+# for background with ..." in its log — and reads them back, and that write
+# goes over D-Bus while the read comes straight off the mapped database. The
+# read can win. In the real greeter that hardly matters, because lightdm's own
+# dconf already holds yesterday's answer; in a preview running as you it means
+# the frame shows whatever your dconf happened to contain, which is how three
+# captures in a row here came out identical and wrong. So the values go into
+# both places, and the cleanup puts your dconf back.
+#
+# Two things it still cannot tell you. It runs as you, so it can read a theme
+# in ~/.themes that the real greeter could not — that is what --check is for.
+# And while its window has focus it grabs the keyboard, and its password field
+# is a real PAM conversation: do not type into it.
 do_preview() {
-  local shot="" size=2304x1440 disp=:9 mode=light etc conf pid
+  local shot="" size=2304x1440 mode=light etc disp="" n stale wp
   while [ $# -gt 0 ]; do
     case "$1" in
       --dark) mode=dark; shift ;;
@@ -182,34 +210,63 @@ do_preview() {
       *) die "usage: $0 --preview [--dark] [--size WxH] [--shot file.png]" ;;
     esac
   done
-  command -v Xephyr >/dev/null || die 'needs Xephyr: apt install xserver-xephyr'
-  command -v bwrap >/dev/null || die 'needs bwrap: apt install bubblewrap'
+  for tool in Xephyr bwrap xset lightdm; do
+    command -v "$tool" >/dev/null || die "needs $tool"
+  done
   [ -x /usr/sbin/slick-greeter ] || die 'no /usr/sbin/slick-greeter'
-  while [ -e "/tmp/.X11-unix/X${disp#:}" ]; do disp=":$(( ${disp#:} + 1 ))"; done
 
-  etc=$(mktemp -d)
-  PREVIEW_TMP=$etc
+  PREVIEW_TMP=$(mktemp -d)
+  etc="$PREVIEW_TMP/etc"
+  mkdir -p "$etc" "$PREVIEW_TMP/run" "$PREVIEW_TMP/log" "$PREVIEW_TMP/cache"
   cp -a /etc/lightdm/. "$etc/" 2>/dev/null || true
-  conf="$etc/slick-greeter.conf"
-  render_conf "$mode" "$(desktop_wallpaper "$HOME")" "$conf"
+  wp=$(desktop_wallpaper "$HOME")
+  render_conf "$mode" "$wp" "$etc/slick-greeter.conf"
 
-  Xephyr "$disp" -screen "$size" -dpi 168 -resizeable -title 'mintbook login preview' >/dev/null 2>&1 &
-  PREVIEW_XPID=$!
+  # lightdm's test mode hardcodes `Xephyr` and drops whatever xserver-command
+  # says, so the size comes from a shim bound over the binary instead.
+  : > "$PREVIEW_TMP/realXephyr"
+  cat > "$PREVIEW_TMP/shim" <<SHIM
+#!/bin/sh
+exec "$PREVIEW_TMP/realXephyr" "\$@" -screen $size -title "mintbook login preview"
+SHIM
+  chmod +x "$PREVIEW_TMP/shim"
+  cat > "$etc/lightdm.conf" <<CONF
+[LightDM]
+minimum-display-number=20
+start-default-seat=true
+[Seat:*]
+greeter-session=slick-greeter
+user-session=xfce
+CONF
+
+  while IFS='=' read -r key value; do
+    case "$key" in ''|\#*) continue ;; esac
+    gsettings set "$SCHEMA" "$key" "${value:-\'\'}" 2>/dev/null || true
+  done < <(sed -n '/^\[Greeter\]/,$p' "$etc/slick-greeter.conf" |
+           sed -n 's/^\([a-z-]*=.*\)/\1/p')
+
   trap 'preview_cleanup' EXIT INT TERM
-  for _ in $(seq 40); do [ -e "/tmp/.X11-unix/X${disp#:}" ] && break; sleep 0.1; done
+  setsid bwrap --dev-bind / / --unshare-pid --die-with-parent --proc /proc \
+        --ro-bind "$etc" /etc/lightdm \
+        --ro-bind "$CSS_SRC" "$HOME/.config/gtk-3.0/gtk.css" \
+        --ro-bind /usr/bin/Xephyr "$PREVIEW_TMP/realXephyr" \
+        --ro-bind "$PREVIEW_TMP/shim" /usr/bin/Xephyr -- \
+    lightdm --test-mode --debug --run-dir "$PREVIEW_TMP/run" \
+            --log-dir "$PREVIEW_TMP/log" --cache-dir "$PREVIEW_TMP/cache" \
+            > "$PREVIEW_TMP/out.log" 2>&1 &
+  PREVIEW_PID=$!
 
-  # The greeter also writes what it reads into the running user's dconf. That
-  # store is nobody's settings — the real greeter uses lightdm's — but leaving
-  # it full of half a login screen is untidy, so the cleanup empties it.
-  # The stylesheet goes in over this user's own gtk.css, which is where GTK
-  # will look while the greeter runs as you. It is the same file that the
-  # install puts in lightdm's home.
-  bwrap --dev-bind / / --ro-bind "$etc" /etc/lightdm \
-        --ro-bind "$CSS_SRC" "$HOME/.config/gtk-3.0/gtk.css" -- \
-    env DISPLAY="$disp" /usr/sbin/slick-greeter --test-mode >/dev/null 2>&1 &
-  pid=$!
+  for _ in $(seq 60); do
+    disp=$(sed -n 's/.*XServer \([0-9]*\): Logging to.*/:\1/p' "$PREVIEW_TMP/out.log" 2>/dev/null | head -1)
+    [ -n "$disp" ] && xset -display "$disp" q >/dev/null 2>&1 && break
+    disp=""
+    sleep 0.5
+  done
+  [ -n "$disp" ] || die "the greeter did not come up; see $PREVIEW_TMP/out.log"
+  PREVIEW_DISP=$disp
+
   if [ -n "$shot" ]; then
-    sleep 4
+    sleep 5
     DISPLAY="$disp" python3 - "$shot" <<'PY'
 import sys, gi
 gi.require_version('Gdk', '3.0')
@@ -218,18 +275,37 @@ w = Gdk.get_default_root_window()
 Gdk.pixbuf_get_from_window(w, 0, 0, w.get_width(), w.get_height()).savev(sys.argv[1], 'png', [], [])
 PY
     echo "wrote $shot"
-    kill "$pid" 2>/dev/null || true
   else
-    echo "preview running on $disp ($mode) — close the window, or Ctrl-C here, to stop it"
-    wait "$pid" 2>/dev/null || true
+    echo "preview running on $disp ($mode). Do not type into it — that password"
+    echo "box is a real PAM conversation. Press Enter here to close it."
+    read -r _ || true
   fi
 }
 
-# Written as three `if`s rather than three `[ ] && x` lines: the second of
-# those returns 1 when its test is false, and under `set -e` that ends the
-# cleanup halfway through — in the trap that exists to finish it.
+# Take the whole tree down, and say whether it actually went. A socket path is
+# not a server: SIGKILL leaves both it and the lock file behind, and a stale
+# lock is enough to stop the next run claiming the display.
 preview_cleanup() {
-  if [ -n "${PREVIEW_XPID:-}" ]; then kill "$PREVIEW_XPID" 2>/dev/null || true; fi
+  trap - EXIT INT TERM
+  if [ -n "${PREVIEW_PID:-}" ]; then
+    kill -TERM -- "-$PREVIEW_PID" 2>/dev/null || kill "$PREVIEW_PID" 2>/dev/null || true
+    sleep 2
+    kill -KILL -- "-$PREVIEW_PID" 2>/dev/null || true
+  fi
+  if [ -n "${PREVIEW_DISP:-}" ]; then
+    local n=${PREVIEW_DISP#:}
+    for _ in $(seq 20); do
+      xset -display "$PREVIEW_DISP" q >/dev/null 2>&1 || break
+      sleep 0.5
+    done
+    if xset -display "$PREVIEW_DISP" q >/dev/null 2>&1; then
+      echo "WARNING: $PREVIEW_DISP still answers — something survived the teardown" >&2
+    else
+      for stale in "/tmp/.X11-unix/X$n" "/tmp/.X$n-lock"; do
+        if [ -O "$stale" ]; then rm -f "$stale"; fi
+      done
+    fi
+  fi
   if [ -n "${PREVIEW_TMP:-}" ]; then rm -rf "$PREVIEW_TMP"; fi
   gsettings reset-recursively "$SCHEMA" 2>/dev/null || true
   return 0
