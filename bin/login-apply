@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# login-apply — the root half of the login screen settings. Installed as
+# /usr/local/sbin/mintbook-login-apply and reached through pkexec by
+# bin/login-settings. See docs/login.md.
+#
+#   mintbook-login-apply --background PATH [--appearance light|dark]
+#   mintbook-login-apply --appearance dark
+#
+# Everything here exists because /etc/lightdm/slick-greeter.conf is root-owned
+# and the greeter runs as `lightdm`. Picking a picture in a file chooser is a
+# one-click thing; making that picture readable by a user that cannot enter
+# your home directory is not, and that is the work this does.
+set -euo pipefail
+
+CONF=/etc/lightdm/slick-greeter.conf
+SHARE=/usr/share/mintbook/backgrounds
+THEME_LIGHT=WhiteSur-Light; ICONS_LIGHT=WhiteSur-light; COLOR_LIGHT='#e5e7ea'
+THEME_DARK=WhiteSur-Dark;   ICONS_DARK=WhiteSur-dark;    COLOR_DARK='#5b6069'
+
+die() { echo "$*" >&2; exit 1; }
+
+[ "$(id -u)" -eq 0 ] || die 'must run as root, normally through pkexec'
+[ -f "$CONF" ] || die "no $CONF — run bin/login-install first"
+
+background=""; appearance=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --background) background=${2:?--background needs a path}; shift 2 ;;
+    --appearance) appearance=${2:?--appearance needs light or dark}; shift 2 ;;
+    *) die "usage: $0 [--background PATH] [--appearance light|dark]" ;;
+  esac
+done
+[ -n "$background$appearance" ] || die 'nothing to do'
+case "${appearance:-light}" in light|dark) ;; *) die 'appearance is light or dark' ;; esac
+
+# The caller, for reading a theme out of their home if this is the first time
+# the dark pair has been asked for.
+uid=${PKEXEC_UID:-${SUDO_UID:-}}
+home=""
+if [ -n "$uid" ] && [ "$uid" -ge 1000 ] 2>/dev/null; then
+  home=$(getent passwd "$uid" | cut -d: -f6)
+fi
+
+if [ -n "$background" ]; then
+  # Resolve first, then judge the resolved path: a symlink into somewhere
+  # unreadable is the interesting case, not the link itself.
+  background=$(readlink -f -- "$background") || die 'cannot resolve that path'
+  [ -f "$background" ] || die "not a file: $background"
+  case "$(file -Lb --mime-type -- "$background")" in
+    image/*) ;;
+    *) die "not an image: $background" ;;
+  esac
+
+  # Can the greeter read it where it lies? If not, keep a copy somewhere it
+  # can. This is a copy, with everything that means: edit the original later
+  # and the login screen keeps the version it was given.
+  if ! runuser -u lightdm -- test -r "$background" 2>/dev/null; then
+    install -dm755 "$SHARE"
+    name="mintbook-$(date +%Y%m%d%H%M%S)-$(basename -- "$background")"
+    install -m644 -- "$background" "$SHARE/$name"
+    background="$SHARE/$name"
+  fi
+fi
+
+if [ -n "$appearance" ]; then
+  if [ "$appearance" = dark ]; then theme=$THEME_DARK; icons=$ICONS_DARK; color=$COLOR_DARK
+  else theme=$THEME_LIGHT; icons=$ICONS_LIGHT; color=$COLOR_LIGHT; fi
+  # The greeter reads /usr/share only. Asking for dark having installed light
+  # should not mean a trip to the terminal, so fetch the pair if it is absent.
+  for pair in "themes/$theme" "icons/$icons"; do
+    if [ ! -d "/usr/share/$pair" ]; then
+      where=${home:-the invoking user home}
+      [ -n "$home" ] && [ -d "$home/.$pair" ] || die "no $pair in /usr/share or $where"
+      cp -a "$home/.$pair" "/usr/share/$pair"
+      chmod -R a+rX "/usr/share/$pair"
+    fi
+  done
+fi
+
+tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+cp "$CONF" "$tmp"
+if [ -n "$background" ]; then sed -i "s|^background=.*|background=$background|" "$tmp"; fi
+if [ -n "$appearance" ]; then
+  sed -i "s|^background-color=.*|background-color=$color|; \
+          s|^theme-name=.*|theme-name=$theme|; \
+          s|^icon-theme-name=.*|icon-theme-name=$icons|" "$tmp"
+fi
+install -m644 "$tmp" "$CONF"
+
+# Prune copies nothing points at any more. Only ever files this script made,
+# and only the ones the conf has stopped naming.
+if [ -d "$SHARE" ]; then
+  current=$(sed -n 's/^background=//p' "$CONF" | head -1)
+  for old in "$SHARE"/mintbook-*; do
+    [ -e "$old" ] || continue
+    [ "$old" = "$current" ] || rm -f -- "$old"
+  done
+fi
+echo "applied"
