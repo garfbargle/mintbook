@@ -71,6 +71,7 @@ if [ -n "$appearance" ]; then
     if [ ! -d "/usr/share/$pair" ]; then
       where=${home:-the invoking user home}
       [ -n "$home" ] && [ -d "$home/.$pair" ] || die "no $pair in /usr/share or $where"
+      install -dm755 "$(dirname "/usr/share/$pair")"
       cp -a "$home/.$pair" "/usr/share/$pair"
       chmod -R a+rX "/usr/share/$pair"
     fi
