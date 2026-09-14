@@ -385,6 +385,11 @@ do_install() {
   done
   touch "$STATE/complete"
 
+  # The conf is not enough on its own: the greeter copies these into lightdm's
+  # dconf and reads them back, and a stale dconf wins that race. See the note
+  # in bin/login-apply.
+  "$APPLY_SRC" --sync || true
+
   echo "Wrote $CONF ($dark)."
   echo "Nothing was restarted. Lock the screen to see it: light-locker starts the same greeter."
   echo "To change the picture later: open Login Screen, or run login-settings."

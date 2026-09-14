@@ -5,6 +5,7 @@
 #
 #   mintbook-login-apply --background PATH [--appearance light|dark]
 #   mintbook-login-apply --appearance dark
+#   mintbook-login-apply --sync                 # dconf only, no conf changes
 #
 # Everything here exists because /etc/lightdm/slick-greeter.conf is root-owned
 # and the greeter runs as `lightdm`. Picking a picture in a file chooser is a
@@ -14,23 +15,53 @@ set -euo pipefail
 
 CONF=/etc/lightdm/slick-greeter.conf
 SHARE=/usr/share/mintbook/backgrounds
+SCHEMA=x.dm.slick-greeter
 THEME_LIGHT=WhiteSur-Light; ICONS_LIGHT=WhiteSur-light; COLOR_LIGHT='#e5e7ea'
 THEME_DARK=WhiteSur-Dark;   ICONS_DARK=WhiteSur-dark;    COLOR_DARK='#5b6069'
 
 die() { echo "$*" >&2; exit 1; }
 
+# Put the same values into lightdm's own dconf.
+#
+# The file alone is not enough, and this is the whole reason: slick-greeter
+# does not read its settings from the conf and use them. It copies them into
+# dconf — "Overriding dconf setting for ..." in its log — and then reads them
+# back, with the write going over D-Bus and the read coming straight off the
+# mapped database. The read can win. lightdm's dconf already holds the schema
+# defaults from every start before this was installed, so the value that
+# survives is the default: content-align stayed `left` on a conf that plainly
+# says `center`.
+#
+# Writing them as lightdm means both sides agree and the race stops mattering.
+# Best effort: a greeter with the right conf and a stale dconf is the situation
+# we were already in, so a failure here is not worth failing an apply over.
+sync_dconf() {
+  local script=""
+  while IFS='=' read -r key value; do
+    case "$key" in ''|\#*) continue ;; esac
+    # gsettings parses the value against the schema, so an empty string has to
+    # be spelled as one rather than passed as nothing at all.
+    script="$script gsettings set $SCHEMA $key \"${value:-''}\";"
+  done < <(sed -n '/^\[Greeter\]/,$p' "$CONF" | sed -n 's/^\([a-z-]*=.*\)/\1/p')
+  [ -n "$script" ] || return 0
+  runuser -u lightdm -- env HOME=/var/lib/lightdm \
+      dbus-run-session -- sh -c "$script" 2>/dev/null ||
+    echo "note: could not write lightdm's dconf; the conf is still correct" >&2
+}
+
 [ "$(id -u)" -eq 0 ] || die 'must run as root, normally through pkexec'
 [ -f "$CONF" ] || die "no $CONF — run bin/login-install first"
 
-background=""; appearance=""
+background=""; appearance=""; sync_only=no
 while [ $# -gt 0 ]; do
   case "$1" in
     --background) background=${2:?--background needs a path}; shift 2 ;;
     --appearance) appearance=${2:?--appearance needs light or dark}; shift 2 ;;
-    *) die "usage: $0 [--background PATH] [--appearance light|dark]" ;;
+    --sync) sync_only=yes; shift ;;
+    *) die "usage: $0 [--background PATH] [--appearance light|dark] [--sync]" ;;
   esac
 done
-[ -n "$background$appearance" ] || die 'nothing to do'
+[ -n "$background$appearance" ] || [ "$sync_only" = yes ] || die 'nothing to do'
 case "${appearance:-light}" in light|dark) ;; *) die 'appearance is light or dark' ;; esac
 
 # The caller, for reading a theme out of their home if this is the first time
@@ -39,6 +70,12 @@ uid=${PKEXEC_UID:-${SUDO_UID:-}}
 home=""
 if [ -n "$uid" ] && [ "$uid" -ge 1000 ] 2>/dev/null; then
   home=$(getent passwd "$uid" | cut -d: -f6)
+fi
+
+if [ "$sync_only" = yes ]; then
+  sync_dconf
+  echo "synced"
+  exit 0
 fi
 
 if [ -n "$background" ]; then
@@ -97,4 +134,5 @@ if [ -d "$SHARE" ]; then
     [ "$old" = "$current" ] || rm -f -- "$old"
   done
 fi
+sync_dconf
 echo "applied"

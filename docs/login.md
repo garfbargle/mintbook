@@ -46,6 +46,9 @@ neither is anybody's business but this program's:
 | [`config/polkit/org.mintbook.login.policy`](../config/polkit/org.mintbook.login.policy) | The action pkexec authorises, by path |
 | [`config/polkit/10-mintbook-login.rules`](../config/polkit/10-mintbook-login.rules) | Admin, local, active — no password on every click |
 
+Every change also writes the same values into **lightdm's own dconf**, because
+the file by itself does not decide what you see — see the race below.
+
 It offers the wallpaper the desktop is showing, the forty-nine Mint wallpapers
 and the XFCE ones already on the disk, anything in `~/Pictures`, and a file
 chooser first in the grid rather than last.
@@ -221,9 +224,14 @@ Three things this got wrong first, all of them now in the code:
   and read once at startup, so following it would mean a root-owned helper
   watching a user file. Structure for a surface you see for four seconds. The
   greeter is whichever side you installed.
-- **`content-align=center` is confirmed**, as of 2026-09-14: the real greeter,
-  nested at 2304x1440, centres the card. The earlier "unverified" note was a
-  limit of the fixture preview, which has been replaced.
+- **`content-align=center` was claimed confirmed on 2026-09-14. It was not.**
+  The nested preview centres the card, but the preview seeds dconf before it
+  starts and the real greeter does not: on the real login screen the card
+  stayed left, on a conf that plainly says `center`. Same race as the preview's
+  — the greeter copies the conf into dconf and reads it straight back, and
+  lightdm's dconf already held the schema default from every start before any
+  of this existed. Fixed by writing the values into lightdm's dconf too; the
+  claim stands or falls on the next lock, not on a preview.
 - **Apply has not been run end to end.** The window, the helper's validation,
   its copy-and-prune and its conf rewriting were each exercised; the pkexec
   path and the polkit rule cannot be tested without installing them, which
