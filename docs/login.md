@@ -17,6 +17,9 @@ sudo bin/login-install --dark
 sudo bin/login-install --revert
 ```
 
+Once it is installed, the picture is chosen in a window — **Login Screen**, in
+the app grid and in Overview, or `login-settings` — not by editing anything.
+
 Nothing restarts and nobody is logged out. The greeter reads its file when it
 starts, so the next lock is the next time you see it.
 
@@ -25,6 +28,48 @@ Two files do the work.
 the greeter's own settings, and
 [`config/lightdm/greeter.css`](../config/lightdm/greeter.css) is the half those
 settings cannot reach.
+
+---
+
+## Choosing the picture
+
+<!-- A screenshot belongs here. See "No screenshot in this repository" below. -->
+
+The background lives in a root-owned file, and the greeter reads it as a user
+that cannot enter your home directory. Both halves of that are real, and
+neither is anybody's business but this program's:
+
+| | |
+|---|---|
+| [`bin/login-settings`](../bin/login-settings) | The window. Cairo on the popup glass, like Control Center |
+| [`bin/login-apply`](../bin/login-apply) | The root half, installed as `/usr/local/sbin/mintbook-login-apply` |
+| [`config/polkit/org.mintbook.login.policy`](../config/polkit/org.mintbook.login.policy) | The action pkexec authorises, by path |
+| [`config/polkit/10-mintbook-login.rules`](../config/polkit/10-mintbook-login.rules) | Admin, local, active — no password on every click |
+
+It offers the wallpaper the desktop is showing, the forty-nine Mint wallpapers
+and the XFCE ones already on the disk, anything in `~/Pictures`, and a file
+chooser first in the grid rather than last.
+
+**A picture in your home is copied.** The greeter cannot read one where it
+lies, so `mintbook-login-apply` puts it under `/usr/share/mintbook/backgrounds`
+and points the greeter there — pruning the copy it replaces. It is a copy with
+everything that implies: edit the original afterwards and the login screen
+keeps the version it was given. `--revert` takes the copies back.
+
+Asking for Dark having installed Light fetches the dark theme pair too, rather
+than bottoming out in "now go and run this in a terminal".
+
+### It does not follow the desktop wallpaper
+
+Decided on **2026-09-14**, deliberately. Changing the wallpaper in XFCE's
+Desktop settings changes the session desktop and nothing else; the login screen
+keeps its own picture until you change it in the window. They start out
+matching, because the installer reads xfconf once, and they drift from there.
+
+Linking them would mean something watching a user setting in order to make a
+privileged call, plus that copy into `/usr/share` on every change, for a
+surface you look at for four seconds. Two settings, each changed where you
+would look for it, is the cheaper arrangement.
 
 ---
 
@@ -137,18 +182,37 @@ writing it — when it fails, it says so and leaves the flat Pearl instead.
 
 ## Previewing without root
 
-`--preview` starts Xephyr, renders the candidate file, and shows it to the real
-greeter through a private mount namespace (`bwrap --ro-bind` over
-`/etc/lightdm`), with the stylesheet bound over this user's own `gtk.css`.
-Nothing in `/etc` is touched and nothing needs a password.
+`--preview` runs **lightdm itself** in its test mode on a nested display: one
+monitor, the real user list, the real layout at 2304x1440. It is unprivileged,
+with its own run, log and cache directories, and `/etc/lightdm` replaced inside
+a `bwrap` mount namespace, so the real one is never written.
 
-The namespace is not optional cleverness. The greeter **resets every setting it
-does not find in `/etc/lightdm/slick-greeter.conf` back to the Mint default at
-startup**, so the obvious approach — write the values into GSettings and launch
-it — produces a default-looking greeter and a confusing afternoon.
+`--shot file.png` grabs the frame instead of waiting.
 
-`--shot file.png` grabs the frame instead of waiting, which is how the
-measurements above were taken.
+**Do not type into it.** While its window has focus the nested greeter grabs
+the keyboard, and its password box is a real PAM conversation for your account.
+
+Three things this got wrong first, all of them now in the code:
+
+- **`slick-greeter --test-mode` is a trap.** It invents two monitors (800x600
+  and 640x480) and a list of fixture users — *Color Background*, *Has
+  Password*, *Long name (far far too long to fit)* — so it produces a cramped,
+  split screen that tells you nothing. Every "limit" this document used to
+  claim about layout was a limit of that, not of the greeter.
+- **`bwrap` without `--die-with-parent` is not the parent of what it starts.**
+  Killing it left lightdm and Xephyr running; the next run found the display
+  taken and quietly moved to the next one, while the capture kept photographing
+  the first session. Previews piled up on screen to be closed by hand, and two
+  "captures" were byte-identical re-photographs. Hence the PID namespace, the
+  process group, the display number read from the log, and a teardown that
+  checks whether the display still answers — `SIGKILL` leaves both the socket
+  and the lock file behind, and a stale lock stops the next run dead.
+- **The greeter does not read its settings from the file.** It copies them into
+  dconf and reads them back; the write goes over D-Bus and the read comes
+  straight off the mapped database, so the read can win and the frame shows
+  whatever dconf already held. Three captures in a row came out identical and
+  wrong that way. The values now go into both places, and your dconf is put
+  back afterwards.
 
 ## Open / not done
 
@@ -157,8 +221,12 @@ measurements above were taken.
   and read once at startup, so following it would mean a root-owned helper
   watching a user file. Structure for a surface you see for four seconds. The
   greeter is whichever side you installed.
-- **`content-align=center` is unverified** on the real panel, for the reason in
-  the limits above. Worth a look at the next real login.
+- **`content-align=center` is confirmed**, as of 2026-09-14: the real greeter,
+  nested at 2304x1440, centres the card. The earlier "unverified" note was a
+  limit of the fixture preview, which has been replaced.
+- **Apply has not been run end to end.** The window, the helper's validation,
+  its copy-and-prune and its conf rewriting were each exercised; the pkexec
+  path and the polkit rule cannot be tested without installing them, which
+  needs root. First run is the first test.
 - **No screenshot in this repository.** `Cmd+Shift+3` is a session binding and
-  the greeter is not the session; the images here are all from the nested
-  preview, whose layout is not the panel's.
+  the greeter is not the session. `--preview --shot` is how to take one.
