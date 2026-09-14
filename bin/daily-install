@@ -21,6 +21,17 @@ SCRIPTS = ('overview', 'spotlight', 'spotlight-actions', 'keep-awake', 'screensh
 PLUGINS = ()
 UNIT = 'mintbook-health.timer'
 KEYS = {'<Super>Left': 'left', '<Super>Right': 'right', '<Super>Down': 'restore'}
+# The two ways to reach the login screen, where macOS keeps them. The lower
+# case `q` is not a typo and was not a guess: bound both ways and pressed,
+# `<Shift><Super>q` fires and `<Shift><Super>Q` does not — unlike the shifted
+# digits, which xfce does record by their shifted keysym (numbersign, dollar).
+COMMANDS = {
+    # No --logout: that flag is documented as "log out without displaying the
+    # logout dialog", and an accidental Cmd+Shift+Q should not cost unsaved
+    # work. macOS asks too.
+    '<Shift><Super>q': 'xfce4-session-logout',
+    '<Primary><Super>q': 'xflock4',
+}
 SETTINGS = (
     ('xfce4-power-manager', '/xfce4-power-manager/lid-action-on-ac', 'uint', '1'),
     ('xfce4-power-manager', '/xfce4-power-manager/lid-action-on-battery', 'uint', '1'),
@@ -49,6 +60,14 @@ def snapshot():
         known = {entry['path'] for entry in data['files']}
         added = [(source, dest) for source, dest in targets()
                  if str(dest) not in known]
+        keys = data.setdefault('keys', {})
+        for key in list(KEYS) + list(COMMANDS):
+            for kind in ('commands', 'xfwm4'):
+                prop = f'/{kind}/custom/{key}'
+                if prop not in keys:
+                    result = run('xfconf-query', '-c', 'xfce4-keyboard-shortcuts',
+                                 '-p', prop, check=False)
+                    keys[prop] = result.stdout.rstrip('\n') if result.returncode == 0 else None
         settings = data.setdefault('settings', {})
         added_settings = []
         for channel, prop, _kind, _value in SETTINGS:
@@ -58,6 +77,7 @@ def snapshot():
                 settings[key] = result.stdout.rstrip('\n') if result.returncode == 0 else None
                 added_settings.append(key)
         if not added and not added_settings:
+            SAVED.write_text(json.dumps(data, indent=2))
             return data
         if added:
             backup = (HOME / '.local/state/mintbook' /
@@ -84,7 +104,7 @@ def snapshot():
             shutil.copy2(dest, copy, follow_symlinks=False)
             entry['backup'] = str(copy)
         data['files'].append(entry)
-    for key in KEYS:
+    for key in list(KEYS) + list(COMMANDS):
         for kind in ('commands', 'xfwm4'):
             prop = f'/{kind}/custom/{key}'
             result = run('xfconf-query', '-c', 'xfce4-keyboard-shortcuts', '-p', prop, check=False)
@@ -151,6 +171,12 @@ def install():
         run('xfconf-query', '-c', 'xfce4-keyboard-shortcuts', '-p', prop, '-r', check=False)
         run('xfconf-query', '-c', 'xfce4-keyboard-shortcuts', '-p', prop, '-n', '-t', 'string',
             '-s', shlex.quote(str(BIN / 'window-place')) + ' ' + mode)
+    for key, command in COMMANDS.items():
+        run('xfconf-query', '-c', 'xfce4-keyboard-shortcuts', '-p', f'/xfwm4/custom/{key}', '-r', check=False)
+        prop = f'/commands/custom/{key}'
+        run('xfconf-query', '-c', 'xfce4-keyboard-shortcuts', '-p', prop, '-r', check=False)
+        run('xfconf-query', '-c', 'xfce4-keyboard-shortcuts', '-p', prop, '-n', '-t', 'string',
+            '-s', command)
     for channel, prop, kind, value in SETTINGS:
         current = run('xfconf-query', '-c', channel, '-p', prop, check=False)
         args = ('-s', value) if current.returncode == 0 else ('-n', '-t', kind, '-s', value)
@@ -158,6 +184,7 @@ def install():
     run('systemctl', '--user', 'daemon-reload')
     run('systemctl', '--user', 'enable', '--now', UNIT)
     print('Installed. Cmd+Space opens Overview; Cmd+Left/Right places windows; Cmd+Down restores.')
+    print('Ctrl+Cmd+Q locks the screen; Cmd+Shift+Q logs out.')
     print('Keep Awake and Doctor are available from the System tray menu.')
     print(f'Undo: {ROOT}/bin/daily-install --revert')
 

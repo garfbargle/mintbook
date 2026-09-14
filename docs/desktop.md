@@ -1070,7 +1070,18 @@ would use in a GTK app.
 /commands/custom/<Shift><Super>dollar       = ~/.local/bin/screenshot -r  # Cmd+Shift+4
 /commands/custom/<Shift><Super>percent      = ~/.local/bin/screenshot -w  # Cmd+Shift+5
 /commands/custom/<Shift><Super>asciicircum = ~/.local/bin/appearance-snapshot tweak  # Cmd+Shift+6
+/commands/custom/<Primary><Super>q          = xflock4                # Ctrl+Cmd+Q, lock
+/commands/custom/<Shift><Super>q            = xfce4-session-logout   # Cmd+Shift+Q, log out
 ```
+
+The two session keys are where macOS keeps them, and both land on the login
+screen — see [login.md](login.md). Two details, both found by testing rather
+than by reading: the accelerator is `<Shift><Super>q` and **not**
+`<Shift><Super>Q`, which is bound happily and never fires (unlike the shifted
+digits above, which xfce does record by their shifted keysym); and log out is
+the bare `xfce4-session-logout`, because `--logout` is documented as logging
+out *without* the dialog, and an accidental keypress should not cost unsaved
+work.
 
 Copy/paste is deliberately unchanged: **Ctrl+C / Ctrl+V** everywhere,
 **Ctrl+Shift+C / Ctrl+Shift+V** in the terminal.
