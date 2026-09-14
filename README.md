@@ -37,7 +37,9 @@ dock, and the controls you reach for every day.
 The machine looks like itself before you log in, too. The greeter wears the
 session's theme, font, wallpaper and cursor size, with the hostname and the
 keyboard indicator taken off it—and since the lock screen is that same program,
-it is the surface you meet every time the lid opens.
+it is the surface you meet every time the lid opens. **Login Screen** picks the
+picture it shows: every wallpaper already on the disk, or one of your own,
+which it copies somewhere the greeter can actually read.
 
 Click the search icon at the far right of the bar—or press **Cmd+Space**.
 Overview finds applications and system actions together, in one fast surface,
