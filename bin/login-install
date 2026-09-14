@@ -377,9 +377,11 @@ do_install() {
   install -m644 "$RULES_SRC" "$RULES"
   install -o "$user" -g "$user" -dm755 "$home/.local/bin" "$home/.local/share/applications"
   install -o "$user" -g "$user" -m755 "$SETTINGS_SRC" "$home/.local/bin/login-settings"
+  install -o "$user" -g "$user" -m755 "$ROOT/bin/wallpaper-mode" "$home/.local/bin/wallpaper-mode"
   install -o "$user" -g "$user" -m644 "$DESKTOP_SRC" \
           "$home/.local/share/applications/mintbook-login.desktop"
   for path in "$APPLY" "$POLICY" "$RULES" "$home/.local/bin/login-settings" \
+              "$home/.local/bin/wallpaper-mode" \
               "$home/.local/share/applications/mintbook-login.desktop"; do
     grep -qx "$path" "$STATE/installed" 2>/dev/null || echo "$path" >> "$STATE/installed"
   done

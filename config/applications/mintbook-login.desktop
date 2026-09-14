@@ -1,11 +1,11 @@
 [Desktop Entry]
 Type=Application
-Name=Login Screen
-GenericName=Choose the picture the login screen shows
-Comment=Pick the background and appearance of the login and lock screen
+Name=Wallpaper
+GenericName=Desktop and login screen wallpaper
+Comment=One picture for light, one for dark, on the desktop and the login screen
 Icon=preferences-desktop-wallpaper
 Exec=login-settings
 Terminal=false
 Categories=Settings;DesktopSettings;
-Keywords=login;greeter;lock;lockscreen;wallpaper;background;lightdm;
+Keywords=wallpaper;background;login;greeter;lock;lockscreen;desktop;appearance;
 StartupNotify=false

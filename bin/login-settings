@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Login Screen — pick the picture the greeter shows, and its appearance.
+"""Wallpaper — one picture for light, one for dark, on the desktop and the
+login screen together.
 
 The background lives in /etc/lightdm/slick-greeter.conf, which is root-owned,
 and the greeter reads it as the `lightdm` user, which cannot enter a 0750 home
@@ -22,13 +23,19 @@ HOME = os.path.expanduser('~')
 CONF = os.environ.get('MINTBOOK_GREETER_CONF', '/etc/lightdm/slick-greeter.conf')
 APPLY = '/usr/local/sbin/mintbook-login-apply'
 APPLIED = f'{HOME}/.config/mintbook/appearance.applied'
+SLOT_FILE = f'{HOME}/.config/mintbook/wallpaper.%s'
+# Next to this script, whether that is the checkout or ~/.local/bin: realpath
+# resolves the symlink the installer leaves, so both find the same one.
+WALLPAPER_MODE = os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                              'wallpaper-mode')
 THUMBS = f'{HOME}/.cache/mintbook/login/thumbs'
 DESKTOP_XML = (f'{HOME}/.config/xfce4/xfconf/xfce-perchannel-xml/'
                'xfce4-desktop.xml')
 
 SC = 1.0                       # resolved from the desktop when the window opens
 W, PAD, SHADOW, RADIUS = 640, 18, 18, 20
-HERO_H = 232                   # the selected picture, at the panel's 16:10
+HERO_H = 200                   # the selected picture, at the panel's 16:10
+PAIR_W, PAIR_H = 142, 62       # a light half and a dark half, side by side
 COLS, TILE_W, TILE_H, GAP = 4, 142, 89, 12
 GRID_H = TILE_H * 2 + GAP + 6  # two rows visible; the rest scrolls
 
@@ -62,6 +69,18 @@ PICTURE_DIRS = (
     f'{HOME}/Pictures',
 )
 EXTS = ('.jpg', '.jpeg', '.png', '.webp', '.bmp')
+
+# Pairs that already live on the disk, chosen by measuring rather than by name:
+# mean luminance across the whole Mint set, keeping each pair to one
+# photographer so the two halves look like the same machine at two times of
+# day. The numbers are the light half and the dark half.
+MINT = '/usr/share/backgrounds/linuxmint-wallpapers'
+PAIRS = (
+    ('Silver', f'{MINT}/mfakurian_silver.jpg', f'{MINT}/mfakurian_order.jpg'),     # 193 / 21
+    ('Gold', f'{MINT}/jpanchal_gold.jpg', f'{MINT}/jpanchal_waves.jpg'),           # 163 / 28
+    ('Sweets', f'{MINT}/rapciu_sweets.png', f'{MINT}/rapciu_pearl.png'),           # 188 / 91
+    ('Snow', f'{MINT}/sjohnson_snow.jpg', f'{MINT}/sjohnson_sphere.jpg'),          # 104 / 50
+)
 
 
 def read_file(path, default=''):
@@ -217,24 +236,31 @@ class Window:
         self.scroll = 0.0
         self.hit = None
 
-        current = conf_get('background')
         self.installed = os.path.exists(CONF)
-        self.selected = os.path.realpath(current) if current.startswith('/') else ''
-        if not self.selected:
-            # Nothing configured yet: start on the wallpaper the desktop is
-            # already showing, which is what the installer would have picked.
-            fallback = desktop_wallpaper()
-            self.selected = (os.path.realpath(fallback) if fallback
-                             else self.pictures[0][0] if self.pictures else '')
-        # The greeter's appearance, which is not the desktop's: it is whichever
-        # was installed, and this window is where it changes.
-        self.appearance = 'dark' if conf_get('theme-name').endswith('Dark') else 'light'
+        # Two pictures, not one. The appearance switch picks between them; this
+        # window is where each is chosen, and the segment says which one you
+        # are looking at rather than what the greeter's theme is.
+        self.slots = {}
+        for mode in ('light', 'dark'):
+            stored = read_file(SLOT_FILE % mode)
+            if not stored:
+                # Nothing chosen yet: fall back to what is already on screen,
+                # so the window opens showing the truth rather than blanks.
+                stored = (conf_get('background') if mode == self.mode else '') \
+                    or desktop_wallpaper()
+            self.slots[mode] = (os.path.realpath(stored)
+                                if stored.startswith('/') and os.path.isfile(stored) else '')
+        # Open on the appearance you are actually in.
+        self.slot = self.mode
         if not self.installed:
-            self.status = 'Not installed yet — run  sudo bin/login-install'
+            self.status = 'Login screen not installed — sudo bin/login-install'
 
+        self.pairs = [(name, lt, dk) for name, lt, dk in PAIRS
+                      if os.path.isfile(lt) and os.path.isfile(dk)]
         rows = max(1, math.ceil(max(1, len(self.pictures) + 1) / COLS))
         self.grid_full_h = rows * TILE_H + (rows - 1) * GAP
-        self.h = (PAD + 30 + 8 + HERO_H + 16 + 34 + 14 + GRID_H + 16 + 36 + PAD)
+        self.h = (PAD + 30 + 8 + HERO_H + 16 + 34 + 16 + PAIR_H + 20
+                  + GRID_H + 16 + 36 + PAD)
 
         self.win = win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
         win.set_title('Login Screen')
@@ -281,6 +307,10 @@ class Window:
             self.thumbs[path] = pb
             GLib.idle_add(self.area.queue_draw)
 
+    @property
+    def selected(self):
+        return self.slots.get(self.slot, '')
+
     def hero_pixbuf(self):
         """The big one, at its own resolution. Falls back to the tile while the
         full-size decode is still running, so the hero is never empty."""
@@ -309,12 +339,8 @@ class Window:
     def apply(self):
         if self.busy:
             return
-        if not self.installed:
-            self.status = 'Not installed yet — run  sudo bin/login-install'
-            self.area.queue_draw()
-            return
-        if not os.path.exists(APPLY):
-            self.status = f'{APPLY} is missing — run  sudo bin/login-install'
+        if not os.access(WALLPAPER_MODE, os.X_OK):
+            self.status = f'{WALLPAPER_MODE} is missing'
             self.area.queue_draw()
             return
         self.busy = True
@@ -322,25 +348,36 @@ class Window:
         self.area.queue_draw()
 
         def run():
-            cmd = ['pkexec', APPLY, '--appearance', self.appearance]
-            if self.selected:
-                cmd += ['--background', self.selected]
-            try:
-                p = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-                rc, err = p.returncode, (p.stderr or '').strip()
-            except Exception as e:                       # noqa: BLE001
-                rc, err = -1, str(e)
+            # Both halves are stored; only the live one touches the screen and
+            # the login screen, which is what makes it safe to choose the other
+            # half at any hour. wallpaper-mode owns that rule, not this window.
+            rc, err = 0, ''
+            for mode in ('light', 'dark'):
+                picture = self.slots.get(mode)
+                if not picture:
+                    continue
+                try:
+                    p = subprocess.run(
+                        [WALLPAPER_MODE, '--set', mode, picture],
+                        capture_output=True, text=True, timeout=120)
+                    if p.returncode != 0:
+                        rc, err = p.returncode, (p.stderr or '').strip()
+                except Exception as e:                   # noqa: BLE001
+                    rc, err = -1, str(e)
             # 126 is polkit's "you said no", which is an answer rather than a
             # failure, and should not be shouted about in red.
             if rc == 0:
-                msg = 'Applied. You will see it at the next lock.'
+                msg = 'Applied. The login screen follows at the next lock.'
             elif rc == 126:
                 msg = 'Cancelled.'
             else:
                 msg = f'Could not apply: {err or "see the journal"}'
+
             def done():
                 self.busy = False
                 self.status = msg
+                if not self.installed:
+                    self.status += '  (login screen not installed)'
                 self.area.queue_draw()
                 return False
             GLib.idle_add(done)
@@ -367,7 +404,7 @@ class Window:
                     rows = max(1, math.ceil((len(self.pictures) + 1) / COLS))
                     self.grid_full_h = rows * TILE_H + (rows - 1) * GAP
                     threading.Thread(target=self.load_thumbs, daemon=True).start()
-                self.selected = path
+                self.slots[self.slot] = path
                 self.status = ''
         dialog.destroy()
         self.area.queue_draw()
@@ -384,11 +421,13 @@ class Window:
         seg = (PAD, y, seg_w, 34)
         apply_w = 168
         apply_box = (W - PAD - apply_w, y, apply_w, 34)
-        y += 34 + 14
+        y += 34 + 16
+        pairs = (PAD, y, W - 2 * PAD, PAIR_H)
+        y += PAIR_H + 20
         grid = (PAD, y, W - 2 * PAD, GRID_H)
         y += GRID_H + 16
         status = (PAD, y, W - 2 * PAD, 36)
-        return {'hero': hero, 'seg': seg, 'apply': apply_box,
+        return {'hero': hero, 'seg': seg, 'apply': apply_box, 'pairs': pairs,
                 'grid': grid, 'status': status,
                 'close': (W - PAD - 24, PAD - 4, 26, 26)}
 
@@ -410,6 +449,11 @@ class Window:
                 if name == 'seg':
                     return ('appearance', 'dark' if mx > x + w / 2 else 'light')
                 return (name, None)
+        px, py, _pw, _ph = box['pairs']
+        for i in range(len(self.pairs)):
+            x = px + i * (PAIR_W + GAP)
+            if x <= mx <= x + PAIR_W and py <= my <= py + PAIR_H:
+                return ('pair', i)
         gx, gy, gw, gh = box['grid']
         if gx <= mx <= gx + gw and gy <= my <= gy + gh:
             for i, x, y, path, _label in self.tiles():
@@ -433,7 +477,7 @@ class Window:
             return
         kind, value = hit
         if kind == 'appearance':
-            self.appearance = value
+            self.slot = value
         elif kind == 'close':
             self.win.destroy()
             return
@@ -445,7 +489,11 @@ class Window:
             if path is None:
                 self.choose_file()
                 return
-            self.selected = path
+            self.slots[self.slot] = path
+            self.status = ''
+        elif kind == 'pair':
+            _name, light, dark = self.pairs[value]
+            self.slots['light'], self.slots['dark'] = light, dark
             self.status = ''
         self.area.queue_draw()
 
@@ -502,8 +550,8 @@ class Window:
         cr.stroke()
         cr.restore()
 
-        text(cr, 'Login Screen', PAD, PAD, 15, c['fg'], weight='bold')
-        text(cr, 'What you see before you are logged in, and every time the lid opens',
+        text(cr, 'Wallpaper', PAD, PAD, 15, c['fg'], weight='bold')
+        text(cr, 'The desktop and the login screen. One picture for light, one for dark.',
              PAD, PAD + 19, 10.5, c['fg'], 0.55)
 
         box = self.layout()
@@ -511,6 +559,7 @@ class Window:
         self.draw_hero(cr, *box['hero'])
         self.draw_segment(cr, *box['seg'])
         self.draw_apply(cr, *box['apply'])
+        self.draw_pairs(cr, *box['pairs'])
         self.draw_grid(cr, *box['grid'])
         self.draw_status(cr, *box['status'])
         return False
@@ -566,26 +615,69 @@ class Window:
         for i, (key, label) in enumerate((('light', 'Light'), ('dark', 'Dark'))):
             sw = w / 2
             sx = x + i * sw
-            if self.appearance == key:
+            live = key == self.mode
+            if self.slot == key:
                 rrect(cr, (sx + 2) * SC, (y + 2) * SC, (sw - 4) * SC,
                       (h - 4) * SC, 7 * SC)
                 rgba(cr, c['seg_on'])
                 cr.fill()
-            text(cr, label, sx, y + h / 2 - 8, 11.5, c['fg'],
-                 1.0 if self.appearance == key else 0.65,
-                 weight='bold' if self.appearance == key else 'normal',
+            text(cr, label + (' •' if live else ''), sx, y + h / 2 - 8, 11.5,
+                 c['fg'], 1.0 if self.slot == key else 0.65,
+                 weight='bold' if self.slot == key else 'normal',
                  align='center', width=sw)
 
     def draw_apply(self, cr, x, y, w, h):
         c = self.colors
         hot = self.hit and self.hit[0] == 'apply'
-        enabled = self.installed and not self.busy
+        enabled = not self.busy
         rrect(cr, x * SC, y * SC, w * SC, h * SC, 9 * SC)
         rgba(cr, c['blue'], 1.0 if enabled and hot else 0.85 if enabled else 0.35)
         cr.fill()
-        text(cr, 'Applying…' if self.busy else 'Set as login screen',
+        text(cr, 'Applying…' if self.busy else 'Use this pair',
              x, y + h / 2 - 8, 11.5, (255, 255, 255), 1.0 if enabled else 0.7,
              weight='bold', align='center', width=w)
+
+    def draw_pairs(self, cr, x, y, w, _h):
+        """Ready-made pairs: a light half and a dark half of one picture set,
+        so choosing both is one click rather than two searches."""
+        c = self.colors
+        text(cr, 'Pairs', x, y - 15, 10, c['fg'], 0.5, weight='bold')
+        for i, (name, light, dark) in enumerate(self.pairs):
+            tx = x + i * (PAIR_W + GAP)
+            sx, sy = tx * SC, y * SC
+            tw, th = PAIR_W * SC, PAIR_H * SC
+            chosen = (self.slots.get('light') == os.path.realpath(light)
+                      and self.slots.get('dark') == os.path.realpath(dark))
+            for half, path in ((0, light), (1, dark)):
+                pb = self.thumbs.get(os.path.realpath(path))
+                cr.save()
+                rrect(cr, sx, sy, tw, th, 9 * SC)
+                cr.clip()
+                cr.rectangle(sx + half * tw / 2, sy, tw / 2, th)
+                cr.clip()
+                if pb is not None:
+                    paint_cover(cr, pb, sx, sy, tw, th, 0)
+                else:
+                    rgba(cr, c['tile'], 0.6)
+                    cr.paint()
+                cr.restore()
+            cr.save()
+            cr.set_source_rgba(0, 0, 0, 0.45)
+            text(cr, name, tx + 8.5, y + PAIR_H - 19.5, 9.5, (0, 0, 0), 0.5,
+                 weight='bold')
+            cr.restore()
+            text(cr, name, tx + 8, y + PAIR_H - 20, 9.5, (255, 255, 255), 0.98,
+                 weight='bold')
+            rrect(cr, sx + 0.5, sy + 0.5, tw - 1, th - 1, 9 * SC)
+            rgba(cr, c['rim'], 0.8)
+            cr.set_line_width(1)
+            cr.stroke()
+            if chosen or self.hit == ('pair', i):
+                rrect(cr, sx - 2 * SC, sy - 2 * SC, tw + 4 * SC, th + 4 * SC,
+                      11 * SC)
+                rgba(cr, c['blue'], 1.0 if chosen else 0.45)
+                cr.set_line_width(2.5 * SC)
+                cr.stroke()
 
     def draw_grid(self, cr, x, y, w, h):
         c = self.colors
@@ -651,9 +743,10 @@ class Window:
             text(cr, self.status, x, y, 11, c['red'] if bad else c['fg'],
                  1.0 if bad else 0.72, width=w)
         else:
-            where = conf_get('background') or 'a flat colour'
-            text(cr, f'Now: {os.path.basename(where)}', x, y, 11, c['fg'], 0.6,
-                 width=w)
+            light = os.path.basename(self.slots.get('light') or '—')
+            dark = os.path.basename(self.slots.get('dark') or '—')
+            text(cr, f'Light  {light}      Dark  {dark}', x, y, 11, c['fg'],
+                 0.6, width=w)
 
 
 def main():
