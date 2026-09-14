@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# wallpaper-mode — one picture for light, one for dark, on both the desktop and
+# the login screen. Called by bin/appearance-mode whenever the appearance
+# actually changes, and by bin/login-settings when you pick one.
+#
+#   wallpaper-mode light|dark         # apply the stored picture for that mode
+#   wallpaper-mode --set light PATH   # store it, and apply if that mode is live
+#   wallpaper-mode --check
+#
+# The desktop half is a user setting and costs nothing. The login half is a
+# root-owned file the greeter reads as a user that cannot enter your home, so
+# it goes through pkexec and mintbook-login-apply, which does the copying. That
+# call is made only when the picture actually changed — twice a day, not once a
+# minute — because bin/appearance-mode returns early when the mode it is asked
+# for is already applied.
+set -euo pipefail
+
+root="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+state="$HOME/.config/mintbook"
+CONF=/etc/lightdm/slick-greeter.conf
+APPLY=/usr/local/sbin/mintbook-login-apply
+
+die() { echo "$*" >&2; exit 1; }
+stored() { cat "$state/wallpaper.$1" 2>/dev/null || true; }
+
+# Every monitor and every workspace xfdesktop knows about. The property list is
+# read rather than assumed: it differs per monitor, and a machine that has had
+# an external display plugged in once keeps the ones it made for it.
+set_desktop() {
+  local picture=$1 prop
+  while IFS= read -r prop; do
+    xfconf-query -c xfce4-desktop -p "$prop" -s "$picture" 2>/dev/null || true
+  done < <(xfconf-query -c xfce4-desktop -l 2>/dev/null | grep -E '/last-image$')
+}
+
+# What the greeter is set to now — world-readable, so this needs no privilege.
+greeter_now() { sed -n 's/^background=//p' "$CONF" 2>/dev/null | head -1; }
+
+set_greeter() {
+  local picture=$1 asked
+  [ -f "$CONF" ] || return 0            # the login screen is not installed
+  [ -x "$APPLY" ] || return 0
+  # Compare against what we last asked for, not against the conf: a picture
+  # from your home is copied into /usr/share, so the conf names the copy and a
+  # comparison with the original would differ every single time.
+  asked=$(cat "$state/wallpaper.greeter" 2>/dev/null || true)
+  if [ "$asked" = "$picture" ] && [ -n "$(greeter_now)" ]; then
+    return 0
+  fi
+  if pkexec "$APPLY" --background "$picture" >/dev/null 2>&1; then
+    printf '%s\n' "$picture" > "$state/wallpaper.greeter"
+  else
+    # A refused or unavailable authorisation is not a reason to fail a sunset.
+    echo "wallpaper-mode: could not set the login screen (pkexec)" >&2
+  fi
+}
+
+apply_mode() {
+  local mode=$1 picture
+  picture=$(stored "$mode")
+  [ -n "$picture" ] || return 0          # nothing chosen for this mode yet
+  [ -f "$picture" ] || { echo "wallpaper-mode: missing $picture" >&2; return 0; }
+  set_desktop "$picture"
+  set_greeter "$picture"
+}
+
+mkdir -p "$state"
+case "${1:-}" in
+  light|dark) apply_mode "$1" ;;
+  --set)
+    mode=${2:-}; picture=${3:-}
+    case "$mode" in light|dark) ;; *) die 'usage: wallpaper-mode --set light|dark PATH' ;; esac
+    [ -f "$picture" ] || die "no such picture: $picture"
+    printf '%s\n' "$picture" > "$state/wallpaper.$mode"
+    # Applying only when that mode is the live one is what makes it safe to set
+    # the other half of the pair at any time of day.
+    if [ "$(cat "$state/appearance.applied" 2>/dev/null || echo light)" = "$mode" ]; then
+      apply_mode "$mode"
+    fi
+    ;;
+  --check)
+    printf 'light    %s\n' "$(stored light || true)"
+    printf 'dark     %s\n' "$(stored dark || true)"
+    printf 'applied  %s\n' "$(cat "$state/appearance.applied" 2>/dev/null || echo '(unknown)')"
+    printf 'greeter  %s\n' "$(greeter_now || echo '(not installed)')"
+    printf 'desktop  %s\n' "$(xfconf-query -c xfce4-desktop -l 2>/dev/null |
+                              grep -m1 -E '/last-image$' |
+                              xargs -r -I{} xfconf-query -c xfce4-desktop -p {})"
+    ;;
+  *) die 'usage: wallpaper-mode light|dark | --set light|dark PATH | --check' ;;
+esac

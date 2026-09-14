@@ -73,4 +73,11 @@ done
 
 xfce4-panel -r
 printf '%s\n' "$mode" > "$applied_file"
+
+# The wallpaper pair follows the chrome. This runs only on a real change —
+# everything above returns early when the mode asked for is already applied —
+# so the login screen's privileged half is touched twice a day, not once a
+# minute with the panel tick. A machine with no pair chosen does nothing here.
+"$root/bin/wallpaper-mode" "$mode" || true
+
 printf 'system chrome: %s\n' "$mode"
