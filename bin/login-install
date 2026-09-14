@@ -18,6 +18,16 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 SRC="$ROOT/config/lightdm/slick-greeter.conf"
 CSS_SRC="$ROOT/config/lightdm/greeter.css"
+APPLY_SRC="$ROOT/bin/login-apply"
+SETTINGS_SRC="$ROOT/bin/login-settings"
+POLICY_SRC="$ROOT/config/polkit/org.mintbook.login.policy"
+RULES_SRC="$ROOT/config/polkit/10-mintbook-login.rules"
+DESKTOP_SRC="$ROOT/config/applications/mintbook-login.desktop"
+# The root half of the settings window: the path polkit authorises by name, so
+# it is spelled the same here, in the .policy, and in bin/login-settings.
+APPLY=/usr/local/sbin/mintbook-login-apply
+POLICY=/usr/share/polkit-1/actions/org.mintbook.login.policy
+RULES=/etc/polkit-1/rules.d/10-mintbook-login.rules
 CONF=/etc/lightdm/slick-greeter.conf
 # Where GTK looks for the greeter's user stylesheet: lightdm's own home, read
 # from passwd rather than assumed, because that is where the greeter's HOME
@@ -114,6 +124,14 @@ do_check() {
     echo "  installed (lightdm's home is 0750, so this is the record rather than the file)"
   else
     echo "  unknown — lightdm's home is 0750 and this is not root"
+  fi
+  echo
+  echo "settings window"
+  if [ -x "$APPLY" ] && [ -f "$POLICY" ]; then
+    echo "  installed — Login Screen in the app grid, or bin/login-settings"
+    [ -f "$RULES" ] || echo "  $RULES missing: every change will ask for a password"
+  else
+    echo "  not installed — choosing a picture still means editing $CONF by hand"
   fi
   echo
   echo "themes  the greeter reads /usr/share only"
@@ -220,7 +238,7 @@ preview_cleanup() {
 # ---------------------------------------------------------------- install
 
 do_install() {
-  local dark=$1 uid user home wallpaper theme icons color tmp src
+  local dark=$1 uid user home wallpaper theme icons color tmp src path required
   uid=${PKEXEC_UID:-${SUDO_UID:-1000}}
   user=$(getent passwd "$uid" | cut -d: -f1)
   home=$(getent passwd "$uid" | cut -d: -f6)
@@ -275,10 +293,25 @@ do_install() {
   install -o lightdm -g lightdm -dm755 "$(dirname "$CSS")"
   install -o lightdm -g lightdm -m644 "$CSS_SRC" "$CSS"
   grep -qx "$CSS" "$STATE/installed" 2>/dev/null || echo "$CSS" >> "$STATE/installed"
+
+  # The settings window and the root helper it reaches through pkexec. The
+  # window itself is the user's, and is installed as theirs.
+  install -m755 "$APPLY_SRC" "$APPLY"
+  install -m644 "$POLICY_SRC" "$POLICY"
+  install -m644 "$RULES_SRC" "$RULES"
+  install -o "$user" -g "$user" -dm755 "$home/.local/bin" "$home/.local/share/applications"
+  install -o "$user" -g "$user" -m755 "$SETTINGS_SRC" "$home/.local/bin/login-settings"
+  install -o "$user" -g "$user" -m644 "$DESKTOP_SRC" \
+          "$home/.local/share/applications/mintbook-login.desktop"
+  for path in "$APPLY" "$POLICY" "$RULES" "$home/.local/bin/login-settings" \
+              "$home/.local/share/applications/mintbook-login.desktop"; do
+    grep -qx "$path" "$STATE/installed" 2>/dev/null || echo "$path" >> "$STATE/installed"
+  done
   touch "$STATE/complete"
 
   echo "Wrote $CONF ($dark)."
   echo "Nothing was restarted. Lock the screen to see it: light-locker starts the same greeter."
+  echo "To change the picture later: open Login Screen, or run login-settings."
 }
 
 do_revert() {
@@ -293,6 +326,14 @@ do_revert() {
   while IFS= read -r path; do
     if [ -n "$path" ]; then rm -rf "$path"; echo "Removed $path"; fi
   done < "$STATE/installed"
+  # Pictures copied out of an unreadable home by mintbook-login-apply. They
+  # exist only because the greeter could not read the original, and nothing
+  # else refers to them.
+  if [ -d /usr/share/mintbook/backgrounds ]; then
+    rm -rf /usr/share/mintbook/backgrounds
+    rmdir --ignore-fail-on-non-empty /usr/share/mintbook 2>/dev/null || true
+    echo "Removed the copied login backgrounds"
+  fi
   if [ -f "$STATE/gtk.css.before" ]; then
     install -o lightdm -g lightdm -m644 "$STATE/gtk.css.before" "$CSS"
     echo "Restored the previous $CSS."
@@ -302,8 +343,10 @@ do_revert() {
 
 # ---------------------------------------------------------------- dispatch
 
-[ -f "$SRC" ] || die "Missing $SRC"
-[ -f "$CSS_SRC" ] || die "Missing $CSS_SRC"
+for required in "$SRC" "$CSS_SRC" "$APPLY_SRC" "$SETTINGS_SRC" "$POLICY_SRC" \
+                "$RULES_SRC" "$DESKTOP_SRC"; do
+  [ -f "$required" ] || die "Missing $required"
+done
 case "${1:-}" in
   --check|--preview)
     [ "$(id -u)" -ne 0 ] || die 'run --check and --preview as yourself, not root'
