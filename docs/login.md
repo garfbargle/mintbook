@@ -62,17 +62,65 @@ keeps the version it was given. `--revert` takes the copies back.
 Asking for Dark having installed Light fetches the dark theme pair too, rather
 than bottoming out in "now go and run this in a terminal".
 
-### It does not follow the desktop wallpaper
+### One pair, both surfaces
 
-Decided on **2026-09-14**, deliberately. Changing the wallpaper in XFCE's
-Desktop settings changes the session desktop and nothing else; the login screen
-keeps its own picture until you change it in the window. They start out
-matching, because the installer reads xfconf once, and they drift from there.
+**Reversed on 2026-09-14.** Earlier the same day this section said the login
+screen deliberately did *not* follow the desktop, and the reasoning was that
+linking them meant watching a user setting in order to make a privileged call.
+That reasoning was wrong about the cost, for a reason the first design hid: the
+greeter has a single `background` key, so choosing Dark in the window kept the
+light picture and swapped only the theme. Once the answer is a *pair* rather
+than a picture, there is already a moment when the pair changes —
+[`bin/appearance-mode`](../bin/appearance-mode), which switches the chrome at
+Redshift's sunset boundary — and nothing needs watching at all.
 
-Linking them would mean something watching a user setting in order to make a
-privileged call, plus that copy into `/usr/share` on every change, for a
-surface you look at for four seconds. Two settings, each changed where you
-would look for it, is the cheaper arrangement.
+[`bin/wallpaper-mode`](../bin/wallpaper-mode) owns the rule:
+
+```
+wallpaper-mode light|dark         # apply the stored picture for that mode
+wallpaper-mode --set dark PATH    # store it, and apply if that mode is live
+wallpaper-mode --check
+```
+
+Two paths in `~/.config/mintbook/wallpaper.light` and `.dark`. On a change,
+the desktop gets it across every monitor and workspace xfconf knows about —
+the property list is read rather than assumed, because it differs per monitor
+and outlives the display that created it — and the login screen gets it,
+with the matching appearance, through pkexec.
+
+The privileged call happens at sunset and sunrise, not on every panel tick:
+`appearance-mode` returns early when the mode it is asked for is already
+applied, so this hook only ever runs on a real change. It also compares against
+the picture last *asked* for rather than what the conf says, because a picture
+from your home is copied into `/usr/share` and the conf names the copy.
+
+Setting the half you are not currently in changes nothing on screen until that
+time of day comes, which is what makes it safe to choose a dark picture at
+noon.
+
+### Which pictures pair
+
+Measured on **2026-09-14**: mean luminance of every wallpaper in
+`/usr/share/backgrounds/linuxmint-wallpapers`, thumbnailed and converted to
+grey. The window offers four, each one photographer's own light and dark
+picture so the two halves look like the same machine at two times of day.
+
+| pair | light | | dark | |
+|---|---|---|---|---|
+| Silver | `mfakurian_silver` | 193 | `mfakurian_order` | 21 |
+| Gold | `jpanchal_gold` | 163 | `jpanchal_waves` | 28 |
+| Sweets | `rapciu_sweets` | 188 | `rapciu_pearl` | 91 |
+| Snow | `sjohnson_snow` | 104 | `sjohnson_sphere` | 50 |
+
+The extremes of the set, for choosing by hand: `pczerwinski_pink` 194 and
+`mfakurian_silver` 193 at the light end, `porioni_dark` 10 and
+`mfakurian_order` 21 at the dark end. Luminance is a mean over the whole frame
+and says nothing about where the bright part *is*, which is what decides
+whether a white login card is readable on it.
+
+**Not done: the interim pictures.** macOS moves through a series across the
+day, not two states. This has two, switched at the same boundary the chrome
+uses.
 
 ---
 
