@@ -1,0 +1,1076 @@
+"""Quick Share — how this machine says hello to an Android phone.
+
+Samsung's and Google's Quick Share is the same idea as AirDrop with one
+decisive difference: it announces over BLE and mDNS but moves the bytes over
+an ordinary TCP connection on the access point both devices are already
+associated with. AirDrop puts the data itself on AWDL, which needs a radio
+this machine does not have. That is the whole reason a phone can be made to
+see this laptop and an iPhone cannot. See docs/mintdrop.md.
+
+This module is the part that can be got right before anything is negotiated:
+the identity, and the mDNS advertisement built out of it. The phone starts
+looking when its share sheet opens, finds `_FC9F5ED42C8A._tcp` on the
+network, and shows whatever name is in the TXT record. Nothing here talks to
+Google, and nothing here needs an account.
+
+The protocol is not documented by Google. The byte layouts below follow
+grishka's reverse-engineered specification, which the Linux and macOS
+implementations all build on:
+
+    https://github.com/grishka/NearDrop/blob/master/PROTOCOL.md
+
+Every offset in this file is load-bearing in a way that fails silently: a
+wrong bit in the first byte does not raise anything, it just means the phone
+never lists the machine. The tests pin the layout for that reason.
+"""
+import base64
+import os
+import random
+import socket
+import string
+import time
+
+# SHA-256("NearbySharing"), first three bytes, as everyone's service type.
+SERVICE = '_FC9F5ED42C8A._tcp'
+SERVICE_ID = b'\xfc\x9f\x5e'
+
+# The port the phone is told to connect to. Deliberately the same socket
+# mintdrop already listens on: bin/mintdrop reads four bytes before deciding
+# anything, and 'MNTD' is not a protobuf length, so the two protocols share
+# one listener and one socket unit rather than doubling the idle cost.
+PORT = 8771
+
+# P2P_CLUSTER. The first byte of the mDNS instance name.
+PCP = 0x23
+
+UNKNOWN, PHONE, TABLET, LAPTOP, CAR, FOLDABLE, XR = range(7)
+
+STATE = os.path.expanduser('~/.local/state/mintbook')
+ENDPOINT_FILE = os.path.join(STATE, 'quickshare-endpoint')
+
+
+def fresh_endpoint_id():
+    """Four characters, for one visibility window."""
+    return ''.join(random.choice(string.ascii_uppercase + string.digits)
+                   for _ in range(4))
+
+
+def endpoint_id():
+    """Four characters identifying this machine for the length of a session.
+
+    Kept in a file rather than regenerated: a phone that has seen this laptop
+    remembers the endpoint, and a new id on every boot would show up as a new
+    device each time. Four alphanumerics is what the protocol allows.
+    """
+    try:
+        with open(ENDPOINT_FILE) as f:
+            saved = f.read().strip()
+        if len(saved) == 4 and saved.isalnum() and saved.isascii():
+            return saved
+    except OSError:
+        pass
+    fresh = ''.join(random.choice(string.ascii_uppercase + string.digits)
+                    for _ in range(4))
+    try:
+        os.makedirs(STATE, exist_ok=True)
+        with open(ENDPOINT_FILE, 'w') as f:
+            f.write(fresh + '\n')
+    except OSError:
+        pass
+    return fresh
+
+
+def b64(blob):
+    """URL-safe base64 with the padding stripped, which is what the wire uses."""
+    return base64.urlsafe_b64encode(blob).decode().rstrip('=')
+
+
+def instance_name(endpoint=None):
+    """The mDNS instance name: ten bytes, base64url, no padding.
+
+        byte 0      0x23, P2P_CLUSTER
+        bytes 1-4   the endpoint id
+        bytes 5-7   the service id, 0xFC 0x9F 0x5E
+        bytes 8-9   zero
+
+    This is a name, not a record: the phone parses the service instance's own
+    label to learn the endpoint id before it resolves anything.
+    """
+    # `is None` rather than falsy: only an absent endpoint means "use this
+    # machine's". An empty string is a caller that has lost its id, and
+    # quietly advertising a different one is how a phone ends up unable to
+    # connect to the device it just listed.
+    endpoint = (endpoint_id() if endpoint is None else endpoint).encode()
+    if len(endpoint) != 4:
+        raise ValueError('endpoint id must be 4 characters')
+    blob = bytes([PCP]) + endpoint + SERVICE_ID + b'\x00\x00'
+    assert len(blob) == 10
+    return b64(blob)
+
+
+def endpoint_info(name, device_type=LAPTOP, visible=True, version=0):
+    """The `n` TXT record — the byte that decides whether the phone lists us.
+
+        byte 0        version << 5 | visible << 4 | device_type << 1
+        bytes 1-2     salt
+        bytes 3-16    encrypted metadata key
+        byte 17       length of the device name
+        bytes 18+     the device name, UTF-8
+
+    The salt and metadata key identify a *Google account* to a phone that
+    already knows it — which is how "Contacts" visibility works. Nothing here
+    has an account, so those sixteen bytes are random: the phone cannot place
+    us as a contact and lists the machine under Everyone instead, which is
+    the visibility a laptop with no account should have anyway.
+
+    `visible` is 0 for visible. It reads backwards because the bit means
+    hidden, and the name follows it only when there is a name to show.
+    """
+    if not 0 <= device_type <= 7:
+        raise ValueError('device type out of range')
+    flags = (version << 5) | ((0 if visible else 1) << 4) | (device_type << 1)
+    blob = bytes([flags]) + os.urandom(16)
+    if visible:
+        encoded = name.encode()[:255]
+        # A name cut mid-character is a name with a replacement glyph in it on
+        # the phone; drop the broken tail rather than show one.
+        encoded = encoded.decode(errors='ignore').encode()
+        blob += bytes([len(encoded)]) + encoded
+    return blob
+
+
+def parse_endpoint_info(blob):
+    """The other direction: what a phone's TXT record says about itself.
+
+    Returns (device_type, name or None). A phone set to Contacts-only
+    advertises the flags and the sixteen identity bytes and stops there — the
+    name is withheld from anyone who cannot decrypt the metadata key, which
+    is everyone without the matching Google account. That is not an error and
+    not something to fix; it means the caller shows the mDNS host label
+    instead.
+    """
+    if not blob:
+        raise ValueError('empty endpoint info')
+    flags = blob[0]
+    device_type = (flags >> 1) & 0b111
+    name = None
+    if len(blob) > 17:
+        length = blob[17]
+        raw = blob[18:18 + length]
+        if len(raw) == length:
+            name = raw.decode('utf-8', errors='replace') or None
+    return device_type, name
+
+
+def discover(timeout=4.0):
+    """Quick Share devices on this network, from the running avahi-daemon.
+
+    Browsed live rather than with `--terminate`. That flag exits as soon as
+    the cache has been dumped, which is *before* the SRV and TXT records of a
+    device announced a moment ago have been resolved — so a phone would show
+    up as an announcement with no address and be dropped. That race is why
+    `mintdrop peers` kept printing nothing while the phone was plainly
+    advertising. Read the stream instead, and stop on a deadline.
+
+    Still nothing resident: the process lives for `timeout` seconds and is
+    killed on the way out.
+    """
+    import select
+    import subprocess
+    ours = instance_name()
+    our_addresses = _local_addresses()
+    found = {}
+    try:
+        browse = subprocess.Popen(
+            ['avahi-browse', '--resolve', '--parsable', '--no-db-lookup',
+             SERVICE], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True)
+    except OSError:
+        return []
+    deadline = time.monotonic() + timeout
+    try:
+        while time.monotonic() < deadline:
+            ready, _, _ = select.select([browse.stdout], [], [],
+                                        max(deadline - time.monotonic(), 0.05))
+            if not ready:
+                continue
+            line = browse.stdout.readline()
+            if not line:
+                break
+            parts = line.split(';')
+            if len(parts) < 10 or parts[0] != '=':
+                continue
+            label, host, address, port = parts[3], parts[6], parts[7], parts[8]
+            if label == ours or address.split('%')[0] in our_addresses:
+                continue
+            info = None
+            for item in parts[9].split('" "'):
+                item = item.strip('"')
+                if item.startswith('n='):
+                    try:
+                        info = base64.urlsafe_b64decode(
+                            item[2:] + '=' * (-len(item[2:]) % 4))
+                    except Exception:
+                        info = None
+            device_type, name = (None, None)
+            if info:
+                try:
+                    device_type, name = parse_endpoint_info(info)
+                except ValueError:
+                    pass
+            named = bool(name)
+            if not name:
+                name = host.removesuffix('.local').replace('_', ' ')
+            try:
+                port = int(port)
+            except ValueError:
+                continue
+            current = found.get(label)
+            if current is None or (parts[2] == 'IPv4'
+                                   and ':' in current['address']):
+                found[label] = {'name': name, 'named': named,
+                                'address': address, 'port': port,
+                                'endpoint': label, 'protocol': 'quickshare',
+                                'device_type': (device_type
+                                                if device_type is not None
+                                                else PHONE)}
+    finally:
+        browse.terminate()
+        try:
+            browse.wait(timeout=2)
+        except Exception:
+            browse.kill()
+    # One device, one entry. A phone gets a new endpoint id every time its
+    # sheet reopens and avahi keeps serving the old records, so the same
+    # phone arrives three or four times over — which would be three or four
+    # tiles in the sheet, all but one of them dead.
+    #
+    # Keyed on where it actually is, and the record carrying a real name
+    # wins: only a visible device puts its name in the TXT record, so
+    # "Codi's Z Fold7" is a live announcement while "Android JUQDHNE8" is
+    # a host label standing in for one that withheld it.
+    best = {}
+    for peer in found.values():
+        key = (peer['address'], peer['port'])
+        current = best.get(key)
+        if current is None or (peer['named'] and not current['named']):
+            best[key] = peer
+    return sorted(best.values(), key=lambda p: p['name'].lower())
+
+
+def _local_addresses():
+    """This machine's own addresses, so it never offers to send to itself."""
+    try:
+        import importlib.machinery
+        import importlib.util
+        loader = importlib.machinery.SourceFileLoader(
+            'mintbook_drop', os.path.join(os.path.dirname(
+                os.path.realpath(__file__)), 'mintbook_drop.py'))
+        module = importlib.util.module_from_spec(
+            importlib.util.spec_from_loader(loader.name, loader))
+        loader.exec_module(module)
+        return module.local_addresses()
+    except Exception:
+        return {'127.0.0.1', '::1'}
+
+
+def avahi_service(name, port=PORT, device_type=LAPTOP, endpoint=None):
+    """The static advertisement, as an avahi service file.
+
+    A file rather than a process, for the reason the rest of mintdrop is
+    built this way: avahi-daemon is already running, so being discoverable
+    costs nothing that was not already running. The endpoint id and the
+    random metadata bytes are fixed when this is generated, which is why
+    bin/mintdrop-install writes it rather than shipping it.
+    """
+    info = b64(endpoint_info(name, device_type))
+    return f'''<?xml version="1.0" standalone='no'?><!--*-nxml-*-->
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+
+<!-- Quick Share. GENERATED by bin/mintdrop-install — edit
+     bin/mintbook_quickshare.py instead, then reinstall.
+
+     The instance name carries the endpoint id and the TXT record carries the
+     name the phone shows. Both are fixed at install time so that a phone
+     which has seen this machine keeps seeing the same one. -->
+<service-group>
+  <name>{instance_name(endpoint)}</name>
+  <service>
+    <type>{SERVICE}</type>
+    <port>{port}</port>
+    <txt-record>n={info}</txt-record>
+  </service>
+</service-group>
+'''
+
+
+# ===========================================================================
+# The conversation
+# ===========================================================================
+#
+# Everything below talks to a phone. The shape, once the socket is open:
+#
+#     ->  OfflineFrame CONNECTION_REQUEST      who we are          plaintext
+#     ->  Ukey2 CLIENT_INIT                                        plaintext
+#     <-  Ukey2 SERVER_INIT                                        plaintext
+#     ->  Ukey2 CLIENT_FINISH                                      plaintext
+#     ->  OfflineFrame CONNECTION_RESPONSE     accept              plaintext
+#     <-  OfflineFrame CONNECTION_RESPONSE                         plaintext
+#     -><- PAIRED_KEY_ENCRYPTION / _RESULT     who we claim to be  encrypted
+#     ->  INTRODUCTION                         these files         encrypted
+#     <-  RESPONSE  ACCEPT                     the phone's prompt  encrypted
+#     ->  PAYLOAD_TRANSFER ...                 the bytes           encrypted
+#
+# Two layers of frame share the word. `OfflineFrame` is Nearby Connections —
+# the transport. The sharing `Frame` is the application on top, and it does
+# not get its own socket: it travels as the body of a BYTES payload inside a
+# PAYLOAD_TRANSFER OfflineFrame. Files travel the same way with a FILE
+# payload. Everything after the handshake is inside a SecureMessage.
+#
+# Every field number is from vendor/nearby-protobufs.
+
+import struct
+
+# offline_wire_formats.proto — V1Frame.FrameType
+CONNECTION_REQUEST, CONNECTION_RESPONSE, PAYLOAD_TRANSFER = 1, 2, 3
+KEEP_ALIVE, DISCONNECTION = 5, 6
+WIFI_LAN = 5                                   # ConnectionRequestFrame.Medium
+ACCEPT_RESPONSE = 1                            # ResponseStatus.ACCEPT
+OS_LINUX = 100                                 # OsInfo.OsType
+
+# PayloadTransferFrame
+PACKET_DATA = 1
+PAYLOAD_BYTES, PAYLOAD_FILE = 1, 2
+LAST_CHUNK = 1
+
+# wire_format.proto — V1Frame.FrameType
+INTRODUCTION, RESPONSE, PAIRED_KEY_ENCRYPTION, PAIRED_KEY_RESULT = 1, 2, 3, 4
+SHARING_ACCEPT, SHARING_REJECT = 1, 2           # ConnectionResponseFrame.Status
+PAIRED_KEY_UNABLE = 3                           # PairedKeyResultFrame.Status
+
+# Nearby moves files in chunks. 512 KiB is what the Android side uses; a
+# larger one is not faster over a radio that is the bottleneck anyway, and a
+# smaller one multiplies the per-frame encryption cost.
+CHUNK = 512 * 1024
+MAX_FRAME = 8 << 20
+
+
+class ProtocolError(Exception):
+    """The phone said something we cannot continue from."""
+
+
+def _load(name):
+    import importlib.machinery
+    import importlib.util
+    loader = importlib.machinery.SourceFileLoader(
+        name, os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                           name + '.py'))
+    module = importlib.util.module_from_spec(
+        importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(module)
+    return module
+
+
+pb = _load('mintbook_protobuf')
+ukey2 = _load('mintbook_ukey2')
+drop = _load('mintbook_drop')
+
+
+# ---------------------------------------------------------------------------
+# frames
+# ---------------------------------------------------------------------------
+
+def offline_frame(frame_type, **bodies):
+    """OfflineFrame{version=V1, v1=V1Frame{type, <one body>}}."""
+    fields = [(1, frame_type)]
+    for number, body in bodies.values():
+        fields.append((number, body))
+    return pb.pack((1, 1), (2, pb.pack(*fields)))
+
+
+def connection_request(endpoint, info, hostname=None):
+    body = pb.pack(
+        (1, endpoint),                 # endpoint_id
+        (2, hostname or socket.gethostname()),   # endpoint_name
+        (5, [WIFI_LAN]),               # mediums: we are on the LAN
+        (6, info),                     # endpoint_info — carries our name
+        (8, 10_000),                   # keep_alive_interval_millis
+        (9, 30_000))                   # keep_alive_timeout_millis
+    return offline_frame(CONNECTION_REQUEST, connection_request=(2, body))
+
+
+def connection_response_accept():
+    body = pb.pack((1, 0),             # status, deprecated but still read
+                   (3, ACCEPT_RESPONSE),
+                   (4, pb.pack((1, OS_LINUX))))     # os_info
+    return offline_frame(CONNECTION_RESPONSE, connection_response=(3, body))
+
+
+def keep_alive(ack=False):
+    return offline_frame(KEEP_ALIVE, keep_alive=(6, pb.pack((1, bool(ack)))))
+
+
+def disconnection():
+    return offline_frame(DISCONNECTION, disconnection=(7, pb.pack()))
+
+
+def bytes_payload(payload_id, blob):
+    """A sharing frame, wrapped so the transport will carry it.
+
+    Two frames, not one: the data, then an empty chunk carrying LAST_CHUNK at
+    the end offset. A payload is only complete when that terminator arrives —
+    setting the flag on the data chunk itself leaves the far end waiting for
+    a boundary that never comes.
+    """
+    header = pb.pack((1, payload_id), (2, PAYLOAD_BYTES), (3, len(blob)))
+    data = pb.pack((1, PACKET_DATA), (2, header),
+                   (3, pb.pack((1, 0), (2, 0), (3, blob))))
+    end = pb.pack((1, PACKET_DATA), (2, header),
+                  (3, pb.pack((1, LAST_CHUNK), (2, len(blob)))))
+    return (offline_frame(PAYLOAD_TRANSFER, payload_transfer=(4, data)),
+            offline_frame(PAYLOAD_TRANSFER, payload_transfer=(4, end)))
+
+
+def file_chunk(payload_id, size, name, offset, blob, last=False):
+    header = pb.pack((1, payload_id), (2, PAYLOAD_FILE), (3, size), (5, name))
+    chunk = pb.pack((1, LAST_CHUNK if last else 0), (2, offset),
+                    (3, blob if blob else None))
+    body = pb.pack((1, PACKET_DATA), (2, header), (3, chunk))
+    return offline_frame(PAYLOAD_TRANSFER, payload_transfer=(4, body))
+
+
+def sharing_frame(frame_type, **bodies):
+    fields = [(1, frame_type)]
+    for number, body in bodies.values():
+        fields.append((number, body))
+    return pb.pack((1, 1), (2, pb.pack(*fields)))
+
+
+def paired_key_encryption():
+    """We have no certificate, so this says so in the only way the protocol
+    allows: random bytes the phone cannot match against a contact. It then
+    treats us as an unknown device and asks the person holding it."""
+    return sharing_frame(PAIRED_KEY_ENCRYPTION,
+                         paired_key_encryption=(4, pb.pack(
+                             (1, os.urandom(72)),      # signed_data
+                             (2, os.urandom(6)))))     # secret_id_hash
+
+
+def paired_key_result():
+    return sharing_frame(PAIRED_KEY_RESULT,
+                         paired_key_result=(5, pb.pack((1, PAIRED_KEY_UNABLE))))
+
+
+def introduction(files):
+    """'Here is what I would like to send you' — this is what raises the
+    prompt on the phone."""
+    metadata = [pb.pack((1, f['name']),
+                        (2, f.get('kind', 0)),
+                        (3, f['payload_id']),
+                        (4, f['size']),
+                        (5, f.get('mime', 'application/octet-stream')))
+                for f in files]
+    return sharing_frame(INTRODUCTION,
+                         introduction=(2, pb.pack((1, metadata))))
+
+
+# ---------------------------------------------------------------------------
+# the connection
+# ---------------------------------------------------------------------------
+
+class Connection:
+    """One conversation with a phone, framed and then encrypted.
+
+    Every message on this socket — handshake, transport frame, file chunk —
+    is a 4-byte big-endian length followed by that many bytes. After UKEY2
+    the bytes are a SecureMessage wrapping what would otherwise be there.
+    """
+
+    def __init__(self, sock):
+        self.sock = sock
+        self.context = None
+        self.payload_id = random.randint(1, 2 ** 31)
+
+    # -- framing -----------------------------------------------------------
+
+    def send_raw(self, blob):
+        self.sock.sendall(struct.pack('>I', len(blob)) + blob)
+
+    def recv_exactly(self, count):
+        parts = []
+        while count:
+            chunk = self.sock.recv(count)
+            if not chunk:
+                raise ProtocolError('the phone closed the connection')
+            parts.append(chunk)
+            count -= len(chunk)
+        return b''.join(parts)
+
+    def recv_raw(self):
+        length, = struct.unpack('>I', self.recv_exactly(4))
+        if length > MAX_FRAME:
+            # The length is the first thing a broken or hostile peer controls.
+            raise ProtocolError(f'frame of {length} bytes is implausible')
+        return self.recv_exactly(length)
+
+    def send(self, frame):
+        self.send_raw(self.context.encrypt(frame) if self.context else frame)
+
+    def recv(self):
+        blob = self.recv_raw()
+        return self.context.decrypt(blob) if self.context else blob
+
+    # -- handshake ---------------------------------------------------------
+
+    def connect_as_client(self, endpoint, info):
+        """Introduce ourselves and put the channel up.
+
+        The order is not negotiable: CONNECTION_REQUEST is plaintext and must
+        come first, the three UKEY2 messages follow, and only then does
+        CONNECTION_RESPONSE — still plaintext — close the plaintext phase.
+        """
+        self.send_raw(connection_request(endpoint, info))
+
+        handshake = ukey2.ClientHandshake()
+        self.send_raw(handshake.client_init())
+        handshake.accept_server_init(self.recv_raw())
+        self.send_raw(handshake.client_finish())
+
+        self.send_raw(connection_response_accept())
+        their_response = pb.submessage(pb.unpack(self.recv_raw()), 2)
+        if their_response is None or pb.one(their_response, 1) != CONNECTION_RESPONSE:
+            raise ProtocolError('the phone did not answer the connection')
+
+        # Everything from here is encrypted.
+        self.context = handshake.context()
+        return self.context
+
+    # -- the sharing layer -------------------------------------------------
+
+    def send_sharing(self, frame):
+        self.payload_id += 1
+        for part in bytes_payload(self.payload_id, frame):
+            self.send(part)
+
+    def next_sharing(self, timeout=60):
+        """The next sharing frame, answering keep-alives while we wait.
+
+        Android sends KEEP_ALIVE every ten seconds and expects one back. It
+        arrives interleaved with everything else, so it is handled here
+        rather than by every caller — a transfer waiting on a person to tap
+        Accept is mostly a transfer exchanging keep-alives.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            self.sock.settimeout(max(deadline - time.monotonic(), 0.1))
+            try:
+                blob = self.recv()
+            except socket.timeout:
+                raise ProtocolError('the phone stopped answering')
+            v1 = pb.submessage(pb.unpack(blob), 2)
+            if v1 is None:
+                continue
+            kind = pb.one(v1, 1)
+            if kind == KEEP_ALIVE:
+                self.send(keep_alive(ack=True))
+            elif kind == DISCONNECTION:
+                raise ProtocolError('the phone hung up')
+            elif kind == PAYLOAD_TRANSFER:
+                transfer = pb.submessage(v1, 4)
+                header = pb.submessage(transfer or {}, 2)
+                chunk = pb.submessage(transfer or {}, 3)
+                if not header or not chunk:
+                    continue
+                if pb.one(header, 2) != PAYLOAD_BYTES:
+                    continue
+                body = pb.one(chunk, 3)
+                if not body:
+                    continue
+                inner = pb.submessage(pb.unpack(body), 2)
+                if inner is not None:
+                    return inner
+            if time.monotonic() > deadline:
+                raise ProtocolError('the phone stopped answering')
+
+    def pair(self):
+        """Exchange the paired-key frames.
+
+        We have no certificate, so this only establishes that we are a
+        stranger — which is the whole reason the phone then asks its owner.
+
+        It answers the phone's PAIRED_KEY_ENCRYPTION and returns *without*
+        waiting for a PAIRED_KEY_RESULT. The phone does not send one until it
+        has heard the introduction, so waiting for it here deadlocks: both
+        ends sit holding the connection open until the read times out, which
+        is what "the phone stopped answering" was.
+        """
+        self.send_sharing(paired_key_encryption())
+        frame = self.next_sharing(timeout=20)
+        if pb.one(frame, 1) == PAIRED_KEY_ENCRYPTION:
+            self.send_sharing(paired_key_result())
+        return None
+
+    def introduce(self, files, timeout=120):
+        """Offer the files, and wait for the person to answer the prompt."""
+        self.send_sharing(introduction(files))
+        while True:
+            frame = self.next_sharing(timeout=timeout)
+            if pb.one(frame, 1) != RESPONSE:
+                continue
+            response = pb.submessage(frame, 3)
+            return pb.one(response or {}, 1)
+
+    def send_file(self, entry, progress=None):
+        """The bytes, in chunks, then an empty last chunk.
+
+        Not sendfile(): every chunk is encrypted and framed, so the bytes
+        have to come through this process. That is the protocol's price, not
+        a choice — the mintdrop path between two Linux machines keeps its
+        zero-copy send precisely because it does not have to do this.
+        """
+        sent = 0
+        with open(entry['path'], 'rb') as f:
+            while True:
+                block = f.read(CHUNK)
+                if not block:
+                    break
+                self.send(file_chunk(entry['payload_id'], entry['size'],
+                                     entry['name'], sent, block))
+                sent += len(block)
+                if progress:
+                    progress(len(block))
+        self.send(file_chunk(entry['payload_id'], entry['size'],
+                             entry['name'], sent, b'', last=True))
+        return sent
+
+    def settle(self, timeout=20):
+        """Stay on the line until the phone is done with the payload.
+
+        It answers with its own frames — keep-alives, and a disconnection
+        once it has committed the file. Either that, or the socket closing
+        under us, means it is safe to go.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                self.sock.settimeout(max(deadline - time.monotonic(), 0.1))
+                blob = self.recv()
+            except (socket.timeout, OSError):
+                return
+            except ProtocolError:
+                return
+            v1 = pb.submessage(pb.unpack(blob), 2)
+            if v1 is None:
+                continue
+            kind = pb.one(v1, 1)
+            if kind == KEEP_ALIVE:
+                try:
+                    self.send(keep_alive(ack=True))
+                except OSError:
+                    return
+            elif kind == DISCONNECTION:
+                return
+
+    def close(self):
+        try:
+            self.send(disconnection())
+        except (OSError, ProtocolError, AttributeError):
+            pass
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
+
+def send_files(peer, paths, name=None, on_wait=None, progress=None,
+               attempts=4):
+    """Send files to a Quick Share device. Returns (sent bytes, seconds).
+
+    `on_wait` is called once the offer is out and the phone is showing its
+    prompt — nothing is reportable for as long as somebody takes to pick the
+    notification up, and a progress bar sitting at zero for that whole time
+    looks broken.
+
+    Retries, because a phone refuses a fair share of connection attempts
+    outright and the next one goes through. It is not understood why; it
+    happens more just after a session that ended badly, so it may be the
+    phone still cleaning one up. **Only failures before the offer was
+    accepted are retried** — once a person has tapped Accept, trying again
+    would put the file on their phone twice.
+    """
+    files = []
+    for path in paths:
+        size = os.stat(path).st_size
+        files.append({'path': path, 'name': os.path.basename(path),
+                      'size': size, 'mime': _mime_type(path),
+                      'payload_id': random.randint(1, 2 ** 62)})
+
+    last = None
+    for attempt in range(max(attempts, 1)):
+        accepted = []
+        try:
+            return _send_once(peer, files, name, on_wait, progress, accepted)
+        except (ProtocolError, OSError) as exc:
+            last = exc
+            if accepted:
+                raise                    # past the prompt; never send twice
+            if attempt + 1 < max(attempts, 1):
+                time.sleep(1.5)
+    raise last if last else ProtocolError('could not reach the device')
+
+
+def _send_once(peer, files, name, on_wait, progress, accepted):
+    family = socket.AF_INET6 if ':' in peer['address'] else socket.AF_INET
+    sock = socket.socket(family, socket.SOCK_STREAM)
+    sock.settimeout(15)
+    sock.connect((peer['address'], peer['port']))
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+    connection = Connection(sock)
+    started = time.monotonic()
+    try:
+        connection.connect_as_client(
+            endpoint_id(),
+            endpoint_info(name or drop.config()['name'] or drop.device_name()))
+        connection.pair()
+        if on_wait:
+            on_wait()
+        status = connection.introduce(files)
+        if status != SHARING_ACCEPT:
+            raise ProtocolError('declined on the phone'
+                                if status == SHARING_REJECT
+                                else f'the phone answered {status}')
+        accepted.append(True)
+        total = 0
+        for entry in files:
+            total += connection.send_file(entry, progress)
+        # Do not hang up on the last byte. The phone finishes writing the
+        # file and then says so — closing the socket the instant the final
+        # chunk is out gets the prompt accepted and no file saved, which is
+        # exactly what it looks like from the other end: a transfer that
+        # "worked" and left nothing behind.
+        connection.settle()
+        return total, time.monotonic() - started
+    finally:
+        connection.close()
+
+
+def _mime_type(path):
+    """What the phone should call this. It decides the icon and the app."""
+    import mimetypes
+    guess, _encoding = mimetypes.guess_type(path)
+    return guess or 'application/octet-stream'
+
+
+# ---------------------------------------------------------------------------
+# receiving from a phone
+# ---------------------------------------------------------------------------
+#
+# The same conversation with the roles swapped. The phone connects to the
+# socket mintdrop already listens on, introduces its files, and waits for
+# somebody here to accept — so this is the direction that does not need the
+# phone to be coaxed into advertising, and the reason it is worth having even
+# though sending already works.
+
+def sharing_response(status):
+    return sharing_frame(RESPONSE, connection_response=(3, pb.pack((1, status))))
+
+
+class Incoming:
+    """One file a phone says it is about to send."""
+
+    def __init__(self, payload_id, name, size):
+        self.payload_id = payload_id
+        self.name = name
+        self.size = size
+        self.path = None
+        self.partial = None
+        self.handle = None
+        self.written = 0
+
+    def open(self, directory):
+        self.path = drop.unique_path(directory, self.name)
+        self.partial = self.path + '.part'
+        self.handle = open(self.partial, 'wb')
+
+    def write(self, offset, blob):
+        if self.handle is None:
+            return
+        # Trust the offset, verify the total: a phone that seeks past the
+        # declared size is not one to hand a file descriptor to.
+        if offset + len(blob) > self.size:
+            raise ProtocolError(f'{self.name}: more data than declared')
+        self.handle.seek(offset)
+        self.handle.write(blob)
+        self.written += len(blob)
+
+    def finish(self):
+        if self.handle is None:
+            return None
+        self.handle.close()
+        self.handle = None
+        if self.written != self.size:
+            os.unlink(self.partial)
+            raise ProtocolError(f'{self.name}: {self.written} of {self.size} '
+                                f'bytes arrived')
+        os.chmod(self.partial, 0o644)
+        os.rename(self.partial, self.path)
+        return self.path
+
+    def abandon(self):
+        if self.handle is not None:
+            self.handle.close()
+            self.handle = None
+        for path in (self.partial,):
+            try:
+                if path:
+                    os.unlink(path)
+            except OSError:
+                pass
+
+
+def receive_from_phone(sock, ask=None, on_progress=None, directory=None):
+    """Serve one Quick Share sender. Returns the list of files that landed.
+
+    `ask(name, files, total)` decides whether to accept, and is the same
+    gate mintdrop uses for a Linux peer — a receiver that writes files
+    because a stranger asked is a bug with a filename, whichever protocol
+    the stranger speaks.
+    """
+    connection = Connection(sock)
+    directory = directory or drop.download_dir()
+    handshake = ukey2.ServerHandshake()
+
+    # --- plaintext -------------------------------------------------------
+    request = pb.submessage(pb.unpack(connection.recv_raw()), 2)
+    if request is None or pb.one(request, 1) != CONNECTION_REQUEST:
+        raise ProtocolError('not a Quick Share sender')
+    body = pb.submessage(request, 2) or {}
+    info = pb.one(body, 6)
+    sender = 'Unknown device'
+    if isinstance(info, bytes):
+        try:
+            _kind, name = parse_endpoint_info(info)
+            sender = name or sender
+        except ValueError:
+            pass
+    if sender == 'Unknown device':
+        label = pb.one(body, 2)
+        if isinstance(label, bytes):
+            sender = label.decode('utf-8', 'replace')[:64] or sender
+
+    handshake.accept_client_init(connection.recv_raw())
+    connection.send_raw(handshake.server_init_message())
+    handshake.accept_client_finish(connection.recv_raw())
+
+    connection.send_raw(connection_response_accept())
+    connection.recv_raw()                       # their CONNECTION_RESPONSE
+    connection.context = handshake.context()
+
+    # --- encrypted -------------------------------------------------------
+    expected = {}
+    landed = []
+    answered = False
+    open_files = {}
+    buffers = {}
+    deadline = time.monotonic() + 900
+    try:
+        while time.monotonic() < deadline:
+            sock.settimeout(120)
+            blob = connection.recv()
+            v1 = pb.submessage(pb.unpack(blob), 2)
+            if v1 is None:
+                continue
+            kind = pb.one(v1, 1)
+            if kind == KEEP_ALIVE:
+                connection.send(keep_alive(ack=True))
+                continue
+            if kind == DISCONNECTION:
+                break
+            if kind != PAYLOAD_TRANSFER:
+                continue
+
+            transfer = pb.submessage(v1, 4)
+            header = pb.submessage(transfer or {}, 2)
+            chunk = pb.submessage(transfer or {}, 3)
+            if not header or not chunk:
+                continue
+            payload_id = pb.one(header, 1)
+            payload_type = pb.one(header, 2)
+            flags = pb.one(chunk, 1, 0)
+            offset = pb.one(chunk, 2, 0)
+            data = pb.one(chunk, 3) or b''
+
+            if payload_type == PAYLOAD_BYTES:
+                buffers[payload_id] = buffers.get(payload_id, b'') + data
+                if not flags & LAST_CHUNK:
+                    continue
+                frame = pb.submessage(pb.unpack(buffers.pop(payload_id)), 2)
+                if frame is None:
+                    continue
+                ftype = pb.one(frame, 1)
+                if ftype == PAIRED_KEY_ENCRYPTION:
+                    connection.send_sharing(paired_key_encryption())
+                    connection.send_sharing(paired_key_result())
+                elif ftype == INTRODUCTION and not answered:
+                    introduction_body = pb.submessage(frame, 2) or {}
+                    for raw in introduction_body.get(1, []):
+                        meta = pb.unpack(raw)
+                        name = pb.one(meta, 1) or b'received'
+                        entry = Incoming(pb.one(meta, 3),
+                                         drop.safe_name(name.decode('utf-8', 'replace')),
+                                         int(pb.one(meta, 4) or 0))
+                        expected[entry.payload_id] = entry
+                    total = sum(e.size for e in expected.values())
+                    accept = True
+                    if ask is not None:
+                        accept = ask(sender, list(expected.values()), total)
+                    answered = True
+                    if not accept:
+                        connection.send_sharing(sharing_response(SHARING_REJECT))
+                        return []
+                    os.makedirs(directory, exist_ok=True)
+                    connection.send_sharing(sharing_response(SHARING_ACCEPT))
+                continue
+
+            if payload_type == PAYLOAD_FILE:
+                entry = expected.get(payload_id)
+                if entry is None:
+                    continue
+                if entry.handle is None and payload_id not in open_files:
+                    entry.open(directory)
+                    open_files[payload_id] = entry
+                if data:
+                    entry.write(offset, data)
+                    if on_progress:
+                        on_progress(len(data))
+                if flags & LAST_CHUNK:
+                    path = entry.finish()
+                    if path:
+                        landed.append(path)
+                    open_files.pop(payload_id, None)
+                    if len(landed) == len(expected):
+                        break
+    except Exception:
+        for entry in open_files.values():
+            entry.abandon()
+        raise
+    finally:
+        try:
+            connection.send(disconnection())
+        except Exception:
+            pass
+    return landed
+
+
+# ---------------------------------------------------------------------------
+# being findable by a phone
+# ---------------------------------------------------------------------------
+
+class Announcement:
+    """Publish the Quick Share service *now*, and keep re-announcing it.
+
+    A static file in /etc/avahi/services is registered once, at boot. Android
+    frequently never sees such a service: it misses anything announced before
+    its own discovery phase started, and its query does not reliably shake one
+    loose. rquickshare says so outright in mdns.rs —
+
+        "Android can sometime not see the mDNS service if the service was
+         running BEFORE Android started the Discovery phase for QuickShare.
+         So resend a broadcast if there's a android device sending."
+
+    — and re-announces whenever its BLE scanner hears a phone. This does the
+    same with the tool avahi already ships: `avahi-publish`, which registers
+    from a user process and announces the moment it starts. Re-run on an
+    interval, so a phone that starts looking at any point during a visibility
+    window hears an announcement within a few seconds.
+
+    Deliberately temporary, like the BLE advertisement it accompanies: a
+    laptop that announces itself to every phone in the building all day is
+    the thing this is careful not to be.
+
+    **Measured, and sobering.** Over fifteen minutes of a Galaxy Z Fold7
+    sitting on its share sheet, this sent 579 announcements and the phone
+    asked for `_FC9F5ED42C8A._tcp` exactly zero times. It queried Samsung's
+    own `_quickshare._tcp` once. Re-announcing is still correct for the
+    phones that do look — but on that evidence it is not what is stopping a
+    Samsung phone from listing this machine, so the interval is 20 s rather
+    than the 8 s that produced the flood.
+    """
+
+    def __init__(self, name=None, port=PORT, every=20, endpoint=None,
+                 info=None):
+        self.name = name
+        self.port = port
+        self.every = every
+        # A *different* endpoint id from the one in the static file. Publishing
+        # the same instance name that /etc/avahi/services already holds fails
+        # with "Local name collision" — silently, if you are not reading
+        # avahi-publish's stderr — and then nothing is ever re-announced,
+        # which is the whole point of this class. The id only has to be
+        # consistent for the length of a visibility window: it tells the
+        # phone which endpoint to address, and the port is what it connects
+        # to either way.
+        self.endpoint = endpoint or fresh_endpoint_id()
+        # The same endpoint info the BLE advertisement carries, when there is
+        # one: a phone that found this machine over BLE matches the two by
+        # endpoint id, and handing it a different identity in the mDNS record
+        # is how a transfer gets as far as "connecting" and then fails.
+        self.info = info
+        self.process = None
+        self.stop_flag = False
+        self.thread = None
+        self.failed = None
+
+    def _publish_once(self):
+        import subprocess
+        info = b64(self.info if self.info is not None
+                   else endpoint_info(self.name or 'Mintbook'))
+        argv = ['avahi-publish', '-s', instance_name(self.endpoint), SERVICE,
+                str(self.port), f'n={info}']
+        return subprocess.Popen(argv, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.PIPE, text=True)
+
+    def _run(self):
+        while not self.stop_flag:
+            try:
+                self.process = self._publish_once()
+            except OSError:
+                return
+            # Let it register and announce, then replace it. Killing and
+            # restarting is what produces a *new* announcement; leaving one
+            # running just repeats the situation Android already ignores.
+            for _ in range(int(self.every * 10)):
+                if self.stop_flag:
+                    break
+                time.sleep(0.1)
+            if self.process is not None:
+                if self.process.poll() is not None:
+                    # It exited on its own: a collision, or no daemon. Say so
+                    # rather than looping in silence.
+                    self.failed = (self.process.stderr.read() or '').strip()
+                    return
+                self.process.terminate()
+                try:
+                    self.process.wait(timeout=2)
+                except Exception:
+                    self.process.kill()
+                self.process = None
+
+    def __enter__(self):
+        import threading
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+        time.sleep(1.0)
+        return self
+
+    def __exit__(self, *_exc):
+        self.stop_flag = True
+        if self.process is not None:
+            try:
+                self.process.terminate()
+            except Exception:
+                pass
+        if self.thread is not None:
+            self.thread.join(timeout=3)
+        return False

@@ -1,0 +1,17 @@
+/* Let the local admin change the login screen without a password prompt every
+ * time a thumbnail is clicked. Same reasoning as 10-mintbook-power.rules: the
+ * XML's allow_active=yes is not always enough, and a settings window that asks
+ * for a password on every click is a settings window nobody uses.
+ *
+ * The action runs /usr/local/sbin/mintbook-login-apply, which takes a picture
+ * and an appearance and edits three keys in /etc/lightdm/slick-greeter.conf.
+ * It never executes what it is given.
+ *
+ * Undo: delete this file. polkit reloads it on its own.
+ */
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.mintbook.login.apply" &&
+        subject.local && subject.active && subject.isInGroup("sudo")) {
+        return polkit.Result.YES;
+    }
+});

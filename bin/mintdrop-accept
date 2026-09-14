@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+"""The prompt that appears when something is being sent to this machine.
+
+    mintdrop-accept --from NAME --what FILE --size 12 MB --address 192.168.1.9
+
+Exit 0 accept, 1 decline, 2 accept and stop asking for this sender. bin/mintdrop
+runs it and waits; a timeout out there is a decline, so nothing here has to
+worry about being left open.
+
+Centred rather than hung off a pointer, unlike the bar popups: nobody clicked
+anything to get here, so there is no icon for it to belong to, and a prompt
+that appears under wherever the mouse happens to be resting is a prompt that
+gets dismissed by accident. Escape and Decline are the same answer, and the
+window takes the keyboard so Return lands on Accept without aiming.
+"""
+import argparse
+import os
+import sys
+
+# Adwaita before the Gtk import, for the reason bin/control-center and
+# bin/bt-menu give: Gtk.init parses the GTK theme, WhiteSur's gtk.css is
+# 400 KB, and that is ~120 ms of every launch spent on a stylesheet this
+# window never reads a rule from. Every colour here comes from the CSS below
+# and from appearance.applied.
+os.environ.setdefault('GTK_THEME', 'Adwaita')
+
+import gi
+gi.require_version('Gtk', '3.0')
+from gi.repository import Gtk, Gdk, GLib
+
+APPLIED = os.path.expanduser('~/.config/mintbook/appearance.applied')
+
+# The two appearances, as the rest of Mintbook writes them. Not read from the
+# generated palette: this must open even when no palette has been generated —
+# rule 4 in CONTRIBUTING, a missing config never stops a popup.
+DARK = {'bg': '#212124', 'fg': '#ffffff', 'dim': 'rgba(255,255,255,0.55)',
+        'hover': 'rgba(255,255,255,0.12)', 'line': 'rgba(255,255,255,0.10)'}
+LIGHT = {'bg': '#f5f5f7', 'fg': '#1d1d1f', 'dim': 'rgba(0,0,0,0.55)',
+         'hover': 'rgba(0,0,0,0.07)', 'line': 'rgba(0,0,0,0.10)'}
+
+ACCEPT, DECLINE, ALWAYS = 0, 1, 2
+
+
+def appearance():
+    try:
+        with open(APPLIED) as f:
+            return DARK if f.read().strip() == 'dark' else LIGHT
+    except OSError:
+        return LIGHT
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
+    parser.add_argument('--from', dest='sender', default='Unknown device')
+    parser.add_argument('--what', default='a file')
+    parser.add_argument('--size', default='')
+    parser.add_argument('--address', default='')
+    args = parser.parse_args()
+
+    colors = appearance()
+    answer = {'value': DECLINE}
+
+    win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
+    win.set_decorated(False)
+    win.set_skip_taskbar_hint(True)
+    win.set_skip_pager_hint(True)
+    win.set_keep_above(True)
+    win.set_resizable(False)
+    win.set_accept_focus(True)
+    win.set_type_hint(Gdk.WindowTypeHint.DIALOG)
+    win.set_position(Gtk.WindowPosition.CENTER_ALWAYS)
+
+    css = Gtk.CssProvider()
+    css.load_from_data(f"""
+        window {{ background-color: {colors['bg']}; border-radius: 12px; }}
+        label {{ color: {colors['fg']}; }}
+        label.sub {{ color: {colors['dim']}; font-size: 11px; }}
+        label.title {{ font-weight: 600; font-size: 14px; }}
+        label.what {{ font-size: 12px; }}
+        button {{
+            color: {colors['fg']};
+            background-image: none;
+            background-color: transparent;
+            border: 1px solid {colors['line']};
+            border-radius: 9px;
+            padding: 7px 16px;
+            box-shadow: none;
+        }}
+        button:hover {{ background-color: {colors['hover']}; }}
+        button.suggested {{ background-color: #0a84ff; color: #ffffff;
+                            border-color: #0a84ff; }}
+        button.quiet {{ border: none; color: {colors['dim']}; font-size: 11px; }}
+    """.encode())
+    Gtk.StyleContext.add_provider_for_screen(
+        Gdk.Screen.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+    for side in ('top', 'bottom', 'start', 'end'):
+        getattr(box, f'set_margin_{side}')(18)
+    win.add(box)
+
+    title = Gtk.Label(label=f'{args.sender} wants to send you a file', xalign=0)
+    title.get_style_context().add_class('title')
+    box.pack_start(title, False, False, 0)
+
+    detail = args.what if not args.size else f'{args.what} · {args.size}'
+    what = Gtk.Label(label=detail, xalign=0)
+    what.get_style_context().add_class('what')
+    what.set_max_width_chars(44)
+    what.set_ellipsize(3)                      # Pango.EllipsizeMode.END
+    box.pack_start(what, False, False, 0)
+
+    if args.address:
+        where = Gtk.Label(label=args.address, xalign=0)
+        where.get_style_context().add_class('sub')
+        box.pack_start(where, False, False, 0)
+
+    def answer_with(value):
+        answer['value'] = value
+        Gtk.main_quit()
+
+    row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+    row.set_margin_top(8)
+    decline = Gtk.Button(label='Decline')
+    decline.connect('clicked', lambda _b: answer_with(DECLINE))
+    accept = Gtk.Button(label='Accept')
+    accept.get_style_context().add_class('suggested')
+    accept.connect('clicked', lambda _b: answer_with(ACCEPT))
+    row.pack_end(accept, False, False, 0)
+    row.pack_end(decline, False, False, 0)
+    box.pack_start(row, False, False, 0)
+
+    always = Gtk.Button(label=f'Always accept from {args.sender}')
+    always.get_style_context().add_class('quiet')
+    always.connect('clicked', lambda _b: answer_with(ALWAYS))
+    box.pack_start(always, False, False, 0)
+
+    def on_key(_w, event):
+        if event.keyval == Gdk.KEY_Escape:
+            answer_with(DECLINE)
+            return True
+        if event.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+            answer_with(ACCEPT)
+            return True
+        return False
+
+    win.connect('key-press-event', on_key)
+    win.connect('destroy', lambda *_: answer_with(DECLINE))
+    win.show_all()
+    accept.grab_focus()
+    win.present()
+    # Nothing clicked its way here, so nothing gave us a focus timestamp.
+    # Ask the window manager for one explicitly, or the prompt opens behind
+    # the window the user is looking at and they never see it.
+    gdk_win = win.get_window()
+    if gdk_win is not None:
+        gdk_win.focus(GLib.get_monotonic_time() // 1000 & 0xffffffff)
+
+    Gtk.main()
+    return answer['value']
+
+
+if __name__ == '__main__':
+    Gdk.set_program_class('mintbook-mintdrop')
+    sys.exit(main())

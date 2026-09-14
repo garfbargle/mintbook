@@ -1,0 +1,25 @@
+/* Mintbook greeter — the half of the login screen that slick-greeter.conf
+ * cannot reach. Installed to /var/lib/lightdm/.config/gtk-3.0/gtk.css by
+ * bin/login-install. See docs/login.md.
+ *
+ * Why this file exists at all: the greeter's `font-name` only ever reaches its
+ * menubar, and its `xft-dpi` changed nothing measurable at all. On a 226 dpi
+ * panel that leaves the name and the password prompt — the two things you
+ * actually look at — rendering at a desktop-of-2004 size. GTK reads a user
+ * stylesheet at a higher priority than the greeter's own, so this does reach
+ * them.
+ *
+ * `.lightdm` is the greeter's top-level window. The descendant half of the
+ * selector is not decoration: setting the size on the window alone moved the
+ * menubar and left the user list and the password prompt exactly where they
+ * were, because they carry a font of their own for inheritance to lose to.
+ *
+ * 23px is the session's own text: Inter 10 at the 168 dpi this desktop runs.
+ * Kept in device pixels deliberately — `pt` here would be resolved against the
+ * greeter's idea of the screen's dpi, which is the thing that is wrong. If the
+ * desktop's Xft DPI ever changes, this number is the one to change with it.
+ */
+.lightdm, .lightdm * {
+  font-family: Inter, sans-serif;
+  font-size: 23px;
+}

@@ -1,0 +1,20 @@
+<?xml version="1.0" standalone='no'?><!--*-nxml-*-->
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+
+<!-- How this machine says it can receive files.
+
+     A static file rather than an `avahi-publish` process: avahi-daemon is
+     already running for the rest of the system, so the advertisement costs
+     one file it reads at startup and no process of ours at all. The peer
+     picker browses for _mintdrop._tcp only while it is open.
+
+     Installed by bin/mintdrop-install, which needs root for this one file
+     and nothing else. -->
+<service-group>
+  <name replace-wildcards="yes">%h</name>
+  <service>
+    <type>_mintdrop._tcp</type>
+    <port>8771</port>
+    <txt-record>version=1</txt-record>
+  </service>
+</service-group>

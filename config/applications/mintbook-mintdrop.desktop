@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Mintdrop
+GenericName=Send a file to a device that is nearby
+Comment=Drag files onto a nearby device to send them
+Icon=document-send
+Exec=mintdrop-menu %F
+Terminal=false
+Categories=Network;FileTransfer;
+Keywords=airdrop;quickshare;nearby;share;send;transfer;
+StartupNotify=false
+MimeType=application/octet-stream;

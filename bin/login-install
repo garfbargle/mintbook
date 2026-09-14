@@ -1,0 +1,453 @@
+#!/usr/bin/env bash
+# login-install — give the login and unlock screen the desktop's own chrome.
+# Writes config/lightdm/slick-greeter.conf to /etc/lightdm, config/lightdm/
+# greeter.css to the lightdm user's GTK config, and puts the GTK and icon
+# themes somewhere the greeter can actually read them. See docs/login.md.
+#
+#   bin/login-install --check              what is set now, and what is in the way
+#   bin/login-install --preview [--dark]   the real greeter, in a nested X server
+#   sudo bin/login-install [--dark]        install
+#   sudo bin/login-install --revert        put back what was there before
+#
+# --check and --preview are the user's half and refuse to run as root; the
+# install is the root half. Nothing here restarts lightdm or logs anyone out:
+# the greeter reads this file when it starts, so the next lock is the next
+# time you see it.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+SRC="$ROOT/config/lightdm/slick-greeter.conf"
+CSS_SRC="$ROOT/config/lightdm/greeter.css"
+APPLY_SRC="$ROOT/bin/login-apply"
+SETTINGS_SRC="$ROOT/bin/login-settings"
+POLICY_SRC="$ROOT/config/polkit/org.mintbook.login.policy"
+RULES_SRC="$ROOT/config/polkit/10-mintbook-login.rules"
+DESKTOP_SRC="$ROOT/config/applications/mintbook-login.desktop"
+# The root half of the settings window: the path polkit authorises by name, so
+# it is spelled the same here, in the .policy, and in bin/login-settings.
+APPLY=/usr/local/sbin/mintbook-login-apply
+POLICY=/usr/share/polkit-1/actions/org.mintbook.login.policy
+RULES=/etc/polkit-1/rules.d/10-mintbook-login.rules
+CONF=/etc/lightdm/slick-greeter.conf
+# Where GTK looks for the greeter's user stylesheet: lightdm's own home, read
+# from passwd rather than assumed, because that is where the greeter's HOME
+# points and a distribution is free to put it somewhere else.
+CSS="$(getent passwd lightdm | cut -d: -f6)/.config/gtk-3.0/gtk.css"
+SCHEMA=x.dm.slick-greeter
+STATE=/var/lib/mintbook-login
+
+# The desktop's chrome. Both have to end up under /usr/share: the greeter runs
+# as `lightdm`, and a 0750 home is a wall it cannot climb. Light first, dark
+# second; --dark swaps the pair and the backdrop colour.
+THEME_LIGHT=WhiteSur-Light;  ICONS_LIGHT=WhiteSur-light;  COLOR_LIGHT='#e5e7ea'
+THEME_DARK=WhiteSur-Dark;    ICONS_DARK=WhiteSur-dark;     COLOR_DARK='#5b6069'
+
+die() { echo "$*" >&2; exit 1; }
+conf_get() { sed -n "s/^$1=//p" "$2" 2>/dev/null | head -1; }
+
+# The wallpaper the desktop is actually showing. Read out of the XML rather
+# than asked of xfconf, because the install half runs as root with no session
+# bus to ask on.
+desktop_wallpaper() {
+  local xml="$1/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-desktop.xml"
+  [ -r "$xml" ] || return 0
+  sed -n 's/.*name="last-image" type="string" value="\([^"]*\)".*/\1/p' "$xml" | head -1
+}
+
+# Can a process running as `lightdm` open this file? Every directory on the way
+# down has to be searchable by others, and the file readable by them. This is
+# the whole reason the wallpaper question is a question.
+readable_by_others() {
+  local path="$1" part
+  [ -f "$path" ] || return 1
+  [ "$(stat -c %A "$path" | cut -c8)" = r ] || return 1
+  part=$(dirname "$path")
+  while :; do
+    [ "$(stat -c %A "$part" | cut -c10)" = x ] || return 1
+    [ "$part" = / ] && return 0
+    part=$(dirname "$part")
+  done
+}
+
+# The installed form of the file: the appearance pair, the backdrop colour, and
+# the wallpaper — or the colour again, when the wallpaper is out of the
+# greeter's reach. Both the install and the preview go through here, so what
+# you preview is the file you get.
+render_conf() {   # render_conf light|dark WALLPAPER|'' OUT
+  local dark=$1 wallpaper=$2 out=$3 theme icons color
+  if [ "$dark" = dark ]; then theme=$THEME_DARK; icons=$ICONS_DARK; color=$COLOR_DARK
+  else theme=$THEME_LIGHT; icons=$ICONS_LIGHT; color=$COLOR_LIGHT; fi
+  cp "$SRC" "$out"
+  sed -i "s|^background-color=.*|background-color=$color|; \
+          s|^theme-name=.*|theme-name=$theme|; \
+          s|^icon-theme-name=.*|icon-theme-name=$icons|; \
+          s|^background=.*|background=${wallpaper:-$color}|" "$out"
+}
+
+# ---------------------------------------------------------------- check
+
+do_check() {
+  local wallpaper theme icons
+  echo "greeter"
+  if command -v slick-greeter >/dev/null || [ -x /usr/sbin/slick-greeter ]; then
+    echo "  slick-greeter  $(dpkg-query -W -f='${Version}' slick-greeter 2>/dev/null || echo present)"
+  else
+    echo "  slick-greeter  MISSING — this installer has nothing to configure"
+  fi
+  if [ -x /usr/sbin/light-locker ] || command -v light-locker >/dev/null; then
+    echo "  light-locker   present — the lock screen is this same greeter"
+  fi
+  echo
+  echo "config  $CONF"
+  if [ -f "$CONF" ]; then
+    local differs=0 key want have
+    while IFS= read -r key; do
+      want=$(conf_get "$key" "$SRC"); have=$(conf_get "$key" "$CONF")
+      if [ "$want" != "$have" ]; then
+        printf '  %-34s %s  (mintbook: %s)\n' "$key" "${have:-unset}" "$want"; differs=1
+      fi
+    done < <(sed -n 's/^\([a-z-]*\)=.*/\1/p' "$SRC")
+    if [ "$differs" = 0 ]; then
+      echo "  matches config/lightdm/slick-greeter.conf, except any --dark or wallpaper edit"
+    fi
+  else
+    echo "  absent — the greeter is on its Mint defaults (Mint-Y-Aqua, Ubuntu 11, 96 dpi, cursor 24)"
+  fi
+  echo
+  echo "stylesheet  $CSS"
+  if [ -r "$CSS" ]; then
+    if cmp -s "$CSS" "$CSS_SRC"; then echo "  matches config/lightdm/greeter.css"
+    else echo "  present, and not the one in config/lightdm/greeter.css"; fi
+  elif [ -r "$(dirname "$(dirname "$CSS")")" ]; then
+    echo "  absent — the user list and the password prompt render at the greeter's own size"
+  elif grep -qx "$CSS" "$STATE/installed" 2>/dev/null; then
+    echo "  installed (lightdm's home is 0750, so this is the record rather than the file)"
+  else
+    echo "  unknown — lightdm's home is 0750 and this is not root"
+  fi
+  echo
+  echo "settings window"
+  if [ -x "$APPLY" ] && [ -f "$POLICY" ]; then
+    echo "  installed — Login Screen in the app grid, or bin/login-settings"
+    [ -f "$RULES" ] || echo "  $RULES missing: every change will ask for a password"
+  else
+    echo "  not installed — choosing a picture still means editing $CONF by hand"
+  fi
+  echo
+  echo "themes  the greeter reads /usr/share only"
+  for theme in "$THEME_LIGHT" "$THEME_DARK"; do
+    if [ -d "/usr/share/themes/$theme" ]; then echo "  /usr/share/themes/$theme  present"
+    elif [ -d "$HOME/.themes/$theme" ]; then echo "  $theme  in ~/.themes only — the install copies it"
+    else echo "  $theme  not installed"; fi
+  done
+  for icons in "$ICONS_LIGHT" "$ICONS_DARK"; do
+    if [ -d "/usr/share/icons/$icons" ]; then echo "  /usr/share/icons/$icons  present"
+    elif [ -d "$HOME/.icons/$icons" ]; then echo "  $icons  in ~/.icons only — the install copies it"
+    else echo "  $icons  not installed"; fi
+  done
+  echo
+  wallpaper=$(desktop_wallpaper "$HOME")
+  echo "wallpaper  ${wallpaper:-none set}"
+  if [ -n "$wallpaper" ]; then
+    if readable_by_others "$wallpaper"; then echo "  readable by lightdm — the greeter gets the desktop's own backdrop"
+    else echo "  NOT readable by lightdm — the greeter falls back to the flat colour"; fi
+  fi
+  if [ -f "$STATE/installed" ]; then
+    echo
+    echo "installed by this script"
+    sed 's/^/  /' "$STATE/installed"
+  fi
+}
+
+# ---------------------------------------------------------------- preview
+
+# The real greeter, driven by a real lightdm, on a nested display. Everything
+# here is the way it is because of something that was got wrong first.
+#
+# `slick-greeter --test-mode` is the obvious way to do this and it is a trap:
+# it invents two monitors (800x600 and 640x480) and a list of fixture users —
+# "Color Background", "Has Password", "Long name (far far too long to fit)" —
+# so what you get is a cramped, split, unrecognisable screen that says nothing
+# about your login screen. Running lightdm itself in its own test mode shows
+# one monitor, the real user list, and the real layout at the panel's real
+# size.
+#
+# Nothing here needs root. lightdm runs unprivileged with its own run, log and
+# cache directories, and /etc/lightdm is replaced inside a bwrap mount
+# namespace, so the real one is never written. The greeter resets every setting
+# it does not find in that file, which is why the file has to be *there* rather
+# than in GSettings.
+#
+# The teardown is deliberate and was learned the hard way: bwrap without
+# --die-with-parent is not the parent of what it starts, so killing it left
+# lightdm and Xephyr running, the next run quietly moved to the next display,
+# and previews piled up on screen to be closed by hand. Hence the PID
+# namespace, the process group, the display number read from the log rather
+# than assumed, and a teardown that checks whether the display still answers
+# instead of trusting that it does not.
+#
+# The one piece of sleight of hand: the greeter does not read its settings
+# from the file directly. It copies them into dconf — "Overriding dconf setting
+# for background with ..." in its log — and reads them back, and that write
+# goes over D-Bus while the read comes straight off the mapped database. The
+# read can win. In the real greeter that hardly matters, because lightdm's own
+# dconf already holds yesterday's answer; in a preview running as you it means
+# the frame shows whatever your dconf happened to contain, which is how three
+# captures in a row here came out identical and wrong. So the values go into
+# both places, and the cleanup puts your dconf back.
+#
+# Two things it still cannot tell you. It runs as you, so it can read a theme
+# in ~/.themes that the real greeter could not — that is what --check is for.
+# And while its window has focus it grabs the keyboard, and its password field
+# is a real PAM conversation: do not type into it.
+do_preview() {
+  local shot="" size=2304x1440 mode=light etc disp="" n stale wp
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dark) mode=dark; shift ;;
+      --shot) shot="${2:?--shot needs a path}"; shift 2 ;;
+      --size) size="${2:?--size needs WxH}"; shift 2 ;;
+      *) die "usage: $0 --preview [--dark] [--size WxH] [--shot file.png]" ;;
+    esac
+  done
+  for tool in Xephyr bwrap xset lightdm; do
+    command -v "$tool" >/dev/null || die "needs $tool"
+  done
+  [ -x /usr/sbin/slick-greeter ] || die 'no /usr/sbin/slick-greeter'
+
+  PREVIEW_TMP=$(mktemp -d)
+  etc="$PREVIEW_TMP/etc"
+  mkdir -p "$etc" "$PREVIEW_TMP/run" "$PREVIEW_TMP/log" "$PREVIEW_TMP/cache"
+  cp -a /etc/lightdm/. "$etc/" 2>/dev/null || true
+  wp=$(desktop_wallpaper "$HOME")
+  render_conf "$mode" "$wp" "$etc/slick-greeter.conf"
+
+  # lightdm's test mode hardcodes `Xephyr` and drops whatever xserver-command
+  # says, so the size comes from a shim bound over the binary instead.
+  : > "$PREVIEW_TMP/realXephyr"
+  cat > "$PREVIEW_TMP/shim" <<SHIM
+#!/bin/sh
+exec "$PREVIEW_TMP/realXephyr" "\$@" -screen $size -title "mintbook login preview"
+SHIM
+  chmod +x "$PREVIEW_TMP/shim"
+  cat > "$etc/lightdm.conf" <<CONF
+[LightDM]
+minimum-display-number=20
+start-default-seat=true
+[Seat:*]
+greeter-session=slick-greeter
+user-session=xfce
+CONF
+
+  while IFS='=' read -r key value; do
+    case "$key" in ''|\#*) continue ;; esac
+    gsettings set "$SCHEMA" "$key" "${value:-\'\'}" 2>/dev/null || true
+  done < <(sed -n '/^\[Greeter\]/,$p' "$etc/slick-greeter.conf" |
+           sed -n 's/^\([a-z-]*=.*\)/\1/p')
+
+  trap 'preview_cleanup' EXIT INT TERM
+  setsid bwrap --dev-bind / / --unshare-pid --die-with-parent --proc /proc \
+        --ro-bind "$etc" /etc/lightdm \
+        --ro-bind "$CSS_SRC" "$HOME/.config/gtk-3.0/gtk.css" \
+        --ro-bind /usr/bin/Xephyr "$PREVIEW_TMP/realXephyr" \
+        --ro-bind "$PREVIEW_TMP/shim" /usr/bin/Xephyr -- \
+    lightdm --test-mode --debug --run-dir "$PREVIEW_TMP/run" \
+            --log-dir "$PREVIEW_TMP/log" --cache-dir "$PREVIEW_TMP/cache" \
+            > "$PREVIEW_TMP/out.log" 2>&1 &
+  PREVIEW_PID=$!
+
+  for _ in $(seq 60); do
+    disp=$(sed -n 's/.*XServer \([0-9]*\): Logging to.*/:\1/p' "$PREVIEW_TMP/out.log" 2>/dev/null | head -1)
+    [ -n "$disp" ] && xset -display "$disp" q >/dev/null 2>&1 && break
+    disp=""
+    sleep 0.5
+  done
+  [ -n "$disp" ] || die "the greeter did not come up; see $PREVIEW_TMP/out.log"
+  PREVIEW_DISP=$disp
+
+  if [ -n "$shot" ]; then
+    sleep 5
+    DISPLAY="$disp" python3 - "$shot" <<'PY'
+import sys, gi
+gi.require_version('Gdk', '3.0')
+from gi.repository import Gdk
+w = Gdk.get_default_root_window()
+Gdk.pixbuf_get_from_window(w, 0, 0, w.get_width(), w.get_height()).savev(sys.argv[1], 'png', [], [])
+PY
+    echo "wrote $shot"
+  else
+    echo "preview running on $disp ($mode). Do not type into it — that password"
+    echo "box is a real PAM conversation. Press Enter here to close it."
+    read -r _ || true
+  fi
+}
+
+# Take the whole tree down, and say whether it actually went. A socket path is
+# not a server: SIGKILL leaves both it and the lock file behind, and a stale
+# lock is enough to stop the next run claiming the display.
+preview_cleanup() {
+  trap - EXIT INT TERM
+  if [ -n "${PREVIEW_PID:-}" ]; then
+    kill -TERM -- "-$PREVIEW_PID" 2>/dev/null || kill "$PREVIEW_PID" 2>/dev/null || true
+    sleep 2
+    kill -KILL -- "-$PREVIEW_PID" 2>/dev/null || true
+  fi
+  if [ -n "${PREVIEW_DISP:-}" ]; then
+    local n=${PREVIEW_DISP#:}
+    for _ in $(seq 20); do
+      xset -display "$PREVIEW_DISP" q >/dev/null 2>&1 || break
+      sleep 0.5
+    done
+    if xset -display "$PREVIEW_DISP" q >/dev/null 2>&1; then
+      echo "WARNING: $PREVIEW_DISP still answers — something survived the teardown" >&2
+    else
+      for stale in "/tmp/.X11-unix/X$n" "/tmp/.X$n-lock"; do
+        if [ -O "$stale" ]; then rm -f "$stale"; fi
+      done
+    fi
+  fi
+  if [ -n "${PREVIEW_TMP:-}" ]; then rm -rf "$PREVIEW_TMP"; fi
+  gsettings reset-recursively "$SCHEMA" 2>/dev/null || true
+  return 0
+}
+
+# ---------------------------------------------------------------- install
+
+do_install() {
+  local dark=$1 uid user home wallpaper theme icons color tmp src path required
+  uid=${PKEXEC_UID:-${SUDO_UID:-1000}}
+  user=$(getent passwd "$uid" | cut -d: -f1)
+  home=$(getent passwd "$uid" | cut -d: -f6)
+  [ -n "$user" ] && [ "$uid" -ge 1000 ] || die 'Need the desktop user'
+  [ -x /usr/sbin/slick-greeter ] || die 'no /usr/sbin/slick-greeter — nothing to configure'
+
+  if [ "$dark" = dark ]; then theme=$THEME_DARK; icons=$ICONS_DARK; color=$COLOR_DARK
+  else theme=$THEME_LIGHT; icons=$ICONS_LIGHT; color=$COLOR_LIGHT; fi
+
+  install -dm755 "$STATE"
+  # One backup, of whatever was there the first time. Re-running must not
+  # overwrite it with our own file and lose the original.
+  if [ ! -e "$STATE/complete" ]; then
+    if [ -f "$CONF" ]; then cp -a "$CONF" "$STATE/slick-greeter.conf.before"; fi
+    : > "$STATE/installed"
+  fi
+
+  # The copy that costs. /usr/share is the only place the greeter can read a
+  # theme from, so a theme kept in ~/.themes has to be duplicated there, and
+  # the duplicate does not follow the original when it is updated. Re-running
+  # this re-syncs it; docs/login.md says so out loud.
+  for src in "themes/$theme" "icons/$icons"; do
+    if [ -d "$home/.$src" ]; then
+      if [ -d "/usr/share/$src" ] && ! grep -qx "/usr/share/$src" "$STATE/installed" 2>/dev/null; then
+        echo "keeping the system $src that was already there"
+      else
+        rm -rf "/usr/share/$src"
+        cp -a "$home/.$src" "/usr/share/$src"
+        chmod -R a+rX "/usr/share/$src"
+        grep -qx "/usr/share/$src" "$STATE/installed" 2>/dev/null || echo "/usr/share/$src" >> "$STATE/installed"
+      fi
+    elif [ ! -d "/usr/share/$src" ]; then
+      die "no $src in $home/.$src or /usr/share — install the theme first"
+    fi
+  done
+
+  wallpaper=$(desktop_wallpaper "$home")
+  if [ -n "$wallpaper" ] && ! runuser -u lightdm -- test -r "$wallpaper" 2>/dev/null; then
+    echo "the greeter cannot read $wallpaper (it runs as lightdm, and your home is $(stat -c %A "$home"))."
+    echo "leaving the backdrop on the flat $color. Put the wallpaper under /usr/share to use it."
+    wallpaper=""
+  fi
+
+  tmp=$(mktemp)
+  render_conf "$dark" "$wallpaper" "$tmp"
+  install -m644 "$tmp" "$CONF"
+  rm -f "$tmp"
+
+  if [ -f "$CSS" ] && [ ! -e "$STATE/gtk.css.before" ] && ! cmp -s "$CSS" "$CSS_SRC"; then
+    cp -a "$CSS" "$STATE/gtk.css.before"
+  fi
+  install -o lightdm -g lightdm -dm755 "$(dirname "$CSS")"
+  install -o lightdm -g lightdm -m644 "$CSS_SRC" "$CSS"
+  grep -qx "$CSS" "$STATE/installed" 2>/dev/null || echo "$CSS" >> "$STATE/installed"
+
+  # The settings window and the root helper it reaches through pkexec. The
+  # window itself is the user's, and is installed as theirs.
+  install -m755 "$APPLY_SRC" "$APPLY"
+  install -m644 "$POLICY_SRC" "$POLICY"
+  install -m644 "$RULES_SRC" "$RULES"
+  install -o "$user" -g "$user" -dm755 "$home/.local/bin" "$home/.local/share/applications"
+  install -o "$user" -g "$user" -m755 "$SETTINGS_SRC" "$home/.local/bin/login-settings"
+  install -o "$user" -g "$user" -m755 "$ROOT/bin/wallpaper-mode" "$home/.local/bin/wallpaper-mode"
+  install -o "$user" -g "$user" -m644 "$DESKTOP_SRC" \
+          "$home/.local/share/applications/mintbook-login.desktop"
+  for path in "$APPLY" "$POLICY" "$RULES" "$home/.local/bin/login-settings" \
+              "$home/.local/bin/wallpaper-mode" \
+              "$home/.local/share/applications/mintbook-login.desktop"; do
+    grep -qx "$path" "$STATE/installed" 2>/dev/null || echo "$path" >> "$STATE/installed"
+  done
+  touch "$STATE/complete"
+
+  # The conf is not enough on its own: the greeter copies these into lightdm's
+  # dconf and reads them back, and a stale dconf wins that race. See the note
+  # in bin/login-apply.
+  "$APPLY_SRC" --sync || true
+
+  echo "Wrote $CONF ($dark)."
+  echo "Nothing was restarted. Lock the screen to see it: light-locker starts the same greeter."
+  echo "To change the picture later: open Login Screen, or run login-settings."
+}
+
+do_revert() {
+  [ -e "$STATE/complete" ] || die 'No installation to revert'
+  if [ -f "$STATE/slick-greeter.conf.before" ]; then
+    install -m644 "$STATE/slick-greeter.conf.before" "$CONF"
+    echo "Restored the previous $CONF."
+  else
+    rm -f "$CONF"
+    echo "Removed $CONF; the greeter goes back to its Mint defaults."
+  fi
+  while IFS= read -r path; do
+    if [ -n "$path" ]; then rm -rf "$path"; echo "Removed $path"; fi
+  done < "$STATE/installed"
+  # Pictures copied out of an unreadable home by mintbook-login-apply. They
+  # exist only because the greeter could not read the original, and nothing
+  # else refers to them.
+  if [ -d /usr/share/mintbook/backgrounds ]; then
+    rm -rf /usr/share/mintbook/backgrounds
+    rmdir --ignore-fail-on-non-empty /usr/share/mintbook 2>/dev/null || true
+    echo "Removed the copied login backgrounds"
+  fi
+  if [ -f "$STATE/gtk.css.before" ]; then
+    install -o lightdm -g lightdm -m644 "$STATE/gtk.css.before" "$CSS"
+    echo "Restored the previous $CSS."
+  fi
+  rm -f "$STATE/complete" "$STATE/installed" "$STATE/slick-greeter.conf.before" "$STATE/gtk.css.before"
+}
+
+# ---------------------------------------------------------------- dispatch
+
+for required in "$SRC" "$CSS_SRC" "$APPLY_SRC" "$SETTINGS_SRC" "$POLICY_SRC" \
+                "$RULES_SRC" "$DESKTOP_SRC"; do
+  [ -f "$required" ] || die "Missing $required"
+done
+case "${1:-}" in
+  --check|--preview)
+    [ "$(id -u)" -ne 0 ] || die 'run --check and --preview as yourself, not root'
+    mode=$1; shift
+    if [ "$mode" = --check ]; then
+      [ $# -eq 0 ] || die 'usage: login-install --check'
+      do_check
+    else
+      do_preview "$@"
+    fi
+    ;;
+  --revert)
+    [ "$(id -u)" -eq 0 ] || die "run as root: sudo $0 --revert"
+    do_revert
+    ;;
+  ''|--dark)
+    [ "$(id -u)" -eq 0 ] || die "run as root: sudo $0 ${1:-}"
+    do_install "$([ "${1:-}" = --dark ] && echo dark || echo light)"
+    ;;
+  *) die "usage: $0 [--dark|--check|--preview|--revert]" ;;
+esac

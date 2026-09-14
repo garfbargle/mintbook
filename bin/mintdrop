@@ -1,0 +1,775 @@
+#!/usr/bin/env python3
+"""mintdrop — send a file to a machine that is nearby, and receive one.
+
+    mintdrop peers                       what is nearby
+    mintdrop send "Studio iMac" a.pdf    send to a peer by name, address or ip
+    mintdrop send --pick a.pdf           open the picker and choose
+    mintdrop receive                     one connection, from socket activation
+    mintdrop serve                       stand-alone listener, for machines
+                                         without the systemd user socket
+    mintdrop status                      is the socket armed, what is advertised
+
+Nothing here runs when nothing is happening. `receive` is started by
+systemd's socket unit at the moment a connection arrives and exits when the
+file has landed, and the advertisement is a static file avahi-daemon already
+serves. Idle cost is a listening socket in the kernel and no process at all —
+which is the shape CONTRIBUTING rule 3 asks for, reached by not having a
+daemon rather than by making one cheap.
+"""
+import argparse
+import importlib.machinery
+import json
+import importlib.util
+import os
+import resource
+import socket
+import subprocess
+import sys
+import time
+
+
+def _load():
+    here = os.path.dirname(os.path.realpath(__file__))
+    loader = importlib.machinery.SourceFileLoader(
+        'mintbook_drop', os.path.join(here, 'mintbook_drop.py'))
+    module = importlib.util.module_from_spec(
+        importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(module)
+    return module
+
+
+drop = _load()
+DropError = drop.DropError
+
+KNOWN = f'{drop.HOME}/.config/mintbook/mintdrop.known'
+PROMPT_SECONDS = 45
+
+
+def log(message):
+    """Receiving happens with no terminal attached; the journal is the log."""
+    print(message, file=sys.stderr, flush=True)
+
+
+def stat(**fields):
+    """One machine-readable line per phase, for bin/mintdrop-probe.
+
+    Only when MINTDROP_STAT is set. It went to stderr unconditionally at
+    first, which put a line of JSON under every ordinary `mintdrop send` —
+    debugging output in a tool someone is using, which is noise.
+
+    The probe used to time the two processes from the outside, which meant it
+    was mostly timing two Python interpreters starting up — about 0.6 s of CPU
+    that has nothing to do with the copy and was large enough to hide the
+    difference between the two receive paths entirely. These numbers bracket
+    the bulk loop and nothing else.
+    """
+    if not os.environ.get('MINTDROP_STAT'):
+        return
+    print('mintdrop-stat ' + json.dumps(fields), file=sys.stderr, flush=True)
+
+
+def cpu_seconds():
+    used = resource.getrusage(resource.RUSAGE_SELF)
+    return used.ru_utime + used.ru_stime
+
+
+def notify(summary, body='', action_dir=None):
+    argv = ['notify-send', '-a', 'Mintdrop', '-i', 'document-send', summary]
+    if body:
+        argv.append(body)
+    try:
+        subprocess.run(argv, timeout=5, check=False)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+# ---------------------------------------------------------------------------
+# receiving
+# ---------------------------------------------------------------------------
+
+def inherited_socket():
+    """The connection systemd handed us.
+
+    Accept=yes spawns one instance per connection. Which descriptor it lands
+    on has moved over systemd's life — fd 3 with LISTEN_FDS set, or stdin in
+    the inetd shape — so this asks both rather than believing either.
+    """
+    if os.environ.get('LISTEN_FDS'):
+        try:
+            return socket.socket(fileno=3)
+        except OSError:
+            pass
+    try:
+        sock = socket.socket(fileno=0)
+        sock.getpeername()
+        return sock
+    except OSError:
+        return None
+
+
+def known_senders():
+    try:
+        with open(KNOWN) as f:
+            return {line.strip() for line in f if line.strip()
+                    and not line.startswith('#')}
+    except OSError:
+        return set()
+
+
+def remember(name):
+    os.makedirs(os.path.dirname(KNOWN), exist_ok=True)
+    with open(KNOWN, 'a') as f:
+        f.write(name + '\n')
+
+
+def ask_prompt(name, summary, total, peer_ip):
+    """Show the glass prompt. Shared by both protocols — a receiver that
+    writes files because a stranger asked is a bug with a filename, whichever
+    protocol the stranger speaks."""
+    prompt = os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                          'mintdrop-accept')
+    if not os.access(prompt, os.X_OK):
+        prompt = os.path.expanduser('~/.local/bin/mintdrop-accept')
+    argv = [prompt, '--from', name, '--what', summary,
+            '--size', drop.human(total), '--address', peer_ip]
+    try:
+        result = subprocess.run(argv, timeout=PROMPT_SECONDS, check=False)
+    except subprocess.TimeoutExpired:
+        log('declined: nobody answered the prompt')
+        return False
+    except OSError as exc:
+        log(f'declined: no prompt available ({exc.strerror})')
+        return False
+    if result.returncode == 2:
+        remember(name)
+        return True
+    return result.returncode == 0
+
+
+def ask(name, files, total, peer_ip):
+    """Accept, decline, or accept and remember.
+
+    A receiver that writes files to disk because a stranger asked is a bug
+    with a filename, so the default answer is no: the prompt times out into a
+    decline, a prompt that cannot be shown declines, and only `accept = off`
+    or a name already in mintdrop.known skips it.
+    """
+    policy = drop.config()['accept']
+    if policy == 'off':
+        return False
+    if policy == 'known' and name in known_senders():
+        log(f'accepting {name}: known sender')
+        return True
+
+    summary = files[0]['name'] if len(files) == 1 else f'{len(files)} files'
+    return ask_prompt(name, summary, total, peer_ip)
+
+
+def looks_like_quickshare(sock):
+    """Peek at the first four bytes without consuming them.
+
+    'MNTD' is mintdrop. Anything else on this port is a phone: Quick Share
+    opens with a length-prefixed protobuf, and a 4-byte big-endian length can
+    never spell MNTD. One socket, one systemd unit, two protocols — which is
+    why the magic was chosen to be dispatchable in the first place.
+    """
+    try:
+        head = sock.recv(4, socket.MSG_PEEK)
+    except OSError:
+        return False
+    return len(head) == 4 and head != drop.MAGIC
+
+
+def receive_quickshare(sock, peer_ip):
+    """Hand this connection to the Quick Share server."""
+    qs = quickshare()
+
+    def gate(sender, files, total):
+        summary = (files[0].name if len(files) == 1
+                   else f'{len(files)} files')
+        log(f'offer from {sender} ({peer_ip}): {summary}, {drop.human(total)}')
+        if drop.config()['accept'] == 'off':
+            return False
+        if drop.config()['accept'] == 'known' and sender in known_senders():
+            return True
+        return ask_prompt(sender, summary, total, peer_ip)
+
+    started = time.monotonic()
+    landed = qs.receive_from_phone(sock, ask=gate)
+    if not landed:
+        log('declined')
+        return 0
+    seconds = max(time.monotonic() - started, 1e-6)
+    total = sum(os.stat(p).st_size for p in landed)
+    what = (os.path.basename(landed[0]) if len(landed) == 1
+            else f'{len(landed)} files')
+    log(f'received {what} ({drop.human(total)})')
+    notify(f'Received {what}', f'From a nearby phone · {drop.human(total)}')
+    return 0
+
+
+def receive_on(sock, use_splice=True, auto=False):
+    """One transfer, start to finish, on an already-connected socket.
+
+    `auto` skips the prompt. It is reachable only from `serve --yes`, which
+    exists for bin/mintdrop-probe and the tests — never from an installed
+    unit, because a receiver that accepts silently is the thing the prompt is
+    there to prevent.
+    """
+    peer = sock.getpeername()
+    peer_ip = drop.unmap(peer[0])
+    if not drop.is_local_address(peer_ip):
+        log(f'refused {peer_ip}: not a local address')
+        return 1
+    if looks_like_quickshare(sock):
+        return receive_quickshare(sock, peer_ip)
+
+    sock.settimeout(60)
+    name, files, total = drop.read_header(sock)
+    log(f'offer from {name} ({peer_ip}): {len(files)} file(s), '
+        f'{drop.human(total)}')
+
+    if not (auto or ask(name, files, total, peer_ip)):
+        sock.sendall(drop.DECLINE)
+        log('declined')
+        return 0
+    sock.sendall(drop.ACCEPT)
+
+    # Back to blocking for the bulk phase: splice() needs it, and the stall
+    # deadline moves to the poll() inside the splicer.
+    sock.setblocking(True)
+    directory = drop.download_dir()
+    os.makedirs(directory, exist_ok=True)
+    splicer = drop.Splicer() if use_splice else None
+    started = time.monotonic()
+    cpu0 = cpu_seconds()
+    landed = []
+    try:
+        for entry in files:
+            final = drop.unique_path(directory, entry['name'])
+            partial = final + '.part'
+            fd = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            try:
+                drop.allocate(fd, entry['size'])
+                if splicer is not None:
+                    splicer.recv_to(sock, fd, entry['size'])
+                else:
+                    sock.settimeout(90)
+                    drop.recv_to_plain(sock, fd, entry['size'])
+                    sock.setblocking(True)
+                # Truncate away anything fallocate reserved past the end; a
+                # zero-length file that was preallocated would otherwise
+                # arrive the right size and the wrong length.
+                os.ftruncate(fd, entry['size'])
+            finally:
+                os.close(fd)
+            os.chmod(partial, 0o644)
+            os.rename(partial, final)
+            landed.append(final)
+            log(f'received {os.path.basename(final)}')
+        sock.sendall(drop.ACCEPT)
+    except (DropError, OSError) as exc:
+        # A failed transfer leaves nothing that looks finished behind.
+        try:
+            os.unlink(partial)
+        except (OSError, NameError, UnboundLocalError):
+            pass
+        log(f'failed: {exc}')
+        notify('Mintdrop transfer failed', str(exc))
+        return 1
+    finally:
+        if splicer is not None:
+            splicer.close()
+
+    seconds = max(time.monotonic() - started, 1e-6)
+    stat(phase='receive', bytes=total, seconds=seconds,
+         cpu=cpu_seconds() - cpu0, splice=bool(use_splice))
+    rate = total / seconds / (1 << 20)
+    log(f'{drop.human(total)} in {seconds:.2f}s ({rate:.1f} MB/s)')
+    what = (os.path.basename(landed[0]) if len(landed) == 1
+            else f'{len(landed)} files')
+    notify(f'Received {what}', f'From {name} · {drop.human(total)} '
+                               f'· {rate:.0f} MB/s')
+    return 0
+
+
+def cmd_receive(args):
+    sock = inherited_socket()
+    if sock is None:
+        log('mintdrop receive: no connection on stdin or fd 3 — '
+            'run `mintdrop serve` for a stand-alone listener')
+        return 2
+    try:
+        return receive_on(sock, use_splice=not args.no_splice)
+    except DropError as exc:
+        log(f'failed: {exc}')
+        return 1
+    finally:
+        sock.close()
+
+
+def cmd_serve(args):
+    """A listener for machines without the systemd user socket.
+
+    Same code path per connection; it is the socket that is set up here rather
+    than by systemd. Serial on purpose — two transfers at once on one radio
+    are slower than the same two in a row, and the second sender gets a
+    'busy' byte instead of a stalled bar.
+    """
+    family = socket.AF_INET6
+    try:
+        listener = socket.socket(family, socket.SOCK_STREAM)
+        listener.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+    except OSError:
+        family = socket.AF_INET
+        listener = socket.socket(family, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(('' if family is socket.AF_INET else '::', args.port))
+    listener.listen(8)
+    log(f'mintdrop listening on {args.port}')
+    while True:
+        conn, _ = listener.accept()
+        conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        try:
+            receive_on(conn, use_splice=not args.no_splice, auto=args.yes)
+        except DropError as exc:
+            log(f'failed: {exc}')
+        finally:
+            conn.close()
+        if args.once:
+            return 0
+
+
+# ---------------------------------------------------------------------------
+# sending
+# ---------------------------------------------------------------------------
+
+class Bar:
+    """One line of progress, redrawn no more than 20 times a second.
+
+    A progress bar that repaints per megabyte costs more than the transfer on
+    a Core M with a terminal in front of it.
+    """
+
+    def __init__(self, total, quiet=False):
+        self.total = total
+        self.done = 0
+        self.last = 0.0
+        self.started = time.monotonic()
+        self.quiet = quiet or not sys.stderr.isatty()
+
+    def __call__(self, moved):
+        self.done += moved
+        now = time.monotonic()
+        if self.quiet or (now - self.last < 0.05 and self.done < self.total):
+            return
+        self.last = now
+        elapsed = max(now - self.started, 1e-6)
+        rate = self.done / elapsed / (1 << 20)
+        share = self.done / self.total if self.total else 1.0
+        width = 24
+        filled = int(share * width)
+        sys.stderr.write(f'\r  [{"█" * filled}{" " * (width - filled)}] '
+                         f'{share * 100:3.0f}%  {rate:5.1f} MB/s ')
+        sys.stderr.flush()
+
+    def finish(self):
+        if not self.quiet:
+            sys.stderr.write('\n')
+        return time.monotonic() - self.started
+
+
+def nudge():
+    """A BLE advertisement held for as long as we are looking.
+
+    Android sleeps its Nearby stack; without this a phone is simply not on
+    the air, and `mintdrop peers` truthfully reports nothing while a phone
+    sits a foot away. Degrades to a no-op without Bluetooth.
+    """
+    here = os.path.dirname(os.path.realpath(__file__))
+    loader = importlib.machinery.SourceFileLoader(
+        'mintbook_ble', os.path.join(here, 'mintbook_ble.py'))
+    try:
+        module = importlib.util.module_from_spec(
+            importlib.util.spec_from_loader(loader.name, loader))
+        loader.exec_module(module)
+        return module.BackgroundNudge()
+    except Exception:
+        import contextlib
+        return contextlib.nullcontext()
+
+
+def quickshare():
+    here = os.path.dirname(os.path.realpath(__file__))
+    loader = importlib.machinery.SourceFileLoader(
+        'mintbook_quickshare', os.path.join(here, 'mintbook_quickshare.py'))
+    module = importlib.util.module_from_spec(
+        importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(module)
+    return module
+
+
+def resolve_peer(target):
+    """A peer name, a hostname or an address — whatever the user typed.
+
+    Quick Share devices are searched alongside mintdrop ones: from here a
+    phone is just another name you can send to.
+    """
+    if target is None:
+        return None
+    peers = drop.discover()
+    try:
+        with nudge():
+            peers = peers + quickshare().discover()
+    except Exception:
+        pass
+    lowered = target.lower()
+    for peer in peers:
+        if peer['name'].lower() == lowered:
+            return peer
+    for peer in peers:
+        if peer['name'].lower().startswith(lowered):
+            return peer
+    # Not advertised, or avahi is not running on this side: treat it as a
+    # host. An IPv6 literal is full of colons, so the port only counts when
+    # it is bracketed — `[fe80::1]:8771` — or when there is exactly one colon
+    # in the whole string. Splitting naively sent every IPv6 peer the picker
+    # offered to a host called 'fe80' on port ':1:8771'.
+    if target.startswith('['):
+        host, _, rest = target[1:].partition(']')
+        port = rest.lstrip(':')
+    elif target.count(':') == 1:
+        host, _, port = target.partition(':')
+    else:
+        host, port = target, ''
+    try:
+        port = int(port) if port else drop.PORT
+        info = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except (OSError, ValueError):
+        return None
+    return {'name': host, 'address': info[0][4][0], 'port': port,
+            'family': '', 'interface': ''}
+
+
+def cmd_send(args):
+    files = []
+    for path in args.files:
+        path = os.path.abspath(os.path.expanduser(path))
+        if os.path.isdir(path):
+            print(f'mintdrop: {path} is a directory — zip it first',
+                  file=sys.stderr)
+            return 2
+        try:
+            size = os.stat(path).st_size
+        except OSError as exc:
+            print(f'mintdrop: {path}: {exc.strerror}', file=sys.stderr)
+            return 2
+        files.append({'path': path, 'name': os.path.basename(path),
+                      'size': size})
+    total = sum(f['size'] for f in files)
+
+    target = args.to
+    if args.pick or not target:
+        picker = os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                              'mintdrop-menu')
+        if not os.access(picker, os.X_OK):
+            picker = os.path.expanduser('~/.local/bin/mintdrop-menu')
+        try:
+            chosen = subprocess.run([picker, '--pick'], text=True,
+                                    capture_output=True, check=False)
+            target = chosen.stdout.strip() or None
+        except OSError:
+            target = None
+        if not target:
+            print('mintdrop: no peer chosen', file=sys.stderr)
+            return 1
+
+    peer = resolve_peer(target)
+    if peer is None:
+        print(f'mintdrop: no peer called {target}', file=sys.stderr)
+        return 1
+
+    print(f'{"Sending" if len(files) == 1 else f"Sending {len(files)} files"} '
+          f'{drop.human(total)} to {peer["name"]}', file=sys.stderr)
+
+    if peer.get('protocol') == 'quickshare':
+        return send_quickshare(peer, files, total, args)
+    try:
+        sock = drop.connect(peer['address'], peer['port'])
+    except OSError as exc:
+        print(f'mintdrop: cannot reach {peer["name"]}: {exc.strerror}',
+              file=sys.stderr)
+        return 1
+    try:
+        drop.write_header(sock, {
+            'name': drop.config()['name'] or drop.device_name(),
+            'files': [{'name': f['name'], 'size': f['size']} for f in files],
+        })
+        sock.settimeout(PROMPT_SECONDS + 15)
+        answer = drop.read_exactly(sock, 1)
+        if answer == drop.DECLINE:
+            print(f'{peer["name"]} declined', file=sys.stderr)
+            return 1
+        if answer != drop.ACCEPT:
+            print(f'{peer["name"]} is busy', file=sys.stderr)
+            return 1
+
+        sock.settimeout(None)
+        bar = Bar(total, quiet=args.quiet)
+        cpu0 = cpu_seconds()
+        for entry in files:
+            drop.send_file(sock, entry['path'], entry['size'], bar)
+        sock.settimeout(120)
+        drop.read_exactly(sock, 1)
+        seconds = bar.finish()
+        stat(phase='send', bytes=total, seconds=seconds,
+             cpu=cpu_seconds() - cpu0)
+    except DropError as exc:
+        print(f'\nmintdrop: {exc}', file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f'\nmintdrop: {exc.strerror}', file=sys.stderr)
+        return 1
+    finally:
+        sock.close()
+
+    rate = total / max(seconds, 1e-6) / (1 << 20)
+    print(f'Sent {drop.human(total)} in {seconds:.2f}s ({rate:.1f} MB/s)',
+          file=sys.stderr)
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# looking around
+# ---------------------------------------------------------------------------
+
+def send_quickshare(peer, files, total, args):
+    """Send to a phone. The protocol is in bin/mintbook_quickshare.py."""
+    qs = quickshare()
+    bar = Bar(total, quiet=args.quiet)
+    try:
+        sent, seconds = qs.send_files(
+            peer, [f['path'] for f in files],
+            on_wait=lambda: print('Waiting for the phone to accept…',
+                                  file=sys.stderr),
+            progress=bar)
+    except qs.ProtocolError as exc:
+        print(f'\nmintdrop: {exc}', file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f'\nmintdrop: {exc.strerror or exc}', file=sys.stderr)
+        return 1
+    bar.finish()
+    print(f'Sent {drop.human(sent)} in {seconds:.1f}s '
+          f'({sent / max(seconds, 1e-6) / (1 << 20):.1f} MB/s)', file=sys.stderr)
+    return 0
+
+
+def _on_bluetooth_connection(connection, peer):
+    """A phone opened the BLE channel. Say what it sent.
+
+    Nearby over L2CAP has its own packet framing on top of the channel, which
+    mintdrop does not speak yet — so for now this records what arrives rather
+    than pretending to answer it. The bytes are the thing worth having: they
+    say whether the phone is starting the same conversation the TCP path
+    already handles, or something else.
+    """
+    log(f'BLE channel opened by {peer}')
+    try:
+        connection.settimeout(20)
+        for _ in range(4):
+            packet = connection.recv(4096)
+            if not packet:
+                break
+            log(f'  <- {len(packet)} bytes: {packet[:64].hex(" ")}')
+    except OSError as exc:
+        log(f'  BLE channel closed: {exc}')
+
+
+def cmd_visible(args):
+    """Be a device a phone can pick, for a couple of minutes.
+
+    Three things, one identity:
+
+      * an mDNS record, re-announced, so the phone has a network address
+      * a Nearby advertisement header over BLE, so it lists this machine
+      * a GATT server holding the real advertisement, because a legacy BLE
+        packet cannot carry one
+
+    Deliberately *not* the fast-initiation beacon. That announces "somebody
+    here wants to send" — it is what a phone broadcasts while scanning, and
+    what mintdrop broadcasts when it is the one sending. Advertising both
+    roles at once got this machine listed exactly zero times, where the
+    header alone got it listed every time. They are opposite claims and the
+    phone believes the wrong one.
+    """
+    qs = quickshare()
+    name = drop.config()['name'] or drop.device_name()
+
+    # One identity for both advertisements, and the *same* one every time.
+    #
+    # The phone finds this machine over BLE and has to recognise the mDNS
+    # record as the same endpoint before it will connect over the network, so
+    # the two must agree. They must also agree with the last visibility
+    # window: a phone keeps discovered receivers in its share sheet for a
+    # while, and a new id per window means the entry somebody taps points at
+    # an endpoint that no longer exists — which fails instantly, with nothing
+    # reaching this machine at all.
+    #
+    # This was a fresh id for a while to dodge a name collision with the
+    # static file in /etc/avahi/services. That file is no longer installed,
+    # so the stored id — stable across boots — is usable again.
+    endpoint = qs.endpoint_id()
+    info = qs.endpoint_info(name)
+
+    here = os.path.dirname(os.path.realpath(__file__))
+    try:
+        loader = importlib.machinery.SourceFileLoader(
+            'mintbook_gatt', os.path.join(here, 'mintbook_gatt.py'))
+        gatt = importlib.util.module_from_spec(
+            importlib.util.spec_from_loader(loader.name, loader))
+        loader.exec_module(gatt)
+    except Exception as exc:
+        print(f'mintdrop: cannot be listed on a phone ({exc})', file=sys.stderr)
+        return 1
+
+    # Somewhere for the phone to connect. It connects over the medium it
+    # discovered us on, and that is BLE.
+    listener = None
+    psm = 0
+    try:
+        loader = importlib.machinery.SourceFileLoader(
+            'mintbook_l2cap', os.path.join(here, 'mintbook_l2cap.py'))
+        l2cap = importlib.util.module_from_spec(
+            importlib.util.spec_from_loader(loader.name, loader))
+        loader.exec_module(l2cap)
+        listener = l2cap.Listener(on_connect=_on_bluetooth_connection).start()
+        psm = listener.psm
+    except Exception as exc:
+        print(f'mintdrop: no BLE channel ({exc})', file=sys.stderr)
+
+    from gi.repository import GLib
+    listed = gatt.Listed(endpoint, info, psm=psm)
+    loop = GLib.MainLoop()
+    try:
+        with qs.Announcement(name, endpoint=endpoint, info=info):
+            print(f'Announcing "{name}" to nearby phones for {args.seconds}s',
+                  file=sys.stderr)
+            print(f'  endpoint {endpoint} on {drop.PORT}'
+                  + (f', BLE channel psm 0x{psm:02x}' if psm else ''),
+                  file=sys.stderr)
+            listed.start(
+                on_ready=lambda: print(f'  listed over BLE — pick "{name}" '
+                                       f'on the phone', file=sys.stderr),
+                on_error=lambda exc: print(f'  not listed: {exc}',
+                                           file=sys.stderr))
+            GLib.timeout_add_seconds(args.seconds, loop.quit)
+            try:
+                loop.run()
+            except KeyboardInterrupt:
+                pass
+    except gatt.NotAvailable as exc:
+        print(f'mintdrop: cannot advertise — {exc}', file=sys.stderr)
+        print('         turn Bluetooth on in Control Center', file=sys.stderr)
+        return 1
+    finally:
+        if listed.reads:
+            print(f'  a phone read the advertisement {listed.reads} time(s)',
+                  file=sys.stderr)
+        if listener is not None:
+            if listener.connections:
+                print(f'  a phone opened the BLE channel '
+                      f'{listener.connections} time(s)', file=sys.stderr)
+            listener.stop()
+        listed.stop()
+    print('No longer advertising.', file=sys.stderr)
+    return 0
+
+
+def cmd_peers(args):
+    peers = drop.discover(args.wait)
+    try:
+        with nudge():
+            peers = peers + quickshare().discover()
+    except Exception as exc:
+        # Not silent. A bare pass here hid a broken Quick Share lookup behind
+        # a truthful-looking "No devices nearby", which is the most
+        # expensive kind of wrong answer.
+        print(f'mintdrop: Quick Share discovery failed: {exc}',
+              file=sys.stderr)
+    if not peers:
+        print('No devices nearby.', file=sys.stderr)
+        return 1
+    for peer in peers:
+        print(f'{peer["name"]}\t{peer["address"]}\t{peer["port"]}'
+              f'\t{peer.get("protocol", "mintdrop")}')
+    return 0
+
+
+def cmd_status(args):
+    unit = subprocess.run(['systemctl', '--user', 'is-active',
+                           'mintbook-drop.socket'], text=True,
+                          capture_output=True, check=False)
+    state = unit.stdout.strip() or 'not installed'
+    print(f'receiver        {state} (port {drop.PORT})')
+    print(f'this device     {drop.config()["name"] or drop.device_name()}')
+    print(f'accept policy   {drop.config()["accept"]}')
+    print(f'downloads to    {drop.download_dir()}')
+    advert = '/etc/avahi/services/mintdrop.service'
+    print(f'advertised      {"yes" if os.path.exists(advert) else "no"}'
+          f' ({advert})')
+    peers = drop.discover()
+    print(f'nearby          {", ".join(p["name"] for p in peers) or "nothing"}')
+    return 0
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        prog='mintdrop', description=__doc__.split('\n\n')[0],
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = parser.add_subparsers(dest='command')
+
+    send = sub.add_parser('send', help='send files to a nearby device')
+    send.add_argument('to', nargs='?', help='peer name, hostname or address')
+    send.add_argument('files', nargs='+')
+    send.add_argument('--pick', action='store_true',
+                      help='choose the peer in the picker')
+    send.add_argument('--quiet', action='store_true')
+    send.set_defaults(func=cmd_send)
+
+    recv = sub.add_parser('receive', help='handle one socket-activated connection')
+    recv.add_argument('--no-splice', action='store_true',
+                      help='use a user-space buffer instead of splice()')
+    recv.set_defaults(func=cmd_receive)
+
+    serve = sub.add_parser('serve', help='stand-alone listener')
+    serve.add_argument('--port', type=int, default=drop.PORT)
+    serve.add_argument('--once', action='store_true')
+    serve.add_argument('--no-splice', action='store_true')
+    serve.add_argument('--yes', action='store_true',
+                       help='accept without prompting (bin/mintdrop-probe, tests)')
+    serve.set_defaults(func=cmd_serve)
+
+    peers = sub.add_parser('peers', help='list nearby devices')
+    peers.add_argument('--wait', type=float, default=1.2)
+    peers.set_defaults(func=cmd_peers)
+
+    visible = sub.add_parser('visible', help='be findable by a phone, briefly')
+    visible.add_argument('seconds', nargs='?', type=int, default=120)
+    visible.set_defaults(func=cmd_visible)
+
+    status = sub.add_parser('status', help='what is armed and advertised')
+    status.set_defaults(func=cmd_status)
+
+    args = parser.parse_args(argv)
+    if not getattr(args, 'func', None):
+        parser.print_help()
+        return 2
+    try:
+        return args.func(args)
+    except KeyboardInterrupt:
+        return 130
+
+
+if __name__ == '__main__':
+    sys.exit(main())

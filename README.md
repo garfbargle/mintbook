@@ -34,6 +34,13 @@ dock, and the controls you reach for every day.
   <img src="docs/images/files.jpg" alt="Files on the mintbook desktop" width="48%">
 </p>
 
+The machine looks like itself before you log in, too. The greeter wears the
+session's theme, font, wallpaper and cursor size, with the hostname and the
+keyboard indicator taken off it—and since the lock screen is that same program,
+it is the surface you meet every time the lid opens. **Login Screen** picks the
+picture it shows: every wallpaper already on the disk, or one of your own,
+which it copies somewhere the greeter can actually read.
+
 Click the search icon at the far right of the bar—or press **Cmd+Space**.
 Overview finds applications and system actions together, in one fast surface,
 and follows the appearance you are in.
@@ -78,6 +85,54 @@ when updates exist, with apt and Flatpak together in one clean list.
   &nbsp;
   <img src="docs/images/battery-menu.jpg" alt="Battery menu" width="31%">
 </p>
+
+## Send it to the machine next to you.
+
+Drag files onto the Mintdrop icon in the dock, or right-click them in Files
+and choose **Send with Mintdrop**. A sheet opens with the devices that are
+nearby, as circles you can let go of a file on. The transfer happens on the
+tile—a ring closing around the device you sent to—rather than in a dialog
+somewhere else.
+
+<p align="center">
+  <img src="docs/images/mintdrop-sheet-light.png" alt="The Mintdrop sheet in the light appearance, showing a nearby phone as a round tile" width="239">
+  &nbsp;
+  <img src="docs/images/mintdrop-sheet-dark.png" alt="The same sheet in the dark appearance" width="232">
+</p>
+
+Anything arriving here says so first. Who is sending, what it is, how big,
+and from which address—and the default answer is no. Escape declines, a
+prompt nobody answers declines, and a sender that cannot be shown a prompt
+is declined too.
+
+<p align="center">
+  <img src="docs/images/mintdrop-accept-light.png" alt="The Mintdrop prompt in the light appearance: Galaxy S24 wants to send you a file, with Decline and Accept" width="283">
+  &nbsp;
+  <img src="docs/images/mintdrop-accept-dark.png" alt="The same prompt in the dark appearance" width="283">
+</p>
+
+**It costs nothing while you are not using it.** There is no daemon and no
+timer: the kernel holds the listening socket, and systemd starts a receiver
+only at the moment a connection arrives. Being discoverable is one static
+file read by the Avahi daemon that is already running for the rest of the
+system. A file that is landing runs niced and in the idle I/O class, so an
+arriving gigabyte cannot stall the desktop on two cores.
+
+**It sends to Android phones.** Not a fallback or a web page—real Quick
+Share, Google's own handshake, against an unmodified phone with nothing
+installed on it. Pick the phone in the sheet, tap Accept on its screen, and
+the file is there. Bluetooth has to be on: Android sleeps its Nearby stack to
+save battery, and a BLE advertisement is what wakes it. Receiving *from* a
+phone is not built yet.
+
+This is not Apple's AirDrop, and on this machine it cannot be: AirDrop puts
+its data on AWDL, which needs the wireless card in monitor mode with frame
+injection, and the BCM4350 here has neither. Quick Share—Samsung's and
+Google's—announces over BLE and mDNS and then moves bytes over an ordinary
+TCP connection, which any card can do. That is the shape Mintdrop follows,
+and the reason it works here at all.
+
+[How it works, and what it does not protect](docs/mintdrop.md)
 
 ## Tuned by evidence.
 
@@ -132,8 +187,8 @@ failure here, and the card does not pretend otherwise.
 
 | | |
 |---|---|
-| **Desktop** | [Look and behavior](docs/desktop.md) · [Control Center and System menu](docs/control-center.md) · [Software updates](docs/updates.md) · [HiDPI display](docs/display.md) |
-| **Daily use** | [Shortcuts and search](docs/daily.md) · [Battery](docs/battery.md) · [Video](docs/video.md) |
+| **Desktop** | [Look and behavior](docs/desktop.md) · [Control Center and System menu](docs/control-center.md) · [Software updates](docs/updates.md) · [HiDPI display](docs/display.md) · [Login and lock screen](docs/login.md) |
+| **Daily use** | [Shortcuts and search](docs/daily.md) · [Battery](docs/battery.md) · [Video](docs/video.md) · [Nearby sharing](docs/mintdrop.md) |
 | **Hardware** | [Input and sleep](docs/input.md) · [Hibernation](docs/hibernate.md) · [Audio](docs/audio.md) · [Camera](docs/camera.md) · [Bluetooth](docs/bluetooth.md) |
 | **System** | [Boot and kernels](docs/boot.md) · [App performance](docs/app-performance.md) · [Implementation guide](CONTRIBUTING.md) |
 
