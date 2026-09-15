@@ -477,29 +477,106 @@ This adapter is HCI 4.2 with `SupportedSecondaryChannels` empty, so there is
 no extended advertising to escape into, and BlueZ refuses anything longer
 outright.
 
-#### The GATT route is built and not yet accepted
+#### The GATT route is built, and it works
 
 The supported answer for a controller this old is to advertise a 17-byte
 header and serve the real advertisement from a GATT server. All of it exists
-now — a BlueZ GATT application on `0xFEF3` with the advertisement slot
+— a BlueZ GATT application on `0xFEF3` with the advertisement slot
 characteristic at `00000000-0000-3000-8000-0000000000NN`, the header, and
 `bin/mintbook_bloom.py` for the service-id filter (MurmurHash3 x64/128,
 checked against the published "hello" vector rather than against itself).
 
-The phone still logs `No BLE Fast/GATT advertisements found` and never reads
-the characteristic. Untested guesses at this point, in the order worth
-trying: the advertisement type (`broadcast` was what the phone accepted for
-the fast form; the header goes out as `peripheral`), a `psm` of zero where
-L2CAP is expected, and whether `num_slots` means what this assumes.
+Two things were wrong, and both were single values:
 
-**Nothing here is a dead end — it is an unfinished one**, and every step now
-has a phone that says yes or no within seconds.
+- the service UUID was `0xFE2C` (Fast Pair) where Nearby Connections wants
+  **`0xFEF3`**;
+- the header was version 1, which has no `psm` field. **Version 2** does.
+
+With those fixed the phone reads the characteristic and lists the machine.
+From `adb logcat`, unedited:
+
+```
+Found BleAdvertisement [ 0x23 0xfc 0x9f 0x5e 0x59 0x37 0x55 0x50 ... ]
+  (with EndpointId Y7UP and EndpointInfo [ ... 0x4d 0x69 0x6e 0x74 0x62 0x6f 0x6f 0x6b 0x31 ])
+NearbySharing Internal event EndpointDiscovered(endpointId=Y7UP)
+DiscoveryController reported Discovered(endpointId=Y7UP, deviceName=Mintbook1, ...)
+```
+
+**This retracts the paragraph that used to stand here**, which listed the
+advertisement type and `num_slots` as the likely culprits. Neither was. The
+advertisement still goes out as `peripheral`, and one slot is correct.
+
+### The phone connects over BLE, not over the network
+
+Discovery working did not make receiving work, and the reason is worth
+stating plainly because it cost a day: **a phone connects over the medium it
+discovered you on.** It found this machine over BLE, so it opened a BLE
+socket. It never tried the network at all — over every failed attempt there
+was 1 live BLE connection and 0 TCP connections.
+
+The advertisement said `psm = 0`, meaning no L2CAP, and carried a zeroed MAC,
+meaning no Bluetooth Classic. There was nowhere to go.
+
+LE L2CAP is reachable from Python, but not through the `socket` module alone:
+it builds `sockaddr_l2` from `(address, psm)` and leaves `l2_bdaddr_type` at
+`BDADDR_BREDR`, which gets a *Bluetooth Classic* channel. `bin/mintbook_l2cap.py`
+builds the structure itself. Measured on this adapter: LE public channels bind
+and listen on `0x80`, `0x83` and `0xc1`, and `psm 0` auto-assigns.
+
+#### The framing, from the first packet a phone ever sent
+
+Opening the channel was not enough either. An unanswered channel is dropped a
+second later:
+
+```
+l2c_link_timeout: All channels closed
+```
+
+That is what every "connecting… failed" on the phone had been. The first
+packet decided the format, and it matched Google's `BleL2capPacket`:
+
+```
+00 00 00 06  01  00 03  16 d9 ae
+<-- length   ^   <-len  <-- service id hash
+```
+
+A 4-byte big-endian frame length, then `[command]` or
+`[command][length(2)][data]`. Only `REQUEST_ADVERTISEMENT` and
+`RESPONSE_ADVERTISEMENT` carry data; the rest are bare bytes, and a length on
+one of those would be read as the next command. `bin/mintbook_l2cap_packet.py`
+speaks it.
+
+The service id hash it asked for is **`16 d9 ae`, which is not NearbySharing**
+(`fc 9f 5e`, the same three bytes the mDNS name `_FC9F5ED42C8A._tcp` is built
+from). Phones probe for services other than sharing. An unknown service id now
+gets `SERVICE_ID_NOT_FOUND` rather than silence: an answered probe is
+finished, an ignored one is a timeout, and the timeout is what closed the
+link.
+
+**Not yet done:** `REQUEST_DATA_CONNECTION` is answered `READY`, but what
+follows is recorded rather than parsed. That is the Nearby connection itself,
+which mintdrop speaks over TCP already but not through this framing. The
+recorded bytes are what will say whether it is the same conversation.
+Guessing at a byte layout has cost this project a day twice over.
+
+### Measured: this adapter cannot do Wi-Fi Aware
+
+Quick Share lists `WIFI_AWARE` among its upgrade mediums, and it is a
+reasonable guess at how an "AirDrop-like" transfer happens. It is not
+available here. `nl80211` reports the supported interface types as `STATION`,
+`AP`, `ADHOC` and `P2P_DEVICE` — **no NAN**. The BCM4350's firmware dates
+from November 2015 and has no such mode, and no driver change closes that.
+
+This is a hardware limit, not an unfinished feature, and it is not the one in
+the way: the phone and this machine share a subnet, so Wi-Fi LAN is the
+medium that matters.
 
 ### Still rough
 
-- **A phone cannot discover this machine.** Receiving *works* — the server
-  half is built and verified — but a Galaxy Z Fold7 never lists the laptop,
-  and `adb logcat` finally said why. See below.
+- **A phone discovers this machine, and cannot yet finish a transfer to it.**
+  Receiving is built and verified over TCP; a Galaxy Z Fold7 now lists
+  "Mintbook1" reliably and opens the BLE channel. What is missing is the
+  Nearby connection's own framing over that channel. See above.
 - **The phone has to be willing to advertise.** The BLE nudge wakes a
   *dormant* Nearby stack, and that is genuinely what it does — a phone that
   has been idle appears within seconds of it. It does not conjure one out of
