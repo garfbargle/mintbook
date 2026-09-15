@@ -409,6 +409,17 @@ def quickshare():
     return module
 
 
+def l2cap_packets():
+    """Nearby's control packets for the BLE channel."""
+    here = os.path.dirname(os.path.realpath(__file__))
+    loader = importlib.machinery.SourceFileLoader(
+        'mintbook_l2cap_packet', os.path.join(here, 'mintbook_l2cap_packet.py'))
+    module = importlib.util.module_from_spec(
+        importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(module)
+    return module
+
+
 def resolve_peer(target):
     """A peer name, a hostname or an address — whatever the user typed.
 
@@ -565,25 +576,95 @@ def send_quickshare(peer, files, total, args):
     return 0
 
 
-def _on_bluetooth_connection(connection, peer):
-    """A phone opened the BLE channel. Say what it sent.
+def _bluetooth_handler(packet, advertisement, service_id, log):
+    """Answer Nearby's control packets on the BLE channel.
 
-    Nearby over L2CAP has its own packet framing on top of the channel, which
-    mintdrop does not speak yet — so for now this records what arrives rather
-    than pretending to answer it. The bytes are the thing worth having: they
-    say whether the phone is starting the same conversation the TCP path
-    already handles, or something else.
+    The phone opens this channel the moment it has read the advertisement
+    header, and asks — by service id hash — for the advertisement behind it.
+    Answering is the whole job: an unanswered channel is dropped a second
+    later with `l2c_link_timeout: All channels closed`, which is what every
+    "connecting… failed" on the phone has been.
+
+    A request for a service this machine does not advertise gets
+    SERVICE_ID_NOT_FOUND rather than silence. Phones probe for services
+    other than sharing — the first request this ever received was for
+    16 d9 ae, which is not NearbySharing — and a probe that is answered
+    "no" is finished, where a probe that is ignored is a timeout.
     """
-    log(f'BLE channel opened by {peer}')
+    ours = packet.service_id_hash(service_id)
+
+    def handle(connection, peer):
+        log(f'BLE channel opened by {peer}')
+        reader = packet.Reader()
+        connection.settimeout(30)
+        while True:
+            try:
+                chunk = connection.recv(4096)
+            except OSError as exc:
+                log(f'  BLE channel closed: {exc}')
+                return
+            if not chunk:
+                log('  BLE channel closed by the phone')
+                return
+            try:
+                for command, data in reader.feed(chunk).packets():
+                    if _answer(packet, connection, command, data,
+                               ours, advertisement, log) is False:
+                        return
+            except packet.ProtocolError as exc:
+                # Not a control packet. Either the channel has already been
+                # handed over to data, or this is framing we do not know —
+                # both are worth the bytes rather than a guess.
+                log(f'  unreadable packet ({exc}); {len(chunk)} bytes: '
+                    f'{chunk[:64].hex(" ")}')
+                return
+
+    return handle
+
+
+def _answer(packet, connection, command, data, ours, advertisement,
+            log):
+    """One control packet in, at most one out. False to stop reading."""
+    log(f'  <- {packet.NAMES.get(command, command)}'
+        + (f' {data.hex(" ")}' if data else ''))
+    if command == packet.REQUEST_ADVERTISEMENT:
+        if data[:len(ours)] == ours:
+            connection.send(packet.frame(packet.RESPONSE_ADVERTISEMENT,
+                                         advertisement))
+            log(f'  -> RESPONSE_ADVERTISEMENT ({len(advertisement)} bytes)')
+        else:
+            connection.send(
+                packet.frame(packet.RESPONSE_SERVICE_ID_NOT_FOUND))
+            log(f'  -> SERVICE_ID_NOT_FOUND (we are {ours.hex(" ")})')
+        return True
+    if command == packet.REQUEST_ADVERTISEMENT_FINISH:
+        # Nothing to say. The phone has what it came for.
+        return True
+    if command == packet.REQUEST_DATA_CONNECTION:
+        connection.send(packet.frame(packet.RESPONSE_DATA_CONNECTION_READY))
+        log('  -> DATA_CONNECTION_READY')
+        # From here the channel stops being control packets and becomes the
+        # Nearby connection itself. mintdrop speaks that over TCP already,
+        # but not yet through this framing, so what arrives is recorded
+        # rather than answered — the bytes say whether it is the same
+        # conversation, and guessing has cost this project a day already.
+        _record_data_connection(connection, log)
+        return False
+    log(f'  no answer for {packet.NAMES.get(command, command)}')
+    return True
+
+
+def _record_data_connection(connection, log):
+    """Log the first packets of the data phase, then let the channel go."""
     try:
-        connection.settimeout(20)
-        for _ in range(4):
-            packet = connection.recv(4096)
-            if not packet:
-                break
-            log(f'  <- {len(packet)} bytes: {packet[:64].hex(" ")}')
+        for _ in range(6):
+            chunk = connection.recv(4096)
+            if not chunk:
+                log('  data channel closed by the phone')
+                return
+            log(f'  data <- {len(chunk)} bytes: {chunk[:96].hex(" ")}')
     except OSError as exc:
-        log(f'  BLE channel closed: {exc}')
+        log(f'  data channel closed: {exc}')
 
 
 def cmd_visible(args):
@@ -633,6 +714,13 @@ def cmd_visible(args):
         print(f'mintdrop: cannot be listed on a phone ({exc})', file=sys.stderr)
         return 1
 
+    # One advertisement, built once and given to everything that needs it:
+    # the GATT characteristic a phone reads it from, and the BLE channel it
+    # then asks for it over. Each layer minting its own used to be the
+    # standing bug in this code — four of them so far, every one a mismatch
+    # between two copies of the same identity.
+    advertisement = gatt.endpoint_advertisement(endpoint, info)
+
     # Somewhere for the phone to connect. It connects over the medium it
     # discovered us on, and that is BLE.
     listener = None
@@ -643,13 +731,16 @@ def cmd_visible(args):
         l2cap = importlib.util.module_from_spec(
             importlib.util.spec_from_loader(loader.name, loader))
         loader.exec_module(l2cap)
-        listener = l2cap.Listener(on_connect=_on_bluetooth_connection).start()
+        handler = _bluetooth_handler(
+            l2cap_packets(), advertisement, gatt.SERVICE_ID, log)
+        listener = l2cap.Listener(on_connect=handler).start()
         psm = listener.psm
     except Exception as exc:
         print(f'mintdrop: no BLE channel ({exc})', file=sys.stderr)
 
     from gi.repository import GLib
-    listed = gatt.Listed(endpoint, info, psm=psm)
+    listed = gatt.Listed(endpoint, info, psm=psm,
+                         advertisement=advertisement)
     loop = GLib.MainLoop()
     try:
         with qs.Announcement(name, endpoint=endpoint, info=info):

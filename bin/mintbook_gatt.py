@@ -201,10 +201,15 @@ class _Advert(dbus.service.Object):
 class Listed:
     """Be a device a phone can pick. Requires a running GLib main loop."""
 
-    def __init__(self, endpoint_id, endpoint_info, psm=0):
+    def __init__(self, endpoint_id, endpoint_info, psm=0, advertisement=None):
         dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
         self.bus = dbus.SystemBus()
-        self.advertisement = endpoint_advertisement(endpoint_id, endpoint_info)
+        # The caller may already hold the advertisement — the BLE channel has
+        # to answer with the very same bytes a phone read over GATT, so the
+        # two cannot each build their own.
+        self.advertisement = (advertisement if advertisement is not None
+                              else endpoint_advertisement(endpoint_id,
+                                                          endpoint_info))
         # The psm tells the phone where to open a BLE channel. Zero means
         # "nowhere", and a phone that discovered this machine over BLE then
         # has nothing to connect to — it gives up without considering the
