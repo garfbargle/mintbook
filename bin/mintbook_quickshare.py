@@ -29,6 +29,7 @@ import random
 import socket
 import string
 import time
+import urllib.parse
 
 # SHA-256("NearbySharing"), first three bytes, as everyone's service type.
 SERVICE = '_FC9F5ED42C8A._tcp'
@@ -856,23 +857,49 @@ def text_name(title, kind):
     return f'{stem}.txt'
 
 
+def url_name(url):
+    """A filename for a shared link, taken from the link and not its title.
+
+    The title a phone sends is truncated for display and arrives with an
+    ellipsis in it — "https:__m.youtube.com_shorts_rLU….txt" was the first
+    real one. The payload itself carries the whole URL, so the name comes
+    from there: host first, then the last couple of path segments, which is
+    what makes one link recognisable against another.
+    """
+    parts = urllib.parse.urlsplit(url.strip().split('\n')[0])
+    host = parts.netloc or 'link'
+    tail = [piece for piece in parts.path.split('/') if piece]
+    stem = ' '.join([host] + tail[-2:])
+    return f'{drop.safe_name(stem)[:80]}.txt'
+
+
 def save_text(directory, entry, blob):
     """Land a text payload next to where files land."""
     os.makedirs(directory, exist_ok=True)
-    path = drop.unique_path(directory, entry.name)
-    body = blob.decode('utf-8', 'replace')
+    body_text = blob.decode('utf-8', 'replace')
+    name = entry.name
+    if entry.text == TEXT_URL and '://' in body_text:
+        name = url_name(body_text)
+    path = drop.unique_path(directory, name)
     with open(path, 'w', encoding='utf-8') as handle:
-        handle.write(body if body.endswith('\n') else body + '\n')
+        handle.write(body_text if body_text.endswith('\n')
+                     else body_text + '\n')
     return path
 
 
-def receive_from_phone(sock, ask=None, on_progress=None, directory=None):
+def receive_from_phone(sock, ask=None, on_progress=None, directory=None,
+                       on_text=None):
     """Serve one Quick Share sender. Returns the list of files that landed.
 
     `ask(name, files, total)` decides whether to accept, and is the same
     gate mintdrop uses for a Linux peer — a receiver that writes files
     because a stranger asked is a bug with a filename, whichever protocol
     the stranger speaks.
+
+    `on_text(kind, body)` gets a text payload — a shared link, usually —
+    and returns true if it dealt with it. Anything it declines is written
+    to a file like everything else, so a handler that cannot open a link
+    loses nothing.
     """
     connection = Connection(sock)
     directory = directory or drop.download_dir()
@@ -907,6 +934,7 @@ def receive_from_phone(sock, ask=None, on_progress=None, directory=None):
     # --- encrypted -------------------------------------------------------
     expected = {}
     landed = []
+    finished = set()               # payload ids done, saved to disk or not
     answered = False
     open_files = {}
     buffers = {}
@@ -948,10 +976,16 @@ def receive_from_phone(sock, ask=None, on_progress=None, directory=None):
                 waiting = expected.get(payload_id)
                 if waiting is not None and waiting.text is not None:
                     blob = buffers.pop(payload_id)
-                    path = save_text(directory, waiting, blob)
-                    if path:
-                        landed.append(path)
-                    if len(landed) == len(expected):
+                    handled = False
+                    if on_text is not None:
+                        handled = bool(on_text(
+                            waiting.text, blob.decode('utf-8', 'replace')))
+                    if not handled:
+                        path = save_text(directory, waiting, blob)
+                        if path:
+                            landed.append(path)
+                    finished.add(payload_id)
+                    if len(finished) == len(expected):
                         break
                     continue
                 frame = pb.submessage(pb.unpack(buffers.pop(payload_id)), 2)
@@ -1008,7 +1042,8 @@ def receive_from_phone(sock, ask=None, on_progress=None, directory=None):
                     if path:
                         landed.append(path)
                     open_files.pop(payload_id, None)
-                    if len(landed) == len(expected):
+                    finished.add(payload_id)
+                    if len(finished) == len(expected):
                         break
     except Exception:
         for entry in open_files.values():

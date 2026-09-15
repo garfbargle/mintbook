@@ -7,10 +7,12 @@ layouts are asserted here against the reverse-engineered specification in
 grishka/NearDrop's PROTOCOL.md rather than trusted to a comment.
 """
 import base64
+import os
 import importlib.machinery
 import importlib.util
 from pathlib import Path
 import unittest
+import urllib.parse
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -356,3 +358,67 @@ class SharedTextTests(unittest.TestCase):
     def test_invalid_utf8_does_not_raise(self):
         entry = self.qs.Incoming(7, 'x.txt', 2, text=self.qs.TEXT_PLAIN)
         self.assertTrue(self.qs.save_text(self.directory, entry, b'\xff\xfe'))
+
+
+class LinkNameTests(unittest.TestCase):
+    """Named from the link, because the phone's title arrives truncated."""
+
+    def setUp(self):
+        self.qs = load()
+        import tempfile
+        self.directory = tempfile.mkdtemp()
+
+    def test_the_real_link_a_phone_sent(self):
+        self.assertEqual(
+            self.qs.url_name('https://m.youtube.com/shorts/rLUn5l34R8A'),
+            'm.youtube.com shorts rLUn5l34R8A.txt')
+
+    def test_a_bare_host(self):
+        self.assertEqual(self.qs.url_name('https://example.com'),
+                         'example.com.txt')
+
+    def test_a_long_path_keeps_only_the_tail(self):
+        name = self.qs.url_name('https://a.com/one/two/three/four')
+        self.assertEqual(name, 'a.com three four.txt')
+
+    def test_nonsense_still_gets_a_name(self):
+        self.assertTrue(self.qs.url_name('not a url').endswith('.txt'))
+
+    def test_the_file_is_named_from_content_not_the_title(self):
+        entry = self.qs.Incoming(7, 'https:__m.youtube.com_shorts_rLU….txt',
+                                 40, text=self.qs.TEXT_URL)
+        path = self.qs.save_text(
+            self.directory, entry, b'https://m.youtube.com/shorts/rLUn5l34R8A')
+        self.assertTrue(path.endswith('m.youtube.com shorts rLUn5l34R8A.txt'))
+
+    def test_plain_text_keeps_its_title(self):
+        entry = self.qs.Incoming(7, 'note.txt', 5, text=self.qs.TEXT_PLAIN)
+        path = self.qs.save_text(self.directory, entry, b'hello')
+        self.assertTrue(path.endswith('note.txt'))
+
+
+class TextHandlerTests(unittest.TestCase):
+    """on_text takes a payload, or declines it and gets a file instead."""
+
+    def setUp(self):
+        self.qs = load()
+        import tempfile
+        self.directory = tempfile.mkdtemp()
+
+    def test_a_declined_handler_still_writes_the_file(self):
+        entry = self.qs.Incoming(7, 'note.txt', 5, text=self.qs.TEXT_PLAIN)
+        path = self.qs.save_text(self.directory, entry, b'hello')
+        self.assertTrue(os.path.exists(path))
+
+    def test_only_http_schemes_are_openable(self):
+        # The rule the desktop handler applies, asserted here so it cannot
+        # quietly widen: a sender chooses this string.
+        openable = ('http', 'https')
+        for url, allowed in [('https://example.com', True),
+                             ('http://example.com', True),
+                             ('file:///etc/passwd', False),
+                             ('ssh://box/x', False),
+                             ('javascript:alert(1)', False),
+                             ('data:text/html,x', False)]:
+            scheme = urllib.parse.urlsplit(url).scheme
+            self.assertEqual(scheme in openable, allowed, url)

@@ -26,6 +26,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.parse
 
 
 def _load():
@@ -194,9 +195,40 @@ def receive_quickshare(sock, peer_ip):
             return True
         return ask_prompt(sender, summary, total, peer_ip)
 
+    opened = []
+
+    def on_text(kind, body):
+        """A shared link goes to the browser rather than to a file.
+
+        Only http and https are opened. The sender chooses this string, and
+        the accept prompt is consent to receive a link, not consent to hand
+        an arbitrary scheme to xdg-open — file://, ssh:// and the rest each
+        do something quite different and none of them is what was agreed to.
+        Anything declined here is written to a file instead, so nothing is
+        lost by being careful.
+        """
+        if kind != qs.TEXT_URL:
+            return False
+        url = body.strip().split('\n')[0]
+        if urllib.parse.urlsplit(url).scheme not in ('http', 'https'):
+            return False
+        try:
+            subprocess.Popen(['xdg-open', url],
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError) as exc:
+            log(f'could not open {url}: {exc}')
+            return False
+        opened.append(url)
+        log(f'opened {url}')
+        notify('Opened a shared link', url[:120])
+        return True
+
     started = time.monotonic()
-    landed = qs.receive_from_phone(sock, ask=gate)
+    landed = qs.receive_from_phone(sock, ask=gate, on_text=on_text)
     if not landed:
+        if opened:
+            return 0
         log('declined')
         return 0
     seconds = max(time.monotonic() - started, 1e-6)
