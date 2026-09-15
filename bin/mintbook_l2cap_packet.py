@@ -28,6 +28,22 @@ to split a frame across packets, and trusting the boundary would be trusting
 something nothing guarantees.
 """
 import hashlib
+import importlib.machinery
+import importlib.util
+import os
+
+
+def _load(name):
+    loader = importlib.machinery.SourceFileLoader(
+        name, os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                           name + '.py'))
+    module = importlib.util.module_from_spec(
+        importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(module)
+    return module
+
+
+pb = _load('mintbook_protobuf')
 
 # Requests a phone sends.
 REQUEST_ADVERTISEMENT = 1
@@ -175,6 +191,29 @@ class Reader:
 # adapter and not a second implementation of the protocol.
 CONTROL_HASH = b'\x00\x00\x00'
 
+# proto/mediums/ble_frames.proto, SocketControlFrame.ControlFrameType. The
+# phone sends all three: an INTRODUCTION naming the service, a
+# PACKET_ACKNOWLEDGEMENT for every data packet it receives, and a
+# DISCONNECTION at the end.
+INTRODUCTION = 1
+DISCONNECTION = 2
+PACKET_ACKNOWLEDGEMENT = 3
+
+
+def acknowledgement(service_id_hash, received):
+    """Say how many bytes just arrived.
+
+    Nearby's BLE socket acknowledges every data packet, and the count is the
+    whole envelope payload — hash included — not the bytes handed upward. A
+    Z Fold7 acked this machine's 123-byte ServerInit with `received_size:
+    123`, which is what fixes the number: 3 bytes of hash plus 120 of frame.
+
+    This is flow control, so not sending it is not a missing nicety. The
+    sender is waiting.
+    """
+    body = pb.pack((1, service_id_hash), (2, received))
+    return pb.pack((1, PACKET_ACKNOWLEDGEMENT), (4, body))
+
 # Conservative: an LE L2CAP channel negotiates its MTU and this is the
 # smallest that is reasonable to assume. A message longer than this is split
 # across packets, which is safe because the length prefix — not the packet
@@ -246,6 +285,7 @@ class Channel:
             head, body = payload[:len(self.hash)], payload[len(self.hash):]
             if head == self.hash:
                 self.stream.extend(body)
+                self._acknowledge(len(payload))
             elif head == CONTROL_HASH:
                 # Opening and closing a service. The phone does not wait for
                 # an answer to these — it sent its ConnectionRequest without
@@ -256,6 +296,17 @@ class Channel:
                     self.closed = True
             else:
                 self.log(f'  packet for another service {head.hex(" ")}')
+
+    def _acknowledge(self, received):
+        """Every data packet is acknowledged; the phone waits for it."""
+        frame_ = acknowledgement(self.hash, received)
+        packet = (len(CONTROL_HASH) + len(frame_)).to_bytes(4, 'big') \
+            + CONTROL_HASH + frame_
+        try:
+            self.socket.send(packet)
+        except OSError as exc:
+            self.log(f'  could not acknowledge {received} bytes: {exc}')
+            self.closed = True
 
     def _envelopes(self):
         """Whole `length , hash , payload` packets, as they complete."""

@@ -293,6 +293,7 @@ class ServerHandshake:
         self.client_init = None
         self.server_init = None
         self.commitment = None
+        self.offered = []
         self.peer = None
 
     def accept_client_init(self, blob):
@@ -304,13 +305,17 @@ class ServerHandshake:
         if not isinstance(body, bytes):
             raise HandshakeError('CLIENT_INIT carried no message data')
         fields = pb.unpack(body)
+        self.offered = []
         for raw in fields.get(3, []):            # cipher_commitments
             commitment = pb.unpack(raw)
-            if pb.one(commitment, 1) == P256_SHA512:
+            cipher = pb.one(commitment, 1)
+            self.offered.append(cipher)
+            if cipher == P256_SHA512:
                 self.commitment = pb.one(commitment, 2)
                 break
         if not self.commitment:
-            raise HandshakeError('no P-256 cipher commitment offered')
+            raise HandshakeError(
+                f'no P-256 cipher commitment offered (got {self.offered})')
         self.client_init = blob
         return self
 
@@ -326,9 +331,29 @@ class ServerHandshake:
         return self.server_init
 
     def accept_client_finish(self, blob):
-        """Check the commitment, then take their key."""
-        if hashlib.sha512(blob).digest() != self.commitment:
-            raise HandshakeError('CLIENT_FINISH does not match the commitment')
+        """Check the commitment, then take their key.
+
+        The check comes first and is never skipped — it is the whole reason
+        the commitment exists. But a bare "does not match" cannot tell a
+        broken stream from a broken hash, and those want opposite fixes, so
+        the failure says which frame it was actually handed.
+        """
+        digest = hashlib.sha512(blob).digest()
+        if digest != self.commitment:
+            try:
+                kind = pb.one(pb.unpack(blob), 1)
+                kind = {CLIENT_INIT: 'CLIENT_INIT',
+                        SERVER_INIT: 'SERVER_INIT',
+                        CLIENT_FINISH: 'CLIENT_FINISH'}.get(kind, repr(kind))
+            except Exception:
+                kind = 'unparseable'
+            raise HandshakeError(
+                f'CLIENT_FINISH does not match the commitment — '
+                f'frame is {kind}, {len(blob)} bytes, '
+                f'sha512 {digest[:6].hex()}… committed '
+                f'{(self.commitment or b"")[:6].hex()}…, '
+                f'ciphers offered {getattr(self, "offered", None)}; '
+                f'frame begins {blob[:40].hex(" ")}')
         outer = pb.unpack(blob)
         if pb.one(outer, 1) != CLIENT_FINISH:
             raise HandshakeError('expected CLIENT_FINISH')
