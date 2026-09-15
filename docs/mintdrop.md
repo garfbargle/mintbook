@@ -617,6 +617,34 @@ on loopback every time. A loopback test of a symmetric protocol cannot find
 an encoding both ends get wrong together. This is the second bug of exactly
 that shape in this file, after `dhs = SHA256(ECDH)`.
 
+### A shared link opens, rather than landing somewhere
+
+Quick Share sends a link as a **text payload**, not a file: the
+introduction carries a `TextMetadata` (title, type, payload id, size) and
+the bytes follow under that payload id. Two things follow from that, and
+both were wrong at first.
+
+The introduction only read `file_metadata`, so a link announced itself as
+"0 files, 0 bytes" — there was nothing to offer. And the bytes after a text
+payload are *content*, so parsing every bytes payload as a protocol frame
+ended the transfer with `unsupported wire type 4` on the first link.
+
+A link now goes to `xdg-open` with a notification and no file left behind,
+because a `.txt` in `~/Downloads` answers "where did it go" with "somewhere
+you have to look for it".
+
+**Only `http` and `https` are opened.** The sender chooses that string, and
+accepting a share is consent to receive a link — not consent to hand an
+arbitrary scheme to `xdg-open`. `file://`, `ssh://` and `data:` each do
+something quite different, and none of them is what was agreed to. Anything
+declined is written to a file instead, where it can be read before anything
+acts on it, so being careful costs nothing.
+
+Text that is not a link is written out as before, named from the URL rather
+than the phone's title: the title is truncated for display and arrives with
+an ellipsis in it. The first real one landed as
+`https:__m.youtube.com_shorts_rLU….txt`.
+
 ### Measured: this adapter cannot do Wi-Fi Aware
 
 Quick Share lists `WIFI_AWARE` among its upgrade mediums, and it is a
@@ -631,10 +659,8 @@ medium that matters.
 
 ### Still rough
 
-- **Links and text are not handled.** A phone sharing a URL gets through the
-  whole handshake and arrives as an offer of "0 files, 0 bytes", then fails
-  parsing. Quick Share sends those as a text payload rather than a file, and
-  the receiver only knows about files.
+- The phone is the only one tested. A Galaxy Z Fold7 works end to end;
+  nothing else has been tried, and iPhones are a different protocol entirely.
 - **The phone has to be willing to advertise.** The BLE nudge wakes a
   *dormant* Nearby stack, and that is genuinely what it does — a phone that
   has been idle appears within seconds of it. It does not conjure one out of
