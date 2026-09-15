@@ -640,6 +640,28 @@ something quite different, and none of them is what was agreed to. Anything
 declined is written to a file instead, where it can be read before anything
 acts on it, so being careful costs nothing.
 
+#### Which browser opens, on XFCE
+
+`xdg-open` is not the last word here. Under XFCE it delegates to `exo-open`,
+which reads XFCE's own preferred-application setting, and that **overrides
+the mimeapps files** — so a machine can have
+
+```
+$ xdg-mime query default x-scheme-handler/https
+firefox.desktop
+```
+
+and still open Chrome, because `~/.config/xfce4/helpers.rc` says
+`WebBrowser=google-chrome`. Setting one without the other looks like it
+worked and does not. Both, to change it:
+
+```
+sed -i 's/^WebBrowser=.*/WebBrowser=firefox/' ~/.config/xfce4/helpers.rc
+xdg-settings set default-web-browser firefox.desktop
+```
+
+or Settings → Preferred Applications, which writes the first one.
+
 Text that is not a link is written out as before, named from the URL rather
 than the phone's title: the title is truncated for display and arrives with
 an ellipsis in it. The first real one landed as
