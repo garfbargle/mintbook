@@ -59,15 +59,26 @@ class KeyEncodingTests(unittest.TestCase):
         self.assertEqual(back.public_numbers(),
                          private.public_key().public_numbers())
 
-    def test_coordinates_are_a_fixed_32_bytes_with_no_sign_byte(self):
-        # A coordinate with its top bit set must not grow a leading zero:
-        # the far end hashes the bytes it was sent.
-        for _ in range(40):
+    def test_coordinates_carry_a_sign_byte_when_the_top_bit_is_set(self):
+        # This test used to assert the opposite — a fixed 32 bytes and no
+        # sign byte — and passed, because public_key_from() accepts either
+        # form and so the handshake agreed with itself. A Z Fold7 answered
+        # that encoding with Ukey2Alert BAD_PUBLIC_KEY, "Cannot parse public
+        # key: Point encoding". securemessage.proto is explicit: big-endian
+        # two's complement.
+        seen_33 = False
+        for _ in range(60):
             private = ec.generate_private_key(ec.SECP256R1())
             ec_key = pb.submessage(
                 pb.unpack(ukey2.public_key_bytes(private.public_key())), 2)
-            self.assertEqual(len(pb.one(ec_key, 1)), 32)
-            self.assertEqual(len(pb.one(ec_key, 2)), 32)
+            for field in (1, 2):
+                raw = pb.one(ec_key, field)
+                self.assertLessEqual(len(raw), 33)
+                self.assertEqual(raw[0] & 0x80, 0, 'must not read as negative')
+                if len(raw) == 33:
+                    self.assertEqual(raw[0], 0x00)
+                    seen_33 = True
+        self.assertTrue(seen_33, 'expected some coordinates to need a sign byte')
 
     def test_a_non_p256_key_is_refused(self):
         with self.assertRaises(ukey2.HandshakeError):
@@ -234,3 +245,42 @@ class ClientMeetsServerTests(unittest.TestCase):
         server = ukey2.ServerHandshake()
         with self.assertRaises(ukey2.HandshakeError):
             server.accept_client_init(ukey2.message(ukey2.SERVER_INIT, b''))
+
+
+class TwosComplementTests(unittest.TestCase):
+    """Against Java's BigInteger.toByteArray(), which is what the wire wants.
+
+    securemessage.proto: "x and y are encoded in big-endian two's
+    complement". A Z Fold7 answered the old fixed-32-byte encoding with
+    Ukey2Alert BAD_PUBLIC_KEY, "Cannot parse public key: Point encoding" —
+    and no test here could have caught it, because public_key_from() accepts
+    either form and the handshake agreed with itself.
+    """
+
+    def test_matches_biginteger_to_byte_array(self):
+        for value, expected in [(0, '00'), (1, '01'), (127, '7f'),
+                                (128, '0080'), (255, '00ff'), (256, '0100'),
+                                (32767, '7fff'), (32768, '008000')]:
+            self.assertEqual(ukey2.twos_complement(value).hex(), expected,
+                             f'for {value}')
+
+    def test_a_coordinate_with_the_top_bit_set_gains_a_zero(self):
+        value = 2 ** 255 + 12345
+        raw = ukey2.twos_complement(value)
+        self.assertEqual(len(raw), 33)
+        self.assertEqual(raw[0], 0x00)
+
+    def test_a_coordinate_without_it_stays_short(self):
+        self.assertEqual(len(ukey2.twos_complement(2 ** 254)), 32)
+
+    def test_never_reads_as_negative(self):
+        for bits in range(1, 257):
+            raw = ukey2.twos_complement(2 ** bits - 1)
+            self.assertEqual(raw[0] & 0x80, 0, f'top bit set at {bits} bits')
+
+    def test_public_keys_round_trip_whichever_length_they_get(self):
+        from cryptography.hazmat.primitives.asymmetric import ec as _ec
+        for _ in range(40):
+            key = _ec.generate_private_key(_ec.SECP256R1()).public_key()
+            back = ukey2.public_key_from(ukey2.public_key_bytes(key))
+            self.assertEqual(back.public_numbers(), key.public_numbers())

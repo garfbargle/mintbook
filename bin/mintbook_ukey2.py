@@ -98,17 +98,40 @@ def unpad(blob):
 # keys on the wire
 # ---------------------------------------------------------------------------
 
+def twos_complement(value):
+    """A non-negative integer the way BigInteger.toByteArray() writes it.
+
+    One byte longer than the value needs whenever the top bit would
+    otherwise be set, so the leading bit always reads as a sign of zero.
+    """
+    return value.to_bytes((value.bit_length() + 8) // 8, 'big')
+
+
 def public_key_bytes(key):
     """A P-256 public key as securemessage.GenericPublicKey.
 
-    x and y are *unsigned* big-endian, and this is the detail that costs an
-    afternoon: a coordinate whose top bit is set gets a leading zero byte
-    from some encoders and not others, and the far end hashes what it was
-    sent. Fixed 32-byte fields, no sign byte, no trimming.
+    x and y are big-endian **two's complement**, which is to say exactly
+    what Java's BigInteger.toByteArray() produces: 33 bytes with a leading
+    zero when the coordinate's top bit is set, 32 or fewer otherwise.
+
+    This used to write fixed 32-byte unsigned fields, and the comment here
+    claimed that was the careful choice. It was the wrong one, and no test
+    could see it: public_key_from() accepts either form, so the handshake
+    agreed with itself on loopback every time. A Galaxy Z Fold7 said what
+    the test suite structurally could not --
+
+        Ukey2Alert BAD_PUBLIC_KEY: "Cannot parse public key: Point encoding"
+
+    -- because roughly three keys in four have a top bit set somewhere and
+    read as negative. That is also the likeliest cause of the long-standing
+    "refuses a share of connection attempts, and a retry gets through".
+
+    securemessage.proto, vendored in this repository, says it outright:
+    "x and y are encoded in big-endian two's complement (slightly wasteful)".
     """
     numbers = key.public_numbers()
-    x = numbers.x.to_bytes(32, 'big')
-    y = numbers.y.to_bytes(32, 'big')
+    x = twos_complement(numbers.x)
+    y = twos_complement(numbers.y)
     ec_key = pb.pack((1, x), (2, y))                 # EcP256PublicKey
     return pb.pack((1, EC_P256), (2, ec_key))        # GenericPublicKey
 
