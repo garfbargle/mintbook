@@ -42,6 +42,7 @@ ADVERT = Path('/etc/avahi/services/mintdrop.service')
 QS_ADVERT = Path('/etc/avahi/services/mintdrop-quickshare.service')
 
 SCRIPTS = ('mintdrop', 'mintdrop-accept', 'mintdrop-menu', 'mintdrop-probe',
+           'mintdrop-visible',
            'mintbook_drop.py', 'mintbook_quickshare.py')
 UNITS = ('mintbook-drop.socket', 'mintbook-drop@.service')
 SOCKET = 'mintbook-drop.socket'
@@ -74,6 +75,8 @@ def targets():
                 AUTOSTART / 'mintbook-drop-env.desktop')]
     result += [(ROOT / 'config/applications/mintbook-mintdrop.desktop',
                 APPS / 'mintbook-mintdrop.desktop')]
+    result += [(ROOT / 'config/applications/mintbook-discoverable.desktop',
+                APPS / 'mintbook-discoverable.desktop')]
     result += [(ROOT / 'config/plank/07-mintdrop.dockitem',
                 DOCK / '07-mintdrop.dockitem')]
     return result

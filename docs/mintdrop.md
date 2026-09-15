@@ -573,6 +573,37 @@ a 120-byte frame. Sending none of our own stalled the transfer.
 The encoder is checked against the phone rather than against itself:
 `acknowledgement(fc 9f 5e, 123)` reproduces the phone's own bytes exactly.
 
+### Being discoverable is a switch, not a command
+
+A phone can only find this machine while it is being advertised, and that is
+a short window on purpose — a laptop announcing itself to every phone in the
+building all day is the thing mintdrop is careful not to be. Three ways in,
+all the same window:
+
+```
+mintdrop-visible on          # 300s, or `on 900` for longer
+mintdrop-visible off
+mintdrop-visible status      # "on 248" or "off"
+```
+
+* **Control Center** — the *Discoverable* tile, which counts the window down
+  in its subtitle and turns itself off at the end. Its chevron opens the send
+  sheet: the tile is this machine receiving, the chevron is it sending.
+* **Make Mintbook Discoverable** in the application menu.
+* `mintdrop visible` still works and still holds the terminal. That is right
+  for a command and wrong for a switch, which is why `mintdrop-visible` owns
+  the window instead — one pidfile, so a panel tile, a launcher and a shell
+  cannot disagree about whether it is on.
+
+The pidfile lives under `XDG_RUNTIME_DIR`, which the system clears on reboot,
+and the pid is checked against `/proc/<pid>/cmdline` anyway: pids get reused,
+and a switch reading "on" because something else inherited the number is
+worse than one that occasionally reads "off".
+
+This is separate from being reachable by **another Linux machine**, which is
+always on and needs no window — `mintdrop status` reports that as `receiver
+active`. Only phones need the advertisement.
+
 ### Verified, 2026-09-14: a phone sent this machine a file
 
 ```

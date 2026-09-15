@@ -500,7 +500,26 @@ cairo_round_join = lambda: _cairo.LINE_JOIN_ROUND
 cairo_even_odd = lambda: _cairo.FILL_RULE_EVEN_ODD
 cairo_winding = lambda: _cairo.FILL_RULE_WINDING
 
-GLYPHS = {'wifi': _wifi, 'bluetooth': _bluetooth, 'moon': _moon, 'sun': _sun,
+def _broadcast(cr, s):
+    """Rings going out from a point — this machine announcing itself.
+
+    Concentric circles rather than the fan of arcs a signal-strength icon
+    uses, because the panel already has that shape twice and a third would
+    read as a third radio. This is not a radio: it says the machine is
+    findable, which happens to travel over Bluetooth.
+    """
+    # The outermost ring plus half its stroke has to stay inside the box:
+    # .42 + .03 clears .5, where .48 did not and came out flat-sided.
+    cr.set_line_width(.06 * s)
+    for radius in (.16, .29, .42):
+        cr.new_sub_path()
+        cr.arc(.5 * s, .5 * s, radius * s, 0, 2 * math.pi)
+        cr.stroke()
+    cr.arc(.5 * s, .5 * s, .065 * s, 0, 2 * math.pi)
+    cr.fill()
+
+
+GLYPHS = {'wifi': _wifi, 'broadcast': _broadcast, 'bluetooth': _bluetooth, 'moon': _moon, 'sun': _sun,
           'speaker': _speaker, 'display': _display, 'cpu': _cpu,
           'thermometer': _thermometer, 'bolt': _bolt, 'gear': _gear,
           'box': _box, 'half': _half, 'leaf': _leaf, 'gauge': _gauge,

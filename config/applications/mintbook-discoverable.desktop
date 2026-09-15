@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Make Mintbook Discoverable
+GenericName=Let a phone find this machine
+Comment=Be findable by Quick Share for a few minutes, then stop
+Icon=network-wireless
+Exec=mintdrop-visible on
+Terminal=false
+Categories=Network;FileTransfer;
+Keywords=airdrop;quickshare;nearby;receive;discoverable;visible;phone;
+StartupNotify=false

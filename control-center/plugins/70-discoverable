@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Discoverable — let a phone find this machine and send it something.
+#
+# A switch rather than a reading, so it belongs behind the click under the
+# rule the rest of the panel follows. It is also the only one here that turns
+# itself off: visibility is a short window on purpose, because a laptop
+# announcing itself to every phone in the building all day is the thing
+# mintdrop is careful not to be. The subtitle counts the window down, which is
+# why the tile asks to be live only while it is on — there is nothing to
+# re-read when it is off.
+#
+# The chevron opens the send sheet. The tile is this machine receiving; the
+# chevron is this machine sending, which is the other half of the same idea.
+HELPER="$HOME/.local/bin/mintdrop-visible"
+[ -x "$HELPER" ] || HELPER="$(dirname "$(readlink -f "$0")")/../../bin/mintdrop-visible"
+
+case "${1:-read}" in
+  set) case "$2" in on|true|1) "$HELPER" on ;; *) "$HELPER" off ;; esac
+       exit 0 ;;
+esac
+
+state=$("$HELPER" status 2>/dev/null)
+left=${state#* }
+state=${state%% *}
+# No helper, or it failed: say off rather than nothing. An empty value draws
+# a tile that is neither lit nor unlit, which reads as a broken panel.
+[ -n "$state" ] || state=off
+
+if [ "$state" = on ]; then
+  case "$left" in ''|*[!0-9]*) left=0 ;; esac
+  sub=$(printf 'Findable for %d:%02d' $((left / 60)) $((left % 60)))
+  live='live = 1'
+else
+  sub='Off — phones cannot see this machine'
+  live=''
+fi
+
+cat <<EOF2
+kind = toggle
+glyph = broadcast
+title = Discoverable
+value = $state
+subtitle = $sub
+detail = $HOME/.local/bin/mintdrop-menu
+$live
+EOF2

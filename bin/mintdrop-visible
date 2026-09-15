@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# Be discoverable to a phone, as one switch rather than a foreground command.
+#
+# `mintdrop visible` holds a terminal for the length of its window, which is
+# right for the command and wrong for a switch on a panel. This owns the
+# window instead: it starts one, reports how long is left, and stops it. The
+# launcher entry, the Control Center tile and a shell all go through here, so
+# there is one answer to "is it on" and they cannot disagree.
+#
+# State is a pidfile under XDG_RUNTIME_DIR, which the system clears on reboot
+# — a stale pidfile then cannot outlive the process it names. The pid is
+# checked against /proc anyway: a pid is reused eventually, and a switch that
+# reads "on" because something else inherited the number is worse than one
+# that occasionally reads "off".
+set -u
+
+SECONDS_DEFAULT=300
+RUN="${XDG_RUNTIME_DIR:-/tmp}/mintbook"
+PIDFILE="$RUN/mintdrop-visible.pid"
+UNTIL="$RUN/mintdrop-visible.until"
+LOG="$RUN/mintdrop-visible.log"
+MINTDROP="${MINTDROP:-$HOME/.local/bin/mintdrop}"
+[ -x "$MINTDROP" ] || MINTDROP=mintdrop
+
+running() {
+  [ -r "$PIDFILE" ] || return 1
+  local pid
+  pid=$(cat "$PIDFILE" 2>/dev/null) || return 1
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  [ -d "/proc/$pid" ] || return 1
+  # The pid must still be this, not whatever reused the number.
+  tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null \
+    | grep -q 'mintdrop visible' || return 1
+  return 0
+}
+
+remaining() {
+  local ends now
+  ends=$(cat "$UNTIL" 2>/dev/null) || return 1
+  case "$ends" in ''|*[!0-9]*) return 1 ;; esac
+  now=$(date +%s)
+  [ "$ends" -gt "$now" ] || return 1
+  echo $((ends - now))
+}
+
+case "${1:-status}" in
+  on|start)
+    seconds=${2:-$SECONDS_DEFAULT}
+    case "$seconds" in ''|*[!0-9]*) seconds=$SECONDS_DEFAULT ;; esac
+    if running; then
+      # Already on. Extending would mean killing and restarting, which drops
+      # the BLE advertisement a phone may be mid-connection on.
+      echo "already visible"
+      exit 0
+    fi
+    mkdir -p "$RUN"
+    setsid "$MINTDROP" visible "$seconds" >"$LOG" 2>&1 &
+    echo $! > "$PIDFILE"
+    echo $(( $(date +%s) + seconds )) > "$UNTIL"
+    echo "visible for ${seconds}s"
+    ;;
+  off|stop)
+    if running; then
+      kill "$(cat "$PIDFILE")" 2>/dev/null
+    fi
+    rm -f "$PIDFILE" "$UNTIL"
+    echo "not visible"
+    ;;
+  status)
+    if running; then
+      left=$(remaining) || left=''
+      echo "on ${left:-0}"
+    else
+      echo "off"
+    fi
+    ;;
+  log)
+    cat "$LOG" 2>/dev/null
+    ;;
+  *)
+    echo "usage: mintdrop-visible [on [seconds]|off|status|log]" >&2
+    exit 2 ;;
+esac
