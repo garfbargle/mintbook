@@ -553,11 +553,69 @@ gets `SERVICE_ID_NOT_FOUND` rather than silence: an answered probe is
 finished, an ignored one is a timeout, and the timeout is what closed the
 link.
 
-**Not yet done:** `REQUEST_DATA_CONNECTION` is answered `READY`, but what
-follows is recorded rather than parsed. That is the Nearby connection itself,
-which mintdrop speaks over TCP already but not through this framing. The
-recorded bytes are what will say whether it is the same conversation.
-Guessing at a byte layout has cost this project a day twice over.
+#### The socket control layer, which is flow control
+
+Answering the control packets was still not enough. Inside the data
+connection there is a second layer, `proto/mediums/ble_frames.proto`:
+
+```
+SocketControlFrame: 1=INTRODUCTION  2=DISCONNECTION  3=PACKET_ACKNOWLEDGEMENT
+PacketAcknowledgementFrame { service_id_hash = 1; received_size = 2; }
+```
+
+It rides in the same envelope as the data, told apart by a service id hash
+of `00 00 00`. **Every data packet is acknowledged, and the sender waits.**
+This code logged those acknowledgements as noise for a while — the recurring
+`08 03 22 07 0a 03 fc 9f 5e 10 7b` is the phone confirming 123 bytes, which
+is exactly the envelope length of the SERVER_INIT sent to it, 3 of hash plus
+a 120-byte frame. Sending none of our own stalled the transfer.
+
+The encoder is checked against the phone rather than against itself:
+`acknowledgement(fc 9f 5e, 123)` reproduces the phone's own bytes exactly.
+
+### Verified, 2026-09-14: a phone sent this machine a file
+
+```
+offer from Codi's Z Fold7 (a nearby phone over BLE): IMG-20260914-WA0000.jpg, 87.5 kB
+received IMG-20260914-WA0000.jpg (87.5 kB)
+```
+
+89,569 bytes in `~/Downloads`, a 960x1280 progressive JPEG with its EOI
+marker intact. Discovery, the BLE control handshake, the L2CAP data channel,
+UKEY2, the accept prompt and the payload all work, in that order.
+
+#### The bug underneath it: two's complement
+
+Every attempt before this failed at UKEY2, and the error said the
+CLIENT_FINISH did not match its commitment — which reads as "our hash is
+wrong" and is not what was happening. Making the failure print the frame it
+had been handed ended the guessing in one attempt, because the phone had
+been saying it in plain text the whole time:
+
+```
+Ukey2Alert 104 BAD_PUBLIC_KEY: "Cannot parse public key: Point encoding"
+```
+
+`public_key_bytes()` wrote x and y as fixed 32-byte *unsigned* fields, and
+the comment above it claimed that was the careful choice. The wire wants
+big-endian **two's complement** — `BigInteger.toByteArray()`, a leading zero
+byte whenever the top bit is set, or the coordinate reads as negative.
+`securemessage.proto` says so in as many words, and has been vendored in
+this repository from the start:
+
+> x and y are encoded in big-endian two's complement (slightly wasteful)
+
+Roughly three keys in four have a top bit set somewhere, so attempts failed
+at random. **This retracts "the phone refuses a share of connection attempts
+and a retry gets through"**, which used to stand in *Still rough* and blamed
+the phone for cleaning up after itself. It was this.
+
+No test could have caught it, and that is the part worth keeping. The old
+test asserted 32 bytes and no sign byte, and passed — because
+`public_key_from()` accepts either form, so the handshake agreed with itself
+on loopback every time. A loopback test of a symmetric protocol cannot find
+an encoding both ends get wrong together. This is the second bug of exactly
+that shape in this file, after `dhs = SHA256(ECDH)`.
 
 ### Measured: this adapter cannot do Wi-Fi Aware
 
@@ -573,10 +631,10 @@ medium that matters.
 
 ### Still rough
 
-- **A phone discovers this machine, and cannot yet finish a transfer to it.**
-  Receiving is built and verified over TCP; a Galaxy Z Fold7 now lists
-  "Mintbook1" reliably and opens the BLE channel. What is missing is the
-  Nearby connection's own framing over that channel. See above.
+- **Links and text are not handled.** A phone sharing a URL gets through the
+  whole handshake and arrives as an offer of "0 files, 0 bytes", then fails
+  parsing. Quick Share sends those as a text payload rather than a file, and
+  the receiver only knows about files.
 - **The phone has to be willing to advertise.** The BLE nudge wakes a
   *dormant* Nearby stack, and that is genuinely what it does — a phone that
   has been idle appears within seconds of it. It does not conjure one out of
@@ -584,10 +642,6 @@ medium that matters.
   air however long you nudge. Opening Quick Share on the phone remains part
   of sending to it, which is the wrong way round and is what building the
   receiving half fixes.
-- **The phone refuses a share of connection attempts outright**, and a retry
-  gets through. Not understood; it happens more after a session that ended
-  badly, so it may be the phone still cleaning up. Anything driving this
-  should retry rather than report failure.
 - The name a phone sees comes from `mintdrop.conf`; the name advertised *for
   receiving* is baked into `/etc/avahi/services/` at install time, so
   changing it means re-running `bin/mintdrop-install`.
