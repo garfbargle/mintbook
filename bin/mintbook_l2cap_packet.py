@@ -155,3 +155,118 @@ class Reader:
             body = bytes(self.buffer[4:4 + length])
             del self.buffer[:4 + length]
             yield parse(body)
+
+
+# Once the channel is a data connection it stops carrying the control packets
+# above and carries this instead:
+#
+#     length(4, big endian) , service id hash(3) , payload
+#
+# with two kinds of payload, told apart by the hash:
+#
+#   00 00 00   a control protobuf — the phone opening or closing a service
+#   <ours>     the Nearby conversation itself, which is a 4-byte length and
+#              an OfflineFrame, exactly what mintdrop already speaks on TCP
+#
+# All four packets a Z Fold7 sent fit this: a connect naming the service and
+# a token, a 639-byte ConnectionRequest ("Codi's Z Fold7", endpoint QYJ7), a
+# 136-byte UKEY2 client init, and a disconnect. The envelope is the only
+# thing that differs from the TCP path, which is why Channel below is an
+# adapter and not a second implementation of the protocol.
+CONTROL_HASH = b'\x00\x00\x00'
+
+# Conservative: an LE L2CAP channel negotiates its MTU and this is the
+# smallest that is reasonable to assume. A message longer than this is split
+# across packets, which is safe because the length prefix — not the packet
+# boundary — is what says where a message ends.
+DEFAULT_MTU = 512
+
+
+class Channel:
+    """The Nearby byte stream, with the L2CAP envelope taken off.
+
+    Presents `recv` and `sendall`, which is all the Quick Share receiver
+    wants from a socket, so the same code that serves a phone over TCP can
+    serve one over BLE without knowing the difference.
+    """
+
+    def __init__(self, socket_, service_id_hash, mtu=DEFAULT_MTU, log=None):
+        self.socket = socket_
+        self.hash = service_id_hash
+        self.mtu = mtu
+        self.log = log or (lambda message: None)
+        self.reader = Reader()
+        self.stream = bytearray()          # inner bytes, envelope removed
+        self.closed = False
+        self.control = []                  # what the phone said out of band
+
+    # -- the socket face --------------------------------------------------
+
+    def recv(self, count):
+        while not self.stream and not self.closed:
+            self._pump()
+        taken = bytes(self.stream[:count])
+        del self.stream[:count]
+        return taken
+
+    def sendall(self, data):
+        # One message may span several packets; the receiver reassembles on
+        # the length, so the split point does not have to mean anything.
+        room = self.mtu - 4 - len(self.hash)
+        body = len(self.hash) + len(data)
+        packet = body.to_bytes(4, 'big') + self.hash + bytes(data)
+        for start in range(0, len(packet), self.mtu):
+            self.socket.send(packet[start:start + self.mtu])
+        if room <= 0:                      # pathological MTU; say so loudly
+            raise ProtocolError(f'mtu of {self.mtu} leaves no room for data')
+
+    def settimeout(self, seconds):
+        self.socket.settimeout(seconds)
+
+    def close(self):
+        self.closed = True
+        try:
+            self.socket.close()
+        except OSError:
+            pass
+
+    # -- the envelope ------------------------------------------------------
+
+    def _pump(self):
+        try:
+            chunk = self.socket.recv(4096)
+        except OSError:
+            self.closed = True
+            return
+        if not chunk:
+            self.closed = True
+            return
+        self.reader.feed(chunk)
+        for payload in self._envelopes():
+            head, body = payload[:len(self.hash)], payload[len(self.hash):]
+            if head == self.hash:
+                self.stream.extend(body)
+            elif head == CONTROL_HASH:
+                # Opening and closing a service. The phone does not wait for
+                # an answer to these — it sent its ConnectionRequest without
+                # one — so they are recorded, and a close ends the stream.
+                self.control.append(body)
+                self.log(f'  control {body.hex(" ")[:48]}')
+                if body[:2] == b'\x08\x02':
+                    self.closed = True
+            else:
+                self.log(f'  packet for another service {head.hex(" ")}')
+
+    def _envelopes(self):
+        """Whole `length , hash , payload` packets, as they complete."""
+        while True:
+            if len(self.reader.buffer) < 4:
+                return
+            length = int.from_bytes(self.reader.buffer[:4], 'big')
+            if length < len(self.hash) or length > MAX_FRAME:
+                raise ProtocolError(f'frame length {length} is not credible')
+            if len(self.reader.buffer) < 4 + length:
+                return
+            payload = bytes(self.reader.buffer[4:4 + length])
+            del self.reader.buffer[:4 + length]
+            yield payload

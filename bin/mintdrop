@@ -643,28 +643,18 @@ def _answer(packet, connection, command, data, ours, advertisement,
     if command == packet.REQUEST_DATA_CONNECTION:
         connection.send(packet.frame(packet.RESPONSE_DATA_CONNECTION_READY))
         log('  -> DATA_CONNECTION_READY')
-        # From here the channel stops being control packets and becomes the
-        # Nearby connection itself. mintdrop speaks that over TCP already,
-        # but not yet through this framing, so what arrives is recorded
-        # rather than answered — the bytes say whether it is the same
-        # conversation, and guessing has cost this project a day already.
-        _record_data_connection(connection, log)
+        # From here the channel stops carrying control packets and carries
+        # the Nearby conversation itself — the same one served over TCP,
+        # inside a different envelope. Channel takes the envelope off, so
+        # the receiver below is the receiver a Linux peer gets.
+        channel = packet.Channel(connection, ours, log=log)
+        try:
+            receive_quickshare(channel, 'a nearby phone over BLE')
+        except Exception as exc:
+            log(f'  BLE transfer failed: {exc.__class__.__name__}: {exc}')
         return False
     log(f'  no answer for {packet.NAMES.get(command, command)}')
     return True
-
-
-def _record_data_connection(connection, log):
-    """Log the first packets of the data phase, then let the channel go."""
-    try:
-        for _ in range(6):
-            chunk = connection.recv(4096)
-            if not chunk:
-                log('  data channel closed by the phone')
-                return
-            log(f'  data <- {len(chunk)} bytes: {chunk[:96].hex(" ")}')
-    except OSError as exc:
-        log(f'  data channel closed: {exc}')
 
 
 def cmd_visible(args):

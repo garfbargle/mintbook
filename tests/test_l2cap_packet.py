@@ -104,3 +104,98 @@ class RefusalTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class FakeSocket:
+    """Replays packets a phone sent, and records what was written back."""
+
+    def __init__(self, packets):
+        self.packets = list(packets)
+        self.written = []
+
+    def recv(self, count):
+        return self.packets.pop(0) if self.packets else b''
+
+    def send(self, data):
+        self.written.append(data)
+        return len(data)
+
+    def close(self):
+        pass
+
+
+OURS = bytes.fromhex('fc9f5e')
+
+# The control packets a Z Fold7 sent, whole and unedited.
+CONNECT = bytes.fromhex(
+    '00000026' '000000' '080112' '1f' '0a03fc9f5e' '1002' '1a16'
+    + b'jbxB9cQdjwR9_gvQlnqdCQ'.hex())
+DISCONNECT = bytes.fromhex('0000000c' '000000' '08021a050a03fc9f5e')
+
+
+class EnvelopeTests(unittest.TestCase):
+    """The lengths are the phone's; only the payloads are invented."""
+
+    def test_the_phones_control_packets_are_self_consistent(self):
+        for raw in (CONNECT, DISCONNECT):
+            outer = int.from_bytes(raw[:4], 'big')
+            self.assertEqual(len(raw), 4 + outer)
+            self.assertEqual(raw[4:7], packet.CONTROL_HASH)
+
+    def test_stream_payload_has_the_envelope_removed(self):
+        inner = b'\x00\x00\x00\x04abcd'
+        raw = (len(OURS) + len(inner)).to_bytes(4, 'big') + OURS + inner
+        channel = packet.Channel(FakeSocket([raw]), OURS)
+        self.assertEqual(channel.recv(64), inner)
+
+    def test_a_connect_is_recorded_not_streamed(self):
+        channel = packet.Channel(FakeSocket([CONNECT]), OURS)
+        self.assertEqual(channel.recv(64), b'')
+        self.assertEqual(len(channel.control), 1)
+
+    def test_a_disconnect_closes_the_stream(self):
+        channel = packet.Channel(FakeSocket([DISCONNECT]), OURS)
+        self.assertEqual(channel.recv(64), b'')
+        self.assertTrue(channel.closed)
+
+    def test_a_packet_for_another_service_is_ignored(self):
+        other = bytes.fromhex('16d9ae')
+        raw = (3 + 2).to_bytes(4, 'big') + other + b'hi'
+        channel = packet.Channel(FakeSocket([raw]), OURS)
+        self.assertEqual(channel.recv(64), b'')
+
+    def test_control_then_stream_in_one_read(self):
+        inner = b'\x00\x00\x00\x02hi'
+        raw = CONNECT + ((3 + len(inner)).to_bytes(4, 'big') + OURS + inner)
+        channel = packet.Channel(FakeSocket([raw]), OURS)
+        self.assertEqual(channel.recv(64), inner)
+
+    def test_sendall_puts_the_envelope_back(self):
+        socket_ = FakeSocket([])
+        packet.Channel(socket_, OURS).sendall(b'\x00\x00\x00\x02hi')
+        self.assertEqual(b''.join(socket_.written),
+                         bytes.fromhex('00000009') + OURS
+                         + b'\x00\x00\x00\x02hi')
+
+    def test_a_long_message_is_split_but_stays_one_message(self):
+        body = bytes(2000)
+        socket_ = FakeSocket([])
+        channel = packet.Channel(socket_, OURS, mtu=512)
+        channel.sendall(body)
+        self.assertTrue(len(socket_.written) > 1)
+        self.assertTrue(all(len(p) <= 512 for p in socket_.written))
+        rejoined = b''.join(socket_.written)
+        self.assertEqual(int.from_bytes(rejoined[:4], 'big'),
+                         len(OURS) + len(body))
+
+    def test_recv_returns_what_is_asked_for_and_keeps_the_rest(self):
+        inner = b'0123456789'
+        raw = (3 + len(inner)).to_bytes(4, 'big') + OURS + inner
+        channel = packet.Channel(FakeSocket([raw]), OURS)
+        self.assertEqual(channel.recv(4), b'0123')
+        self.assertEqual(channel.recv(64), b'456789')
+
+    def test_a_closed_socket_ends_the_stream(self):
+        channel = packet.Channel(FakeSocket([]), OURS)
+        self.assertEqual(channel.recv(16), b'')
+        self.assertTrue(channel.closed)
