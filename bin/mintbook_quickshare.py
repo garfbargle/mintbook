@@ -776,13 +776,27 @@ def sharing_response(status):
     return sharing_frame(RESPONSE, connection_response=(3, pb.pack((1, status))))
 
 
-class Incoming:
-    """One file a phone says it is about to send."""
+# wire_format.proto, TextMetadata.Type. A shared link is a text payload,
+# not a file: the introduction carries the title and the bytes follow under
+# their own payload id.
+TEXT_UNKNOWN, TEXT_PLAIN, TEXT_URL, TEXT_ADDRESS, TEXT_PHONE = 0, 1, 2, 3, 4
+TEXT_KIND = {TEXT_PLAIN: 'text', TEXT_URL: 'link',
+             TEXT_ADDRESS: 'address', TEXT_PHONE: 'phone number'}
 
-    def __init__(self, payload_id, name, size):
+
+class Incoming:
+    """One file a phone says it is about to send.
+
+    Or one piece of text — a shared link is the same machinery with `text`
+    set, because the phone announces and transfers it the same way and only
+    the landing differs.
+    """
+
+    def __init__(self, payload_id, name, size, text=None):
         self.payload_id = payload_id
         self.name = name
         self.size = size
+        self.text = text
         self.path = None
         self.partial = None
         self.handle = None
@@ -827,6 +841,29 @@ class Incoming:
                     os.unlink(path)
             except OSError:
                 pass
+
+
+def text_name(title, kind):
+    """A filename for a piece of text a phone shared.
+
+    The title of a shared link is usually the link, which makes a poor
+    filename, so it is trimmed rather than used whole.
+    """
+    # safe_name supplies its own fallback for an empty title.
+    stem = drop.safe_name(title.strip().split('\n')[0][:60])
+    if stem.lower().endswith('.txt'):
+        return stem
+    return f'{stem}.txt'
+
+
+def save_text(directory, entry, blob):
+    """Land a text payload next to where files land."""
+    os.makedirs(directory, exist_ok=True)
+    path = drop.unique_path(directory, entry.name)
+    body = blob.decode('utf-8', 'replace')
+    with open(path, 'w', encoding='utf-8') as handle:
+        handle.write(body if body.endswith('\n') else body + '\n')
+    return path
 
 
 def receive_from_phone(sock, ask=None, on_progress=None, directory=None):
@@ -905,6 +942,18 @@ def receive_from_phone(sock, ask=None, on_progress=None, directory=None):
                 buffers[payload_id] = buffers.get(payload_id, b'') + data
                 if not flags & LAST_CHUNK:
                     continue
+                # A text payload is content, not a frame. Parsing it as one
+                # is how a shared link used to end the transfer with
+                # "unsupported wire type 4".
+                waiting = expected.get(payload_id)
+                if waiting is not None and waiting.text is not None:
+                    blob = buffers.pop(payload_id)
+                    path = save_text(directory, waiting, blob)
+                    if path:
+                        landed.append(path)
+                    if len(landed) == len(expected):
+                        break
+                    continue
                 frame = pb.submessage(pb.unpack(buffers.pop(payload_id)), 2)
                 if frame is None:
                     continue
@@ -920,6 +969,16 @@ def receive_from_phone(sock, ask=None, on_progress=None, directory=None):
                         entry = Incoming(pb.one(meta, 3),
                                          drop.safe_name(name.decode('utf-8', 'replace')),
                                          int(pb.one(meta, 4) or 0))
+                        expected[entry.payload_id] = entry
+                    # TextMetadata: title 2, type 3, payload id 4, size 5.
+                    for raw in introduction_body.get(2, []):
+                        meta = pb.unpack(raw)
+                        title = pb.one(meta, 2) or b''
+                        kind = int(pb.one(meta, 3) or TEXT_UNKNOWN)
+                        entry = Incoming(
+                            pb.one(meta, 4),
+                            text_name(title.decode('utf-8', 'replace'), kind),
+                            int(pb.one(meta, 5) or 0), text=kind)
                         expected[entry.payload_id] = entry
                     total = sum(e.size for e in expected.values())
                     accept = True

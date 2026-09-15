@@ -307,3 +307,52 @@ class EndpointAdvertisementTests(unittest.TestCase):
         full_info = bytes([0x06]) + b'\x00' * 16 + bytes([1]) + b'M'
         blob = self.ble.endpoint_advertisement('MB01', full_info)
         self.assertGreater(len(blob), 24)
+
+
+class SharedTextTests(unittest.TestCase):
+    """A shared link is a text payload, not a file.
+
+    It used to end the transfer with "unsupported wire type 4", because the
+    bytes that follow a TextMetadata are content and the loop parsed every
+    bytes payload as a protocol frame.
+    """
+
+    def setUp(self):
+        self.qs = load()
+        import tempfile
+        self.directory = tempfile.mkdtemp()
+
+    def test_a_link_becomes_a_readable_name(self):
+        self.assertTrue(
+            self.qs.text_name('https://example.com/a/b', self.qs.TEXT_URL)
+            .endswith('.txt'))
+
+    def test_a_long_title_is_trimmed(self):
+        name = self.qs.text_name('x' * 300, self.qs.TEXT_PLAIN)
+        self.assertLessEqual(len(name), 70)
+
+    def test_an_empty_title_still_gets_a_name(self):
+        # safe_name's own fallback, shared with files.
+        self.assertEqual(self.qs.text_name('', self.qs.TEXT_URL),
+                         'received.txt')
+
+    def test_only_the_first_line_is_used(self):
+        self.assertEqual(self.qs.text_name('one\ntwo', self.qs.TEXT_PLAIN),
+                         'one.txt')
+
+    def test_the_text_lands_with_its_content(self):
+        entry = self.qs.Incoming(7, 'link.txt', 23, text=self.qs.TEXT_URL)
+        path = self.qs.save_text(self.directory, entry,
+                                 b'https://example.com/xyz')
+        with open(path) as handle:
+            self.assertEqual(handle.read(), 'https://example.com/xyz\n')
+
+    def test_two_shares_do_not_overwrite_each_other(self):
+        entry = self.qs.Incoming(7, 'link.txt', 4, text=self.qs.TEXT_URL)
+        first = self.qs.save_text(self.directory, entry, b'one')
+        second = self.qs.save_text(self.directory, entry, b'two')
+        self.assertNotEqual(first, second)
+
+    def test_invalid_utf8_does_not_raise(self):
+        entry = self.qs.Incoming(7, 'x.txt', 2, text=self.qs.TEXT_PLAIN)
+        self.assertTrue(self.qs.save_text(self.directory, entry, b'\xff\xfe'))
