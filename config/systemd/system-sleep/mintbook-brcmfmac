@@ -1,54 +1,125 @@
 #!/bin/sh
-# Take the Broadcom Wi-Fi driver out across hibernation on the MacBook8,1.
+# Keep the Broadcom Wi-Fi driver healthy across sleep on the MacBook8,1.
 # Installed to /usr/lib/systemd/system-sleep/mintbook-brcmfmac by
-# bin/hibernate-install. See docs/hibernate.md, "Test M" and "Test N".
+# bin/hibernate-install. See docs/hibernate.md, "Test M"/"Test N" and
+# "s2idle resume recovery".
 #
-# Why: an image saved on battery never restored here. The restored kernel
-# hangs inside brcmfmac's pci_pm_restore; every device before it comes back
-# and brcmfmac never returns (Test M, photographed 2026-09-11). With the
-# driver unloaded for the cycle, the first battery save-and-restore ever
-# completed (Test N). Why only battery-saved images trip it is not known.
+# Hibernate: an image saved on battery never restored here. The restored kernel
+# hangs inside brcmfmac's pci_pm_restore; every device before it comes back and
+# brcmfmac never returns (Test M, photographed 2026-09-11). With the driver
+# unloaded for the cycle, the first battery save-and-restore ever completed
+# (Test N). So the hibernate leg unloads the driver before and reloads it after.
 #
-# Only the hibernate leg is touched. A plain s2idle suspend keeps Wi-Fi, so a
-# short lid close stays connected. systemd-sleep calls this with $1 = pre or
-# post and $2 = the verb; for suspend-then-hibernate it runs once per leg and
-# SYSTEMD_SLEEP_ACTION names the leg (suspend, hibernate,
-# suspend-after-failed-hibernate).
+# s2idle: a plain suspend keeps the driver loaded, so a short lid close keeps
+# its link, and no unload is done for it. But the Broadcom firmware can still
+# wedge on resume — scans then never complete and the link never comes back
+# (seen 2026-10-02). The suspend leg records whether the card was connected
+# before sleep; after resume, if it has not reconnected, a transient unit
+# reloads the driver. The wait runs outside this hook: systemd kills processes
+# left in the sleep service's cgroup, and holding the sleep transaction open
+# for the reconnect would delay resume.
+#
+# If the card was not connected before sleep there is nothing to recover, and
+# no reload is attempted — an absent link is not evidence of a wedge.
+#
+# systemd-sleep calls this with $1 = pre or post and $2 = the verb; for
+# suspend-then-hibernate it runs once per leg and SYSTEMD_SLEEP_ACTION names the
+# leg (suspend, hibernate, suspend-after-failed-hibernate).
 #
 # A hook cannot veto the sleep, so if the driver will not come out this only
 # logs it. The hibernate then goes ahead and will hang on restore, as before.
 #
 # Undo: delete the installed file. Nothing else depends on it.
 
+STATE_DIR=${MINTBOOK_WIFI_STATE_DIR:-/run/mintbook}
+CONNECTED_FLAG="$STATE_DIR/brcmfmac-was-connected"
+RECOVER_TIMEOUT=${MINTBOOK_WIFI_RECOVER_TIMEOUT:-25}
+RECOVER_UNIT=mintbook-wifi-recover
+
+wifi_connected() {
+  nmcli -t -f TYPE,STATE device status 2>/dev/null | grep -qx 'wifi:connected'
+}
+
+load_brcmfmac() {
+  # Loading brcmfmac_wcc pulls brcmfmac back in, and the second call covers a
+  # boot where the vendor module is not used.
+  modprobe brcmfmac_wcc 2>/dev/null
+  modprobe brcmfmac
+}
+
+# --- recovery mode, started by the suspend post leg through systemd-run ------
+if [ "${1:-}" = --recover ]; then
+  i=0
+  while [ "$i" -lt "$RECOVER_TIMEOUT" ]; do
+    if wifi_connected; then
+      rm -f "$CONNECTED_FLAG"
+      echo "mintbook-brcmfmac: Wi-Fi reconnected after ${i}s; no reload needed"
+      exit 0
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
+
+  echo "mintbook-brcmfmac: Wi-Fi not back after ${i}s; reloading brcmfmac" >&2
+  # timeout so a wedged device cannot leave this unit stuck forever. brcmfmac_wcc
+  # (the vendor add-on) holds brcmfmac, so it goes first.
+  for m in brcmfmac_wcc brcmfmac; do
+    grep -q "^$m " /proc/modules && timeout 20 modprobe -r "$m"
+  done
+  load_brcmfmac
+  if grep -q '^brcmfmac ' /proc/modules; then
+    echo "mintbook-brcmfmac: brcmfmac reloaded after s2idle resume"
+  else
+    echo "mintbook-brcmfmac: brcmfmac NOT reloaded after s2idle resume" >&2
+  fi
+  rm -f "$CONNECTED_FLAG"
+  exit 0
+fi
+
 case "${2:-}" in
   hibernate|hybrid-sleep)  leg=hibernate ;;
   suspend-then-hibernate)  leg=${SYSTEMD_SLEEP_ACTION:-} ;;
+  suspend)                 leg=suspend ;;
   *)                       exit 0 ;;
 esac
-[ "$leg" = hibernate ] || exit 0
 
 case "${1:-}" in
   pre)
-    # brcmfmac_wcc (the vendor add-on) holds brcmfmac, so it goes first, and
-    # `modprobe -r` then takes brcmfmac, brcmutil and cfg80211 with it as
-    # unused dependencies. The loop skips whatever has already gone.
-    for m in brcmfmac_wcc brcmfmac; do
-      grep -q "^$m " /proc/modules && modprobe -r "$m"
-    done
-    if grep -q '^brcmfmac ' /proc/modules; then
-      echo "mintbook-brcmfmac: brcmfmac is still loaded; this hibernate will likely hang on restore" >&2
+    if [ "$leg" = hibernate ]; then
+      # brcmfmac_wcc (the vendor add-on) holds brcmfmac, so it goes first, and
+      # `modprobe -r` then takes brcmfmac, brcmutil and cfg80211 with it as
+      # unused dependencies. The loop skips whatever has already gone.
+      for m in brcmfmac_wcc brcmfmac; do
+        grep -q "^$m " /proc/modules && modprobe -r "$m"
+      done
+      if grep -q '^brcmfmac ' /proc/modules; then
+        echo "mintbook-brcmfmac: brcmfmac is still loaded; this hibernate will likely hang on restore" >&2
+      else
+        echo "mintbook-brcmfmac: pre $2 (${SYSTEMD_SLEEP_ACTION:-}): brcmfmac unloaded"
+      fi
     else
-      # systemd-sleep hands hook output to the journal, so this line is the
-      # record that the hook, and not luck, took the driver out.
-      echo "mintbook-brcmfmac: pre $2 (${SYSTEMD_SLEEP_ACTION:-}): brcmfmac unloaded"
+      # suspend: remember whether the card was connected, so the post leg knows
+      # whether a failure to reconnect is abnormal.
+      mkdir -p "$STATE_DIR"
+      if wifi_connected; then
+        : > "$CONNECTED_FLAG"
+      else
+        rm -f "$CONNECTED_FLAG"
+      fi
     fi
     ;;
   post)
-    # Same order Test N used. Loading brcmfmac_wcc pulls brcmfmac back in, and
-    # the second call covers a boot where the vendor module is not used.
-    modprobe brcmfmac_wcc 2>/dev/null
-    modprobe brcmfmac
-    echo "mintbook-brcmfmac: post $2 (${SYSTEMD_SLEEP_ACTION:-}): brcmfmac $(grep -q '^brcmfmac ' /proc/modules && echo reloaded || echo NOT reloaded)"
+    if [ "$leg" = hibernate ]; then
+      load_brcmfmac
+      echo "mintbook-brcmfmac: post $2 (${SYSTEMD_SLEEP_ACTION:-}): brcmfmac $(grep -q '^brcmfmac ' /proc/modules && echo reloaded || echo NOT reloaded)"
+    elif [ -e "$CONNECTED_FLAG" ]; then
+      systemd-run --no-block --collect --quiet \
+        --unit="$RECOVER_UNIT" \
+        --description="MacBook8,1 brcmfmac Wi-Fi recovery after s2idle resume" \
+        --service-type=oneshot \
+        "$0" --recover \
+        || echo "mintbook-brcmfmac: could not start the Wi-Fi recovery unit" >&2
+    fi
     ;;
 esac
 exit 0

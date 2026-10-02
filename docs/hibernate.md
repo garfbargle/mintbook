@@ -1396,6 +1396,47 @@ This settles item 1 of "What is still unproven" for one run. The runtime
 drop-ins were removed straight after, and logind was reloaded back to plain
 `suspend`.
 
+### s2idle resume recovery, 2026-10-02
+
+The hibernate leg was covered; plain s2idle was not. On 2026-10-02 the machine
+was lid-closed at 14:45:58 and opened at 14:56:10 (`PM: suspend entry (s2idle)`
+→ `PM: suspend exit`). The link never came back: `wpa_supplicant` logged
+`wlp1s0: Reject scan trigger since one is already pending` for the next minute,
+there was **no** kernel `brcmfmac` error, and the interface stayed present but
+disconnected. Rebooting cleared it. The hook's `case` handled only the
+hibernate legs, so nothing touched the driver across that suspend.
+
+**The fix** is in the same hook. The suspend leg now records whether the card
+was connected before sleep, and the post leg starts a transient unit
+(`mintbook-wifi-recover`) that waits up to 25 s for the link to return and, if
+it does not, unloads and reloads `brcmfmac`. The wait runs in the transient
+unit rather than in the hook: systemd kills processes left in the sleep
+service's cgroup, and holding the sleep transaction open for the reconnect
+would delay resume.
+
+**Why not unload before every suspend, as hibernate does.** A healthy s2idle
+keeps its link; unloading would cost the fast path on every lid close, and a
+suspend that is aborted after the pre hook could leave Wi-Fi down. The failure
+this recovers from is a link that was up and does not come back, which is a
+usable signal and leaves a healthy resume untouched. A card that was not
+connected before sleep schedules nothing — an absent link is not a wedge.
+
+**Tested** by [`tests/test_brcmfmac_hook.py`](../tests/test_brcmfmac_hook.py),
+which drives the decision with a fake `nmcli`/`modprobe`/`systemd-run`:
+connected → no reload; disconnected past the timeout → reload; the post leg
+schedules the unit only when the pre leg flagged a connection; the hibernate
+leg still reloads. The end-to-end wedge cannot be provoked without wedging the
+firmware, and CONTRIBUTING forbids suspending to smoke-test, so the real
+recovery is unobserved on hardware until the next natural wedge.
+
+**Limits:** the 25 s wait is a guess around the ~5.5 s reconnect
+`sleep-report` measured on 2026-10-02; a wedged device could make `modprobe -r`
+itself block, which is why the recovery bounds it with `timeout 20`; a card
+that was down before sleep is left alone.
+
+**Undo:** delete the installed hook, as before. The recovery is inside it; there
+is no separate unit installed.
+
 ### The firmware's sleep methods do not look at the power source
 
 In `platform` hibernate mode, the default, the kernel calls the firmware's
