@@ -387,11 +387,18 @@ if [ -e "$HOME/.local/bin/wifi-menu" ]; then
   else
     warn "wifi click target" "panel-wifi is older than the menu — run bin/wifi-install"
   fi
-  WIF=$(sed -n '3p' /proc/net/wireless 2>/dev/null | cut -d: -f1 | tr -d ' ')
+  # From sysfs, not /proc/net/wireless: that legacy WEXT table is empty on
+  # cfg80211 drivers like brcmfmac until the card associates, so it cannot
+  # answer "is there a wireless interface?".
+  WIF=''
+  for d in /sys/class/net/*/wireless; do
+    [ -d "$d" ] || continue
+    d=${d%/wireless}; WIF=${d##*/}; break
+  done
   if [ -n "$WIF" ]; then
     ok "wireless interface" "$WIF"
   else
-    warn "wireless interface" "nothing in /proc/net/wireless — the menu will say so too"
+    warn "wireless interface" "no /sys/class/net/*/wireless — no Wi-Fi adapter"
   fi
 fi
 # The Bluetooth popup, only once bin/bt-panel-install has run — Bluetooth is a

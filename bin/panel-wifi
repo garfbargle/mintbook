@@ -16,13 +16,24 @@ MENU="$HOME/.local/bin/wifi-menu"
 # emitted on every path, including the early exits below
 printf '<click>%s</click>\n<iconclick>%s</iconclick>\n' "$MENU" "$MENU"
 
-line=$(grep -E '^[[:space:]]*[a-z0-9]+:' /proc/net/wireless 2>/dev/null | head -1)
-if [ -z "$line" ]; then
+# The interface comes from sysfs, not /proc/net/wireless. That file is the
+# legacy WEXT stats table and brcmfmac (cfg80211) leaves it empty, so using it
+# to find the device reported "No wireless device" on a working radio whenever
+# the card was merely unassociated — which is exactly when the bar most needs
+# to say "Disconnected". sysfs knows the interface in every link state;
+# /proc/net/wireless is still read below, for link quality once associated.
+iface=''
+for d in /sys/class/net/*/wireless; do
+    [ -d "$d" ] || continue
+    d=${d%/wireless}; iface=${d##*/}; break
+done
+if [ -z "$iface" ]; then
     printf '<img>%s/wifi-off.svg</img>\n<tool>Wi-Fi\nNo wireless device</tool>\n' "$DIR"; exit 0
 fi
 
-iface=${line%%:*}; iface=${iface// /}
-qual=$(printf '%s' "$line" | awk '{q=$3; sub(/\./,"",q); print q+0}')
+qual=$(awk -v i="$iface" '$1 == i":" { q=$3; sub(/\./,"",q); print q+0; exit }' \
+    /proc/net/wireless 2>/dev/null)
+[ -n "$qual" ] || qual=0
 
 # carrier tells us association state; quality alone reads 0 while connecting
 carrier=$(cat "/sys/class/net/$iface/carrier" 2>/dev/null || echo 0)

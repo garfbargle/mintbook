@@ -495,9 +495,14 @@ tray process is disabled.
 
 ### Wi-Fi indicator (`plugin-18`, genmon)
 
-Runs [`bin/panel-wifi`](../bin/panel-wifi), which reads link quality from
-`/proc/net/wireless`, checks `/sys/class/net/<if>/carrier` for association, and
-emits an `<img>` pointing at a pre-rendered SVG.
+Runs [`bin/panel-wifi`](../bin/panel-wifi), which finds the interface under
+`/sys/class/net/*/wireless` — present whether or not the card is associated —
+reads link quality from `/proc/net/wireless` once it is, checks
+`/sys/class/net/<if>/carrier` for association, and emits an `<img>` pointing at
+a pre-rendered SVG. It used to take the interface from `/proc/net/wireless`,
+which cfg80211 leaves empty until association, so a merely-disconnected card
+read as "No wireless device". Fixed 2026-10-02; `bin/wifi-menu`'s `wireless()`
+and `bin/doctor` had the same mistake.
 
 **This exists to escape the 20px xapp cap.** genmon renders `<img>` at the SVG's own
 declared size, so these icons are 30px and match the speaker and battery. They are

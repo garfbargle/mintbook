@@ -28,6 +28,7 @@ Two things it does that the battery menu does not:
 The password reaches NetworkManager on nmcli's stdin, not its argv — see
 connect() for why that works and how it was checked.
 """
+import glob
 import math
 import os
 import signal
@@ -54,23 +55,34 @@ def read_file(path, default=''):
 
 
 def wireless():
-    """Interface name and signal in dBm, from /proc/net/wireless. Two forkless
-    readings, and the dBm is the honest number — nmcli's SIGNAL is a 0-100
-    remap of it that no radio ever reports."""
+    """Interface name and signal in dBm. The interface comes from sysfs, which
+    has it whether or not the card is associated: /proc/net/wireless is the
+    legacy WEXT stats table and cfg80211 drivers (brcmfmac here) leave it empty,
+    so it can supply the dBm but must never be the source of the name. The dBm
+    is the honest number — nmcli's SIGNAL is a 0-100 remap of it that no radio
+    ever reports."""
+    iface = ''
+    for path in sorted(glob.glob('/sys/class/net/*/wireless')):
+        iface = path.split('/')[-2]
+        break
+    dbm = None
     for line in read_file('/proc/net/wireless').splitlines()[2:]:
         name, _, rest = line.partition(':')
         name = name.strip()
         if not name:
             continue
+        if not iface:
+            iface = name
+        if name != iface:
+            continue
         parts = rest.split()
-        dbm = None
         if len(parts) > 2:
             try:
                 dbm = int(float(parts[2].rstrip('.')))
             except ValueError:
                 dbm = None
-        return name, dbm
-    return '', None
+        break
+    return iface, dbm
 
 
 IFACE, DBM = wireless()
@@ -633,7 +645,7 @@ class OffRow(Row):
         self.card(cr, w, self.h)
         msg = ('Wi-Fi is off' if IFACE else 'No Wi-Fi adapter')
         sub = ('Turn Wi-Fi on to see networks' if IFACE
-               else 'Nothing in /proc/net/wireless')
+               else 'No Wi-Fi adapter found')
         text(cr, msg, 15, 14, 10.5, self.c['fg'], .8)
         text(cr, sub, 15, 33, 9.5, self.c['fg'], .45)
 
