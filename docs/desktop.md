@@ -1430,7 +1430,7 @@ so its startup no longer depends on the contents of the saved session.
 verified panel executable. It blocks between health checks rather than polling
 for process exit. A normal panel exit or crash retries after three seconds;
 repeated early exits back off to thirty seconds. Every thirty seconds it asks
-the panel's D-Bus main loop to answer a two-second Ping and checks the configured
+the panel's UI thread to answer a two-second no-op plugin event and checks the configured
 external plugin wrappers. Two successive failures recover the panel. Plugin
 configuration comes from xfconf's merged settings: reading just user XML misses
 inherited defaults such as the tray. A normal restart gets a fresh startup
@@ -1447,7 +1447,9 @@ The same installer updates the status readers. Wi-Fi and Bluetooth daemon
 queries have two-second deadlines; appearance refresh has an eight-second
 budget and cannot prevent Control Center output. The temperature reader uses
 shell builtins rather than starting `cat` for each sensor, and validates sensor
-numbers. CPU refreshes hold a nonblocking file lock, so hover and timer ticks
+numbers. Twenty interleaved before/after runs on this machine measured median
+wall time **84.08 ms → 10.62 ms**, CPU time **85.91 ms → 10.03 ms**. Both arms used
+an isolated temporary HOME, the same sensors and the same foreground defaults. CPU refreshes hold a nonblocking file lock, so hover and timer ticks
 cannot concurrently replace their shared cache files. Stale hover pidfiles
 verify command identity before retiring a watcher and reject nonpositive PIDs.
 Malformed health-cache rows leave the System icon visible. Doctor now tests
@@ -1468,3 +1470,28 @@ available: installed scripts and the service use repository symlinks, like the
 other daily conveniences. A logout/login and suspend/resume are not required to
 install this feature; those full lifecycle tests remain separate from the
 controlled crash, freeze, maintenance and appearance tests.
+
+Validation on October 9: all **350 unit/integration tests pass**, Python syntax,
+changed-shell syntax, palette consistency and systemd unit verification pass.
+A controlled SIGKILL of the panel recovered in **3.13 s**; its plugin wrappers
+finished starting afterwards. A controlled SIGSTOP recovered in **62.5 s**,
+with the full expected wrapper set present. Killing tray plugin 8 recovered in
+**0.69 s** through XFCE's own automatic wrapper restart, without rebuilding the
+whole bar. The recovery unit also passed explicit stop/restart and appearance
+restart/adoption checks. A test using a parent launcher and its child confirmed
+that closing the parent preserves the launched process.
+
+The initial whole-machine Doctor run reported **93 ok, 3 warn, 0 failures**;
+there were no failed system or user services. After installation Doctor adds
+responsive-bar and active-recovery checks. The display locked partway through
+the review: its XFCE session became inactive and the LightDM greeter active.
+On that inactive seat, ALSA and VA-API access checks reported two extra notes,
+while `/proc/asound/cards` still listed both devices. These are not evidence
+that the hardware disappeared. The initial live desktop was visually inspected
+at 2304×1440 and 168 DPI. The appearance switches completed and the original
+dark preference was restored. Control Center reported **264 ms** to appear.
+Final popup screenshots and keyboard dismissal could not be verified on the
+locked seat; black captures and ignored synthetic key events are not valid UX
+results. Full logout/login and suspend/resume were not exercised. The watchdog
+checks plugin presence; a plugin that is alive but has its own hung UI thread
+is outside that check, even though a frozen panel UI thread is detected.

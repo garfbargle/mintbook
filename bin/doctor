@@ -303,7 +303,7 @@ if [ -e /sys/class/leds/spi::kbd_backlight ]; then ok "keyboard backlight" "spi:
 
 section "Desktop"
 if pgrep -u "$(id -u)" -x xfce4-panel >/dev/null 2>&1; then
-  if busctl --user --timeout=2 call org.xfce.Panel /org/xfce/Panel org.freedesktop.DBus.Peer Ping >/dev/null 2>&1; then
+  if busctl --user --timeout=2 call org.xfce.Panel /org/xfce/Panel org.xfce.Panel PluginEvent ssv mintbook-health ping b false >/dev/null 2>&1; then
     ok "top bar responsive" "panel is running and answering — bin/panel-install adds automatic recovery"
   else
     bad "top bar responsive" "panel is running but not answering — restart the bar"

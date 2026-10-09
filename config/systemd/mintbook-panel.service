@@ -13,4 +13,3 @@ RestartSec=5
 # whole cgroup: panel-session closes only the verified panel via its pidfd.
 KillMode=process
 TimeoutStopSec=10
-

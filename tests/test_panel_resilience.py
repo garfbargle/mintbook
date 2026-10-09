@@ -75,6 +75,32 @@ class RecoveryTests(unittest.TestCase):
             (99, session.signal.SIGCONT), (99, session.signal.SIGTERM),
             (99, session.signal.SIGKILL)])
 
+    def test_heartbeat_calls_the_ui_thread_without_refreshing_widgets(self):
+        with patch.object(session, 'run', return_value='b false') as run:
+            self.assertTrue(session.ping())
+        args = run.call_args.args[0]
+        self.assertIn('PluginEvent', args)
+        self.assertEqual(args[-4:], ['mintbook-health', 'ping', 'b', 'false'])
+
+    def test_panel_close_preserves_its_launched_application(self):
+        parent = subprocess.Popen(['sh', '-c', 'sleep 30 & echo $!; wait'],
+                                  stdout=subprocess.PIPE, text=True, start_new_session=True)
+        child_pid = int(parent.stdout.readline())
+        child_fd = os.pidfd_open(child_pid)
+        parent_fd = os.pidfd_open(parent.pid)
+        try:
+            session.close_panel(parent_fd)
+            parent.wait(timeout=5)
+            # A panel-launched app in the same process group remains alive.
+            os.kill(child_pid, 0)
+        finally:
+            session.signal.pidfd_send_signal(child_fd, session.signal.SIGTERM)
+            os.close(child_fd)
+            os.close(parent_fd)
+            parent.stdout.close()
+            if parent.poll() is None:
+                parent.terminate(); parent.wait(timeout=5)
+
     def test_a_gone_panel_needs_no_further_signal(self):
         with patch.object(session.signal, 'pidfd_send_signal', side_effect=ProcessLookupError):
             session.close_panel(99)

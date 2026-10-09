@@ -76,8 +76,11 @@ def panel_fd(pid):
 
 
 def ping():
+    # An event for a nonexistent plugin is a no-op handled by the UI thread.
+    # Peer.Ping can be answered by GDBus without that thread making progress.
     return run(['busctl', '--user', '--timeout=2', 'call', 'org.xfce.Panel',
-                '/org/xfce/Panel', 'org.freedesktop.DBus.Peer', 'Ping']) is not None
+                '/org/xfce/Panel', 'org.xfce.Panel', 'PluginEvent',
+                'ssv', 'mintbook-health', 'ping', 'b', 'false']) is not None
 
 
 def expected_wrappers():
@@ -211,6 +214,7 @@ def supervise():
                         close_panel(fd)
                         gone = True
                 if gone:
+                    now = time.monotonic()
                     events.unregister(fd)
                     os.close(fd)
                     if child is not None:
