@@ -302,6 +302,18 @@ fi
 if [ -e /sys/class/leds/spi::kbd_backlight ]; then ok "keyboard backlight" "spi::kbd_backlight"; else warn "keyboard backlight" "led node missing"; fi
 
 section "Desktop"
+if pgrep -u "$(id -u)" -x xfce4-panel >/dev/null 2>&1; then
+  if busctl --user --timeout=2 call org.xfce.Panel /org/xfce/Panel org.freedesktop.DBus.Peer Ping >/dev/null 2>&1; then
+    ok "top bar responsive" "panel is running and answering — bin/panel-install adds automatic recovery"
+  else
+    bad "top bar responsive" "panel is running but not answering — restart the bar"
+  fi
+else
+  bad "top bar responsive" "panel is absent — run bin/panel-install from the desktop"
+fi
+if [ -e "$HOME/.config/autostart/mintbook-panel.desktop" ]; then
+  check "top bar recovery" "bin/panel-install" systemctl --user is-active mintbook-panel.service
+fi
 DPI=$(xfconf-query -c xsettings -p /Xft/DPI 2>/dev/null || echo '?')
 PSZ=$(xfconf-query -c xfce4-panel -p /panels/panel-1/size 2>/dev/null || echo '?')
 MTOP=$(xfconf-query -c xfwm4 -p /general/margin_top 2>/dev/null || echo '?')

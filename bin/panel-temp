@@ -1,20 +1,26 @@
 #!/usr/bin/env bash
 # CPU package temperature for xfce4-genmon-plugin.
 # Finds coretemp by name (hwmon numbering is not stable across boots).
+read_sensor() {
+    SENSOR_VALUE=''
+    { IFS= read -r SENSOR_VALUE < "$1"; } 2>/dev/null || true
+}
 t=""
 PANEL_FOREGROUND='#ffffff'
 [ -r "$HOME/.config/mintbook/system-chrome.env" ] && . "$HOME/.config/mintbook/system-chrome.env"
 for h in /sys/class/hwmon/hwmon*; do
-    [ "$(cat "$h/name" 2>/dev/null)" = "coretemp" ] || continue
+    read_sensor "$h/name"
+    [ "$SENSOR_VALUE" = "coretemp" ] || continue
     for f in "$h"/temp*_input; do
         [ -e "$f" ] || continue
-        case "$(cat "${f%_input}_label" 2>/dev/null)" in
-            Package*) t=$(cat "$f" 2>/dev/null) ;;
+        read_sensor "${f%_input}_label"
+        case "$SENSOR_VALUE" in
+            Package*) read_sensor "$f"; t=$SENSOR_VALUE ;;
         esac
     done
-    [ -n "$t" ] || t=$(cat "$h/temp1_input" 2>/dev/null)
+    if [ -z "$t" ]; then read_sensor "$h/temp1_input"; t=$SENSOR_VALUE; fi
 done
-if [ -z "$t" ]; then echo "<txt>--</txt>"; exit 0; fi
+if [[ ! "$t" =~ ^[0-9]+$ ]]; then echo "<txt>--</txt>"; exit 0; fi
 c=$(( t / 1000 ))
 
 # Smooth with an EMA (alpha 0.35) held in a state file. The raw sensor is
@@ -22,8 +28,9 @@ c=$(( t / 1000 ))
 # reading jump and then drift back. State persists across restarts, so the
 # displayed value eases instead of slamming.
 SF="$HOME/.cache/mintbook/temp.state"
-mkdir -p "$(dirname "$SF")"
-prev=$(cat "$SF" 2>/dev/null)
+mkdir -p "${SF%/*}"
+read_sensor "$SF"
+prev=$SENSOR_VALUE
 case "$prev" in ''|*[!0-9]*) prev=$c ;; esac
 c=$(( (35 * c + 65 * prev) / 100 ))
 printf '%s' "$c" > "$SF"
@@ -44,9 +51,9 @@ printf '<txt><span font_features="tnum" foreground="%s">%s°C </span></txt>\n' "
 # CPU is already on the bar. The hover names the other sensors that are not.
 bits=''
 for h in /sys/class/hwmon/hwmon*; do
-    n=$(cat "$h/name" 2>/dev/null)
-    v=$(cat "$h/temp1_input" 2>/dev/null)
-    [ -n "$v" ] || continue
+    read_sensor "$h/name"; n=$SENSOR_VALUE
+    read_sensor "$h/temp1_input"; v=$SENSOR_VALUE
+    [[ "$v" =~ ^[0-9]+$ ]] || continue
     case "$n" in
         nvme)  bits="${bits:+$bits · }SSD $(( v / 1000 ))°C" ;;
         pch_*) bits="${bits:+$bits · }PCH $(( v / 1000 ))°C" ;;

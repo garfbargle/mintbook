@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Mintbook Top Bar
+Comment=Start and recover the top bar independently of the saved session
+Exec=panel-session start
+OnlyShowIn=XFCE;
+Terminal=false
+StartupNotify=false

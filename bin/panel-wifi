@@ -49,7 +49,7 @@ elif [ "$pct" -ge 15 ]; then lvl=1
 else                         lvl=0
 fi
 
-ssid=$(/usr/sbin/iwgetid -r 2>/dev/null)
+ssid=$(timeout 2s /usr/sbin/iwgetid -r 2>/dev/null)
 
 # Associated is not the same as online. Three full bars while the uplink is
 # dead, or while a hotel portal is holding the connection, is the icon telling
@@ -60,7 +60,7 @@ ssid=$(/usr/sbin/iwgetid -r 2>/dev/null)
 # and costs 15 ms, the method goes and asks the network. That 15 ms is on
 # every tick where the card is associated and takes panel-wifi from ~30 ms to
 # ~45 ms — 0.9% of a core rather than 0.56%. See docs/desktop.md.
-conn=$(busctl --system get-property org.freedesktop.NetworkManager \
+conn=$(busctl --timeout=2 --system get-property org.freedesktop.NetworkManager \
   /org/freedesktop/NetworkManager org.freedesktop.NetworkManager \
   Connectivity 2>/dev/null)
 case "${conn##* }" in

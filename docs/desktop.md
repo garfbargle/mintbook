@@ -1410,3 +1410,61 @@ Takes effect at the next login; the processes already running stay until then.
   82–93 °C on AC (full turbo, by design). On battery: `power-saver` +
   `max_perf_pct=70` (~77 °C / ~5.8 W package under the same load).
   [hardware.md](hardware.md) Thermals. Do not add picom.
+
+### Top bar recovery (2026-10-09)
+
+The bar was absent for the entire first 40 minutes of this login. The saved
+`xfce4-session-cobo-mintbook:0` listed six clients and omitted `xfce4-panel`;
+there was no panel startup error or panel core dump from this boot. The two
+older core dumps, October 2 and 4, were plugin 8 (`libsystray.so`), in the
+libdbusmenu menu path. These are separate failure modes: session restoration
+can omit the whole bar, and a wrapper can disappear while the panel survives.
+
+`bin/panel-install` installs an XFCE autostart entry and the user service
+`mintbook-panel.service`. It retains the first backup of every replaced user
+file. No root changes or hardware tuning are involved. The service adopts a
+session-restored bar, or starts one with session-client registration disabled,
+so its startup no longer depends on the contents of the saved session.
+
+`panel-session` holds kernel pidfds for both the matching XFCE session and the
+verified panel executable. It blocks between health checks rather than polling
+for process exit. A normal panel exit or crash retries after three seconds;
+repeated early exits back off to thirty seconds. Every thirty seconds it asks
+the panel's D-Bus main loop to answer a two-second Ping and checks the configured
+external plugin wrappers. Two successive failures recover the panel. Plugin
+configuration comes from xfconf's merged settings: reading just user XML misses
+inherited defaults such as the tray. A normal restart gets a fresh startup
+grace period. Session exit stops recovery, including when the user manager
+outlives the desktop; XFCE here does not activate `graphical-session.target`.
+
+Recovery signals only the held panel identity, with a bounded TERM/KILL fallback.
+The service uses `KillMode=process`: applications launched by the bar must not
+be killed together with its cgroup. A failing supervisor is restarted by
+systemd, with a limit of five attempts in two minutes. Failures and recoveries
+are in `journalctl --user -u mintbook-panel.service`.
+
+The same installer updates the status readers. Wi-Fi and Bluetooth daemon
+queries have two-second deadlines; appearance refresh has an eight-second
+budget and cannot prevent Control Center output. The temperature reader uses
+shell builtins rather than starting `cat` for each sensor, and validates sensor
+numbers. CPU refreshes hold a nonblocking file lock, so hover and timer ticks
+cannot concurrently replace their shared cache files. Stale hover pidfiles
+verify command identity before retiring a watcher and reject nonpositive PIDs.
+Malformed health-cache rows leave the System icon visible. Doctor now tests
+whether the actual panel is running and responsive, rather than reporting only
+that its configuration exists.
+
+For panel configuration maintenance, stop recovery first:
+
+```bash
+systemctl --user stop mintbook-panel.service
+# Run the existing feature installer or configure the panel.
+~/.local/bin/panel-session start
+```
+
+Undo with `bin/panel-install --revert`. It restores the prior reader files,
+removes recovery and starts an ordinary panel. Keep the installing checkout
+available: installed scripts and the service use repository symlinks, like the
+other daily conveniences. A logout/login and suspend/resume are not required to
+install this feature; those full lifecycle tests remain separate from the
+controlled crash, freeze, maintenance and appearance tests.
