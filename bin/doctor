@@ -91,17 +91,25 @@ for helper in login power; do
   if cmp -s "$ROOT/bin/$helper-apply" "/usr/local/sbin/mintbook-$helper-apply"; then
     ok "$helper helper revision" "matches the repository"
   else
-    warn "$helper helper revision" "installed copy differs — authenticate bin/safety-install"
+    warn "$helper helper revision" "installed copy differs — pkexec bin/safety-install"
   fi
 done
 if [ -e /run/mintbook-policy/cap ]; then
   if [ "$(stat -c '%u:%a' /run/mintbook-policy)" = 0:755 ] && [ "$(stat -c '%u:%a' /run/mintbook-policy/cap)" = 0:644 ]; then
     ok "protected policy state" "root-owned /run/mintbook-policy/cap"
+    if systemctl --user is-enabled mintbook-input-boost.service >/dev/null 2>&1; then
+      BOOST_CMD=$(systemctl --user show mintbook-input-boost.service -p ExecStart --value 2>/dev/null)
+      if [[ "$BOOST_CMD" == *"/.local/bin/input-boost"* ]]; then
+        ok "Input Boost policy client" "installed client reads protected policy state"
+      else
+        warn "Input Boost policy client" "legacy unit — run bin/input-boost-install after the root migration"
+      fi
+    fi
   else
-    bad "protected policy state" "unexpected ownership/mode; run bin/safety-install"
+    bad "protected policy state" "unexpected ownership/mode; pkexec bin/safety-install"
   fi
 else
-  warn "protected policy state" "safety migration pending — authenticate bin/safety-install"
+  warn "protected policy state" "safety migration pending — pkexec bin/safety-install"
 fi
 if systemctl --user is-enabled mintbook-backlight-curve.service >/dev/null 2>&1; then
   check "brightness reconciliation" "shared curve watcher" systemctl --user is-active mintbook-backlight-curve.service
