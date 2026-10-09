@@ -111,3 +111,31 @@ From a terminal, to check scaling:
 ```bash
 xfce4-screenshooter --fullscreen --save /tmp/screen.png
 ```
+
+## Brightness keys and Control Center (2026-10-08)
+
+`bin/brightness-install` versions the curve that was previously installed only
+in the home directory. It preserves `~/.config/mintbook/backlight-curve.env`
+and the base Redshift configuration. Both XF86 brightness keys call
+`backlight-curve step ±5`; the Control Center calls the same helper. XFCE's
+independent power-manager brightness key handler is disabled to avoid two
+writers. The existing brightness watcher now uses direct Python file reads
+once per second, with no idle shell/subprocess churn.
+
+The tray uses the saved perceived percentage only when its hardware value
+matches sysfs; otherwise it shows actual hardware and the watcher reconciles
+it. There is no time-based suppression window to swallow a key press. Settings
+are serialized and failed hardware/gamma writes do not publish success.
+
+One systemd-owned Redshift process combines Night Light and software dimming.
+Command-line overrides apply the same brightness multiplier during day and night;
+Night Light Off changes temperature to 6500 K while retaining dimming. The
+persistent base config is not rewritten on each adjustment.
+
+Undo: `bin/brightness-install --revert`. The first install saves previous scripts,
+units, plugin, shortcuts and the power-manager key setting under
+`~/.local/state/mintbook/brightness-before-*`; curve preferences are retained.
+See [the top-bar review](top-bar-review.md) for tests and measured costs.
+
+Redshift keeps the existing base config path allowed by AppArmor; no new policy
+permission or generated runtime config is needed.

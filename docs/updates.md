@@ -35,7 +35,7 @@ and all of its settings remain installed and available on demand.
 | [`bin/panel-system`](../bin/panel-system) | the System icon and status badge; reads the caches | a few milliseconds, every 30 s |
 | [`bin/updates-menu`](../bin/updates-menu) | the glass popup | 300 ms to open |
 | `mintbook-updates-check.timer` | runs the check 5 min after login, then every 6 h | |
-| `mintbook-updates-check.path` | runs it again whenever the APT cache is rebuilt | |
+| `mintbook-updates-check.path` | notices APT/dpkg, Flatpak and live updater preferences | signature-filtered, serialized |
 
 The whole design is that ratio. Working out what apt has waiting means loading
 the package cache and running a dist-upgrade resolution, which is two and a
@@ -51,8 +51,8 @@ reads
 
 and draws a conclusion. A timer keeps those two honest, a path unit re-runs
 the check the moment somebody else refreshes the package lists, the popup
-re-runs it every time it opens, and `bin/doctor` is what tells you if the
-timer has stopped — see [Staleness](#staleness).
+reuses a successful cache younger than 60 seconds and otherwise rechecks.
+`bin/doctor` tells you if the timer has stopped — see [Staleness](#staleness).
 
 `updates.state` is `key = value` lines so tiny status readers need no package
 imports. Both files are written with a rename, so
@@ -64,8 +64,9 @@ a popup reading while the check writes never sees half a file.
 `/usr/lib/linuxmint/mintUpdate` — the same class behind `mintupdate-cli list`
 and the Update Manager window. Packages are grouped into one update, named,
 typed (`security` / `kernel` / `package`), described and aliased exactly the
-way the Update Manager does it, and `/etc/mintupdate.blacklist` is honoured, so
-an update ignored there is ignored here too.
+way the Update Manager does it. Its live `com.linuxmint.updates` GSettings
+blacklist is honoured. `/etc/mintupdate.blacklist` belongs to unattended updates
+and is not used as a second filter.
 
 Writing that against python-apt directly would have been a second opinion about
 what an update is, and two opinions on one bar is one too many.
@@ -102,7 +103,7 @@ Sizes are a second round trip each — about half a second per ref — so they r
 against a six-second budget and any rows past it honestly report `0` rather
 than making the whole check take a minute.
 
-**A flatpak row has no "new version".** A `FlatpakRemoteRef` carries a commit
+**User Flatpak rows may have no "new version".** A `FlatpakRemoteRef` carries a commit
 and two sizes, not appdata, so the version on the far side is not knowable
 without pulling and parsing the remote's appstream. The row shows what you
 have and where it comes from — `1.2.0 · flathub · user` — rather than an arrow
@@ -197,7 +198,9 @@ keystroke.
 So the grab is dropped the moment a transaction starts and taken again when it
 ends. While an install runs, clicking outside does nothing. Clicking the bar
 icon deliberately hides the popup without ending its process or transaction;
-clicking again restores the live progress view.
+clicking again restores the live progress view. Escape, window-close and other
+dismissal paths also hide active work. Once hidden work and its final recheck
+finish, the process exits. An idle closed popup does not remain running.
 
 ### What it asks before it installs
 
@@ -466,3 +469,22 @@ only reason this was worth doing at all.
   not to. `signed-by=` rather than putting the key back in `trusted.gpg.d`: the
   old location would also work, and would trust that key for every source on
   the machine.
+
+## Matching the installed updater (2026-10-08)
+
+System Flatpaks use Mint's own `flatpak-update-worker.py` records, including
+versions and grouped extensions. User Flatpaks are additional rows explicitly
+marked `user`: Mint 22.3's Update Manager only queries the system installation.
+A parent and its extensions count once while retaining every selected ref.
+The live `show-flatpak-updates` preference applies to both scopes.
+
+The path unit now watches package installation/removal, Flatpak deployment
+and live blacklist preferences. It waits for dpkg status to settle and checks
+a cheap input signature so unrelated desktop preference writes do not load
+APT. Popup/timer/path requests share a collector lock. Collector failures
+retain the previous answer with an error; they do not claim a successful zero.
+An open idle popup follows atomic cache changes through a file monitor.
+
+Ordinary dismissal preserves progress in the same process. Forced termination,
+a crash or logout can still end a user Flatpak worker; APT remains owned by
+aptkit. This is not a persistent transaction recovery service.

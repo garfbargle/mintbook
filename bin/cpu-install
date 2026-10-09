@@ -43,7 +43,7 @@ fi
 echo "==> $BIN"
 install -dm755 "$BIN"
 "$ROOT/bin/cpu-hover" stop
-for f in panel-cpu cpu-menu cpu-hover mintbook_cpu.py mintbook_appcolor.py mintbook_keys.py; do
+for f in panel-cpu cpu-menu cpu-hover mintbook_cpu.py mintbook_appcolor.py mintbook_keys.py mintbook_instance.py; do
   rm -f "$BIN/$f"
   install -m755 "$ROOT/bin/$f" "$BIN/$f"
 done

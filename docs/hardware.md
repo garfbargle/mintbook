@@ -1144,3 +1144,8 @@ The authoritative cap moves to `/run/mintbook-policy/cap`, under a root-owned
 Input Boost reads that new path. Requests must be short regular files; symlinks
 and FIFOs are refused without blocking. Reinstall with `sudo bin/power-install`
 after a Timeshift snapshot, then restart Input Boost. No tuning values change.
+
+For an existing installation, `sudo bin/safety-install` deploys the reviewed
+helper fixes with Timeshift and root-file backups; afterward run
+`bin/input-boost-install` as the desktop user. See
+[the top-bar review](top-bar-review.md) for deployment status and undo details.

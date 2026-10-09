@@ -122,8 +122,8 @@ arriving gigabyte cannot stall the desktop on two cores.
 Share, Google's own handshake, against an unmodified phone with nothing
 installed on it. Pick the phone in the sheet, tap Accept on its screen, and
 the file is there. Bluetooth has to be on: Android sleeps its Nearby stack to
-save battery, and a BLE advertisement is what wakes it. Receiving *from* a
-phone is not built yet.
+save battery, and a BLE advertisement is what wakes it. Receiving from Android
+is supported too, with confirmation before saving.
 
 This is not Apple's AirDrop, and on this machine it cannot be: AirDrop puts
 its data on AWDL, which needs the wireless card in monitor mode with frame
@@ -190,7 +190,7 @@ failure here, and the card does not pretend otherwise.
 | **Desktop** | [Look and behavior](docs/desktop.md) · [Control Center and System menu](docs/control-center.md) · [Software updates](docs/updates.md) · [HiDPI display](docs/display.md) · [Login and lock screen](docs/login.md) |
 | **Daily use** | [Shortcuts and search](docs/daily.md) · [Battery](docs/battery.md) · [Video](docs/video.md) · [Nearby sharing](docs/mintdrop.md) |
 | **Hardware** | [Input and sleep](docs/input.md) · [Hibernation](docs/hibernate.md) · [Audio](docs/audio.md) · [Camera](docs/camera.md) · [Bluetooth](docs/bluetooth.md) |
-| **System** | [Boot and kernels](docs/boot.md) · [App performance](docs/app-performance.md) · [Implementation guide](CONTRIBUTING.md) |
+| **System** | [Boot and kernels](docs/boot.md) · [App performance](docs/app-performance.md) · [Top-bar review](docs/top-bar-review.md) · [Implementation guide](CONTRIBUTING.md) |
 
 macOS remains on the disk. OpenCore chooses which system boots; GRUB does not.
 Kernel 6.14 remains a bootable fallback, though speakers, camera, and Bluetooth

@@ -1,35 +1,17 @@
-# The timer is how often we look. This is how we notice that looking would
-# tell us something new.
-#
-# /var/cache/apt/pkgcache.bin is rewritten whenever the package lists are
-# refreshed — mint-refresh-cache, apt-daily.timer, a plain `apt update`, the
-# popup's own refresh button — and that is exactly when the answer on the bar
-# can change without anything here having run. Without this, the two facts
-# drift apart in the open: at 15:40 mint-refresh-cache found a new 1password
-# and the Update Manager said so; our answer was from 14:24 and the next check
-# was due at 20:26, so the System badge sat four hours behind something that
-# was already on screen. Now the badge follows within one genmon tick.
-#
-# APT replaces that file with a rename (FileFd's WriteAtomic), which is the
-# case worth checking, because a rename is not a write: PathChanged catches it
-# and re-arms afterwards, both verified here before this file was added.
-#
-# It cannot chase its own tail. pkgcache.bin is root-owned and updates-check
-# runs as you, so a check has no way to rewrite what triggered it.
-#
-# dpkg's status file is deliberately not watched, though the Update Manager
-# watches both. That one changes once per package, so a hundred-package
-# upgrade would mean a hundred triggers, and a count recomputed between two
-# halves of one dpkg run is not a count anybody wants to read. The apt cache
-# is rebuilt once when the run is over, which is the moment that matters.
-#
-# No Unit= line: systemd triggers the service of the same name.
-
+# A cheap signature ignores unrelated dconf writes. A single collector lock
+# serializes timer/popup/path requests, and dpkg changes settle before checking.
 [Unit]
-Description=Notice the APT cache changing, and re-check what is waiting
+Description=Notice package and live updater preference changes
 
 [Path]
+Unit=mintbook-updates-local.service
 PathChanged=/var/cache/apt/pkgcache.bin
+# Mint also watches package installation/removal and live preference changes.
+# The service serializes checks and waits for dpkg's status file to settle.
+PathChanged=/var/lib/dpkg/status
+PathChanged=%h/.config/dconf/user
+PathChanged=/var/lib/flatpak/.changed
+PathChanged=%h/.local/share/flatpak/.changed
 
 [Install]
 WantedBy=paths.target

@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+"""Apply/step the perceived-brightness curve, or report live state."""
+import argparse
+import sys
+import mintbook_backlight as bl
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('mode', choices=('apply', 'step', 'status'), nargs='?', default='apply')
+    parser.add_argument('value', type=int, nargs='?')
+    args = parser.parse_args()
+    if args.mode == 'status':
+        print(bl.level(int((bl.BL / 'brightness').read_text()),
+                       int((bl.BL / 'max_brightness').read_text()), bl.read_state()))
+        return 0
+    if args.mode == 'step' and args.value is None:
+        parser.error('step requires a signed percentage')
+    print(bl.apply(percent=args.value if args.mode == 'apply' else None,
+                   step=args.value if args.mode == 'step' else None,
+                   external=args.mode == 'apply' and args.value is None))
+    return 0
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main())
+    except Exception as exc:
+        detail = getattr(exc, 'stderr', None)
+        if isinstance(detail, bytes): detail = detail.decode(errors='replace')
+        print('Brightness: ' + (detail.strip() if detail else str(exc)), file=sys.stderr)
+        sys.exit(1)

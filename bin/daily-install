@@ -18,7 +18,7 @@ SCRIPTS = ('overview', 'spotlight', 'spotlight-actions', 'keep-awake', 'screensh
            'window-place', 'mintbook-health', 'doctor', 'control-center', 'system-menu', 'wifi-menu', 'bt-menu',
            'battery-menu', 'battery-history', 'sleep-report', 'updates-menu',
            'cpu-menu', 'panel-cpu', 'mintbook_cpu.py', 'mintbook_keys.py',
-           'session-logout')
+           'session-logout', 'mintbook_instance.py', 'revert-mac-theme', 'input-boost')
 PLUGINS = ()
 UNIT = 'mintbook-health.timer'
 KEYS = {'<Super>Left': 'left', '<Super>Right': 'right', '<Super>Down': 'restore'}

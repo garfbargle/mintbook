@@ -86,6 +86,28 @@ else
   ok "live policy" "ac=$AC $PROF max_perf_pct=$PCT (manual override; auto would be $WANT_PROF/$WANT_PCT)"
 fi
 
+# A tracked helper update must reach the installed root copy to protect the system.
+for helper in login power; do
+  if cmp -s "$ROOT/bin/$helper-apply" "/usr/local/sbin/mintbook-$helper-apply"; then
+    ok "$helper helper revision" "matches the repository"
+  else
+    warn "$helper helper revision" "installed copy differs — authenticate bin/safety-install"
+  fi
+done
+if [ -e /run/mintbook-policy/cap ]; then
+  if [ "$(stat -c '%u:%a' /run/mintbook-policy)" = 0:755 ] && [ "$(stat -c '%u:%a' /run/mintbook-policy/cap)" = 0:644 ]; then
+    ok "protected policy state" "root-owned /run/mintbook-policy/cap"
+  else
+    bad "protected policy state" "unexpected ownership/mode; run bin/safety-install"
+  fi
+else
+  warn "protected policy state" "safety migration pending — authenticate bin/safety-install"
+fi
+if systemctl --user is-enabled mintbook-backlight-curve.service >/dev/null 2>&1; then
+  check "brightness reconciliation" "shared curve watcher" systemctl --user is-active mintbook-backlight-curve.service
+  check "shared display gamma" "Night Light and dimming" systemctl --user is-active mintbook-redshift.service
+fi
+
 section "Thermals"
 PKG=$(sensors 2>/dev/null | awk '/Package id 0/{gsub(/[+°C]/,"",$4); print int($4)}')
 if [ -z "${PKG:-}" ]; then warn "package temp" "sensors gave nothing"

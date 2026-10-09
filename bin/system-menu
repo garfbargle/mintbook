@@ -246,7 +246,8 @@ def glyph(cr, kind, cx, cy, size, color):
 
 class Menu:
     def __init__(self):
-        self.colors = DARK if read_text(APPLIED, 'light') == 'dark' else LIGHT
+        appearance = os.environ.get('MINTBOOK_PREVIEW_APPEARANCE') or read_text(APPLIED, 'light')
+        self.colors = DARK if appearance == 'dark' else LIGHT
         self.machine = machine_snapshot()
         self.health = health_snapshot()
         self.updates = updates_snapshot()
@@ -477,9 +478,13 @@ class Menu:
         if self.doctor_running or not os.access(HEALTH_APP, os.X_OK): return
         self.doctor_running = True; self.area.queue_draw()
         def work():
-            subprocess.run([str(HEALTH_APP), '--check'], stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL, timeout=100)
-            GLib.idle_add(self.doctor_done)
+            try:
+                subprocess.run([str(HEALTH_APP), '--check'], stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, timeout=100)
+            except (OSError, subprocess.SubprocessError):
+                pass
+            finally:
+                GLib.idle_add(self.doctor_done)
         threading.Thread(target=work, daemon=True).start()
 
     def doctor_done(self):
@@ -493,9 +498,13 @@ class Menu:
         if self.awake_running or not os.access(AWAKE_APP, os.X_OK): return
         self.awake_running = True; self.awake = 0 if value == 'off' else int(value); self.area.queue_draw()
         def work():
-            subprocess.run([str(AWAKE_APP), value], stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL, timeout=10)
-            GLib.idle_add(self.awake_done)
+            try:
+                subprocess.run([str(AWAKE_APP), value], stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, timeout=10)
+            except (OSError, subprocess.SubprocessError):
+                pass
+            finally:
+                GLib.idle_add(self.awake_done)
         threading.Thread(target=work, daemon=True).start()
 
     def awake_done(self):
@@ -578,16 +587,8 @@ def pointer_xy():
 
 
 def single_instance():
-    PIDFILE.parent.mkdir(parents=True, exist_ok=True)
-    try: pid = int(read_text(PIDFILE, '0'))
-    except ValueError: pid = 0
-    if pid and pid != os.getpid():
-        try: ours = b'system-menu' in Path(f'/proc/{pid}/cmdline').read_bytes()
-        except OSError: ours = False
-        if ours:
-            try: os.kill(pid, signal.SIGTERM); return False
-            except OSError: pass
-    PIDFILE.write_text(str(os.getpid())); return True
+    from mintbook_instance import claim
+    return claim(PIDFILE, 'system-menu', signal.SIGTERM)
 
 
 def main():

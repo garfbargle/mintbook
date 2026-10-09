@@ -16,7 +16,7 @@ A key or button press lifts the cap, and it comes back HOLD seconds after the
 last one. No boost lasts more than MAXBOOST seconds in a row: after that the cap
 stays until input stops for REARM seconds, so typing over a long compile does
 not uncap the compile. The cap it puts back is whatever mintbook-power-apply
-last set, read from /run/mintbook-power/cap, so a profile change or an AC plug
+last set, read from /run/mintbook-policy/cap, so a profile change or an AC plug
 during a boost is never undone.
 
 It asks the X server for raw key and button presses only. Pointer motion is

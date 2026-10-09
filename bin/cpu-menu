@@ -533,7 +533,8 @@ class FilesRow(Row):
 
 class Menu:
     def __init__(self):
-        self.mode = 'dark' if read_file(APPLIED, 'light') == 'dark' else 'light'
+        appearance = os.environ.get('MINTBOOK_PREVIEW_APPEARANCE') or read_file(APPLIED, 'light')
+        self.mode = 'dark' if appearance == 'dark' else 'light'
         self.dark = self.mode == 'dark'
         self.colors = DARK if self.dark else LIGHT
         self.closing = False
@@ -988,26 +989,8 @@ class Menu:
 
 
 def single_instance():
-    os.makedirs(os.path.dirname(PIDFILE), exist_ok=True)
-    try:
-        pid = int(read_file(PIDFILE, '0'))
-    except ValueError:
-        pid = 0
-    if pid and pid != os.getpid():
-        try:
-            with open(f'/proc/{pid}/cmdline', 'rb') as handle:
-                ours = b'cpu-menu' in handle.read()
-        except OSError:
-            ours = False
-        if ours:
-            try:
-                os.kill(pid, signal.SIGTERM)
-                return False
-            except OSError:
-                pass
-    with open(PIDFILE, 'w') as handle:
-        handle.write(str(os.getpid()))
-    return True
+    from mintbook_instance import claim
+    return claim(PIDFILE, 'cpu-menu', signal.SIGTERM)
 
 
 def pointer_xy():

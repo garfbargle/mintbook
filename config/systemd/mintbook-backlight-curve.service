@@ -1,0 +1,13 @@
+[Unit]
+Description=Keep external brightness changes on Mintbook's perceived curve
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/backlight-curve-watch
+Restart=on-failure
+RestartSec=5
+Nice=10
+
+[Install]
+WantedBy=default.target

@@ -246,6 +246,7 @@ class DailyTests(unittest.TestCase):
         Panel = panel_class()
         panel = Panel.__new__(Panel)
         sent, updated = [], []
+        panel.dismissing = False
         panel._send_value = lambda tile: sent.append(tile.requested_value)
         tile = NS(update=updated.append)
         panel.set_value(tile, 5)

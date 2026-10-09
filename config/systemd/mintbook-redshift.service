@@ -1,0 +1,13 @@
+[Unit]
+Description=Mintbook Night Light and software brightness
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/mintbook-redshift
+# No gamma reset on stop: avoid a full-bright flash during adjustment.
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

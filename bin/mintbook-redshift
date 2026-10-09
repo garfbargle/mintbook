@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+"""The sole gamma owner, combining Night Light and software brightness."""
+import os
+import mintbook_backlight as bl
+
+try:
+    soft = bl.SOFT.read_text().strip()
+except OSError:
+    soft = '1'
+try:
+    mode = (bl.STATE_DIR / 'night.mode').read_text().strip()
+except OSError:
+    mode = 'auto'
+args = bl.redshift_args(bl.CONFIG / 'redshift.conf', soft, mode)
+os.execv(args[0], args)

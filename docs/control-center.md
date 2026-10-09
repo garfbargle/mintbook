@@ -583,3 +583,15 @@ Restores the plugin ids saved to
 removes the volume-key bindings. `plugin-25` stays registered but unused; the
 old genmon `.rc` files were never deleted, so the indicators come back with
 their commands intact.
+
+## Resilience pass (2026-10-08)
+
+Live reads now have at most one request per tile in flight. Pending setting
+writes are retained and coalesced when the popup is dismissed; it exits after
+the latest value is applied. Idle dismissal cancels queued reads. A failed
+plugin read/set is surfaced instead of silently presenting success.
+
+Brightness keys and the Display tile share a tracked controller; see
+[display setup](display.md#brightness-keys-and-control-center-2026-10-08).
+Popup ownership, updater progress, measurements and remaining deployment
+limits are recorded in [the top-bar review](top-bar-review.md).

@@ -319,3 +319,8 @@ Missing appearance assets now require the authenticated `login-install` rather
 than copying a user-controlled theme tree through the passwordless helper.
 Reinstall with `sudo bin/login-install` after the README Timeshift snapshot.
 The installer's existing `--revert` restores the original login setup.
+
+For an existing installation, `sudo bin/safety-install` deploys the reviewed
+helper fixes with Timeshift and root-file backups; afterward run
+`bin/input-boost-install` as the desktop user. See
+[the top-bar review](top-bar-review.md) for deployment status and undo details.

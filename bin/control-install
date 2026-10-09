@@ -88,7 +88,7 @@ MINTBOOK_PANEL_FG="$PANEL_FOREGROUND" python3 "$ROOT/icons/generate-system-genmo
 
 echo "==> $BIN"
 install -dm755 "$BIN"
-for f in control-center panel-control system-menu panel-system mintbook-health doctor keep-awake volume-key; do
+for f in control-center panel-control system-menu panel-system mintbook-health doctor keep-awake volume-key mintbook_instance.py; do
   rm -f "$BIN/$f"
   install -m755 "$ROOT/bin/$f" "$BIN/$f"
 done

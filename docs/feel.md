@@ -390,7 +390,7 @@ boost lasts more than 8 s in a row: after that the cap waits for a 1 s pause, so
 typing over a compile does not uncap the compile. It asks X for raw key and
 button presses only, through `libXi` over `ctypes`, so it needs no new packages.
 The cap it puts back is whatever `mintbook-power-apply` last set, which the
-script now records in `/run/mintbook-power/cap`, so an AC plug or a profile
+script now records in `/run/mintbook-policy/cap`, so an AC plug or a profile
 change during a boost wins. The profile never moves, so the Power tile no longer
 changes on its own.
 
@@ -422,7 +422,7 @@ many seconds were uncapped (`journalctl --user -u mintbook-input-boost`), and
 that is the data for it.
 
 ```bash
-pkexec bin/power-install     # the tmpfiles rule, and /run/mintbook-power/cap
+pkexec bin/power-install     # the tmpfiles rule, and /run/mintbook-policy/cap
 cp config/systemd/mintbook-input-boost.service ~/.config/systemd/user/
 systemctl --user enable --now mintbook-input-boost.service
 systemctl --user disable --now mintbook-input-boost.service   # undo
@@ -832,3 +832,12 @@ bin/runaway-install --revert   # take it off
 bin/runaway-watch --check      # what it sees right now
 bin/runaway-watch --ignore PID # never ask about that command again
 ```
+
+## Protected policy state migration (2026-10-08)
+
+After authenticating `bin/safety-install`, run `bin/input-boost-install` as the
+desktop user. This moves the client and its stop hook to root-owned
+`/run/mintbook-policy/cap`; the group-writable request inbox is separate.
+The installer refuses missing or writable policy state and saves the previous
+client/unit and enabled/running state. Undo it with
+`bin/input-boost-install --revert` before reverting root helpers.

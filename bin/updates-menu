@@ -78,32 +78,8 @@ signal.signal(signal.SIGUSR1, remember_toggle)
 
 
 def claim_instance():
-    """Claim the pidfile, or ask the existing popup to toggle visibility.
-
-    This happens before the automatic update check and the GTK import. A click
-    that merely reopens a hidden, working popup must not start a second cache
-    check alongside the package transaction.
-    """
-    os.makedirs(os.path.dirname(PIDFILE), exist_ok=True)
-    try:
-        pid = int(read_file(PIDFILE, '0'))
-    except ValueError:
-        pid = 0
-    if pid and pid != os.getpid():
-        try:
-            with open(f'/proc/{pid}/cmdline', 'rb') as f:
-                ours = b'updates-menu' in f.read()
-        except OSError:
-            ours = False
-        if ours:
-            try:
-                os.kill(pid, signal.SIGUSR1)
-                return False
-            except OSError:
-                pass
-    with open(PIDFILE, 'w') as f:
-        f.write(str(os.getpid()))
-    return True
+    from mintbook_instance import claim
+    return claim(PIDFILE, 'updates-menu', signal.SIGUSR1)
 
 
 if not claim_instance():
@@ -144,6 +120,13 @@ def conf():
 # the file puts the import inside it for free. The cached list is on screen
 # long before this lands.
 def spawn_check():
+    # A rapid reopen reads the fresh cache instead of spending another few
+    # seconds of CPU/network. Explicit Refresh still always checks again.
+    try:
+        if time.time() - os.stat(LIST).st_mtime < 60 and not read_cache()[2]:
+            return None
+    except OSError:
+        pass
     try:
         return subprocess.Popen([CHECK], stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL)
@@ -186,7 +169,7 @@ import gi                                                          # noqa: E402
 gi.require_version('Gtk', '3.0')
 gi.require_version('PangoCairo', '1.0')
 import cairo                                                       # noqa: E402
-from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo        # noqa: E402
+from gi.repository import Gtk, Gdk, GLib, Gio, Pango, PangoCairo   # noqa: E402
 
 SC = round((Gdk.Screen.get_default().get_resolution() or 96) / 96.0, 3) or 1.0
 WIDTH, PAD, GAP, SHADOW, RADIUS, CARD = 352, 14, 10, 16, 18, 12
@@ -324,8 +307,13 @@ def humanise(error):
     return (err[:90] or 'The install failed'), True
 
 
+def update_id(row):
+    info = row.get('flatpak') or {}
+    return (row.get('source', row['name']), info.get('scope', ''), info.get('ref', ''))
+
+
 def version_line(row):
-    """`old → new` for apt. A flatpak has no knowable new version — see
+    """`old → new` where Mint supplies versions — see
     bin/updates-check — so its row shows what is installed and where it comes
     from, rather than an arrow pointing at a blank."""
     old, new = row.get('old', ''), row.get('new', '')
@@ -718,7 +706,7 @@ class ListRow(Row):
 
         for i, row in enumerate(self.visible):
             y = self.LEAD + i * self.LINE
-            working = row['name'] in p.working
+            working = update_id(row) in p.working
             dim = 1.0 if (not p.busy or working) else .45
             if self.hit == i and not p.busy:
                 self.lit(cr, w, y, self.LINE)
@@ -740,7 +728,7 @@ class ListRow(Row):
             if working:
                 spinner(cr, self.button_x(w) + self.BW / 2, y + self.LINE / 2 - 2,
                         8, self.c['fg'], p.phase)
-            elif row['name'] in p.installed:
+            elif update_id(row) in p.installed:
                 tick(cr, self.button_x(w) + self.BW / 2 - 8,
                      y + self.LINE / 2 - 10, 16, self.c['green'], .95)
             elif not p.busy:
@@ -762,7 +750,7 @@ class ListRow(Row):
         if i is None:
             return
         row = self.visible[i]
-        if row['name'] not in self.panel.installed:
+        if update_id(row) not in self.panel.installed:
             self.panel.install([row])
 
     def scroll(self, direction):
@@ -931,7 +919,8 @@ class FooterRow(Row):
 
 class Menu:
     def __init__(self):
-        self.mode = 'dark' if read_file(APPLIED, 'light') == 'dark' else 'light'
+        appearance = os.environ.get('MINTBOOK_PREVIEW_APPEARANCE') or read_file(APPLIED, 'light')
+        self.mode = 'dark' if appearance == 'dark' else 'light'
         self.colors = DARK if self.mode == 'dark' else LIGHT
         self.cfg = conf()
         self.closing = False
@@ -976,6 +965,7 @@ class Menu:
             win.set_visual(visual)
         win.connect('draw', self.draw_background)
         win.connect('key-press-event', self.on_key)
+        win.connect('delete-event', lambda *_a: self.close() or True)
         win.connect('destroy', lambda *_a: self.close())
 
         self.area = Gtk.DrawingArea()
@@ -999,8 +989,23 @@ class Menu:
         win.add(box)
 
         self.rows = []
+        self._cache_pending = False
+        self.cache_monitor = Gio.File.new_for_path(LIST).monitor_file(
+            Gio.FileMonitorFlags.WATCH_MOVES, None)
+        self.cache_monitor.connect('changed', self.cache_changed)
         self.rebuild()
         win.show_all()
+
+    def cache_changed(self, *_args):
+        if self._cache_pending or self.closing:
+            return
+        self._cache_pending = True
+        def read():
+            self._cache_pending = False
+            if not self.closing and not self.busy and not self.checking:
+                self.landed()
+            return False
+        GLib.timeout_add(150, read)
 
     # ---- derived readings
 
@@ -1227,6 +1232,7 @@ class Menu:
 
     def run_cache_update(self, trans):
         self.trans = trans
+        self.grab(False)
         trans.connect('status-changed', self.on_status)
         trans.connect('finished', self.cache_updated)
         trans.connect('error', self.on_trans_error)
@@ -1257,26 +1263,31 @@ class Menu:
 
         def work():
             try:
-                subprocess.run([CHECK], capture_output=True, timeout=180)
-            except Exception:
-                pass
-            GLib.idle_add(self.landed)
+                result = subprocess.run([CHECK], capture_output=True, timeout=180)
+                error = '' if result.returncode == 0 else 'Update check failed; showing the previous result.'
+            except Exception as exc:
+                error = 'Update check failed: ' + str(exc)[:100]
+            GLib.idle_add(self.landed, error)
         threading.Thread(target=work, daemon=True).start()
         return False
 
-    def landed(self):
+    def landed(self, check_error=''):
         self.checking = False
         (self.updates, self.checked, self.error,
          self.fp_checked, self.fp_error) = read_cache()
+        if check_error:
+            self.error = check_error
         # Anything this session installed is gone from the fresh list, so the
         # ticks have nothing left to sit on. Drop them rather than keep a row
         # that no longer exists.
-        self.installed &= {u['name'] for u in self.updates}
+        self.installed &= {update_id(u) for u in self.updates}
         # The indicator and the System badge find out on their own timer,
         # which is minutes long here on purpose. There used to be a nudge
         # here; it never reached a plugin, and no form of it can reach these
         # two — see docs/desktop.md.
         self.rebuild()
+        if self.hidden and not self.busy:
+            self.close()
         return False
 
     def collect_check(self):
@@ -1289,10 +1300,15 @@ class Menu:
 
         def work():
             try:
-                CHECK_P.wait(timeout=180)
-            except Exception:
-                pass
-            GLib.idle_add(self.landed)
+                code = CHECK_P.wait(timeout=180)
+                error = '' if code == 0 else 'Update check failed; showing the previous result.'
+            except subprocess.TimeoutExpired:
+                CHECK_P.kill()
+                CHECK_P.wait()
+                error = 'Update check timed out; showing the previous result.'
+            except Exception as exc:
+                error = 'Update check failed: ' + str(exc)[:100]
+            GLib.idle_add(self.landed, error)
         threading.Thread(target=work, daemon=True).start()
         return False
 
@@ -1325,7 +1341,7 @@ class Menu:
         # Everything selected spins, not just the phase in flight. They are all
         # queued, and a row that sits inert for two minutes while apt works
         # looks like a row that was ignored.
-        self.working = {r['name'] for r in rows}
+        self.working = {update_id(r) for r in rows}
         self.reboot = any(r['type'] == 'kernel' for r in rows)
         self.status = 'Preparing…'
         self.detail = ''
@@ -1350,6 +1366,7 @@ class Menu:
             self.run_check()
             return False
         kind, rows = self.queue.pop(0)
+        self.trans = None
         (self.start_apt if kind == 'apt' else self.start_flatpak)(rows)
         return False
 
@@ -1484,7 +1501,7 @@ class Menu:
         for row in rows:
             info = row.get('flatpak') or {}
             ref = info.get('ref', '')
-            groups.setdefault(info.get('scope', 'user'), []).append(ref)
+            groups.setdefault(info.get('scope', 'user'), []).extend(info.get('refs') or [ref])
             titles[ref] = row['name']
 
         self.fp_cancel = Gio.Cancellable()
@@ -1634,6 +1651,8 @@ class Menu:
         self.finish(message, self.colors['red'] if bad else self.colors['fg'])
 
     def on_finished(self, _t, exit_state):
+        if self.stale(_t):
+            return
         if exit_state == 'exit-success':
             self.next_phase()       # the flatpaks, if there are any, or done
             return
@@ -1654,13 +1673,22 @@ class Menu:
         self.busy = False
         self.cancellable = False
         self.fp_cancel = None
+        self.trans = None
         self.working = set()
         self.progress = None
         self.status = self.detail = ''
         self.notice = (colour, message)
+        self.pending = None
+        self.pending_extra = []
         if not self.hidden:
             self.grab(True)
         self.rebuild()
+        GLib.idle_add(self.retire_if_idle)
+
+    def retire_if_idle(self):
+        if self.hidden and not self.busy and not self.checking:
+            self.close()
+        return False
 
 
     # ---- animation
@@ -1671,7 +1699,7 @@ class Menu:
         self._spinning = True
 
         def step():
-            if self.closing or not (self.checking or self.busy):
+            if self.closing or self.hidden or not (self.checking or self.busy):
                 self._spinning = False
                 return False
             self.phase += 1
@@ -1769,7 +1797,14 @@ class Menu:
     def close(self):
         if self.closing:
             return
+        # All dismissal paths preserve the Flatpak worker and aptkit observer.
+        if self.busy or self.checking:
+            self.grab(False)
+            self.win.hide()
+            self.hidden = True
+            return
         self.closing = True
+        self.cache_monitor.cancel()
         try:
             Gdk.Display.get_default().get_default_seat().ungrab()
         except Exception:
@@ -1784,12 +1819,7 @@ class Menu:
         A second click shows this same window and its current progress again.
         """
         if self.win.get_visible():
-            if not self.busy:
-                self.close()
-                return False
-            self.grab(False)
-            self.win.hide()
-            self.hidden = True
+            self.close()
             return False
 
         self.hidden = False
@@ -1799,6 +1829,7 @@ class Menu:
         if not self.busy:
             self.grab(True)
         self.area.queue_draw()
+        self.tick_spinner()
         return False
 
 

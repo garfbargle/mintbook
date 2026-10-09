@@ -1,0 +1,17 @@
+#!/usr/bin/env python3
+"""Reconcile hardware changes without spawning idle polling commands."""
+import time
+import mintbook_backlight as bl
+
+def main():
+    while True:
+        try:
+            hardware = int((bl.BL / 'brightness').read_text())
+            if bl.read_state().get('hw') != str(hardware):
+                bl.apply(external=True)
+        except Exception as exc:
+            print(f'Brightness watch: {exc}', flush=True)
+        time.sleep(1)
+
+if __name__ == '__main__':
+    main()

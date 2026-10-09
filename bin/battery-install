@@ -47,7 +47,7 @@ fi
 
 echo "==> $BIN"
 install -dm755 "$BIN"
-for f in panel-battery battery-menu battery-history mintbook_keys.py; do
+for f in panel-battery battery-menu battery-history mintbook_keys.py mintbook_instance.py; do
   rm -f "$BIN/$f"
   install -m755 "$ROOT/bin/$f" "$BIN/$f"
 done

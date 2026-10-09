@@ -1,0 +1,9 @@
+[Unit]
+Description=Recheck updates after meaningful package or preference changes
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/updates-check --if-changed
+TimeoutStartSec=120
+Nice=19
+IOSchedulingClass=idle

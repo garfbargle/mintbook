@@ -48,7 +48,10 @@ Both are written atomically, because the popup reads them without a lock.
 See docs/updates.md.
 """
 import json
+import fcntl
+import hashlib
 import os
+import subprocess
 import sys
 import time
 
@@ -56,37 +59,8 @@ MINT = '/usr/lib/linuxmint/mintUpdate'
 CACHE = os.path.expanduser('~/.cache/mintbook')
 STATE = f'{CACHE}/updates.state'
 LIST = f'{CACHE}/updates.json'
-BLACKLIST = '/etc/mintupdate.blacklist'
-
-# Past this, sizes stop being fetched and the remaining flatpak rows report 0.
-# Each fetch_remote_ref_sync() is a round trip of roughly half a second, and a
-# check that takes half a minute to tell you a size is not worth the size.
+# Bound remote size lookups; never pay this cost on a panel tick.
 SIZE_BUDGET = 6.0
-
-
-def blacklisted():
-    """/etc/mintupdate.blacklist, the file the Update Manager's own ignore
-    list writes. Honouring it is what keeps this from disagreeing with the
-    Update Manager about how many updates there are."""
-    out = []
-    try:
-        with open(BLACKLIST) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#'):
-                    out.append(line)
-    except OSError:
-        pass
-    return out
-
-
-def ignored(patterns, source_name, version):
-    import fnmatch
-    for pattern in patterns:
-        pkg, _, ver = pattern.partition('=')
-        if fnmatch.fnmatch(source_name, pkg) and (not ver or ver == version):
-            return True
-    return False
 
 
 # ------------------------------------------------------------------- flatpak
@@ -127,6 +101,11 @@ def installations():
     return out
 
 
+def flatpak_enabled():
+    from gi.repository import Gio
+    return Gio.Settings.new('com.linuxmint.updates').get_boolean('show-flatpak-updates')
+
+
 def flatpaks():
     """What flathub has that this machine does not.
 
@@ -144,11 +123,20 @@ def flatpaks():
     gi.require_version('Flatpak', '1.0')
     from gi.repository import Flatpak
 
+    if not flatpak_enabled():
+        return []
+
     rows = []
     start = time.monotonic()
     for scope, inst in installations():
+        if scope == 'system':
+            if inst.list_installed_refs(None):
+                rows.extend(mint_system_flatpaks())
+            continue
         for ref in inst.list_installed_refs_for_update(None):
             app = ref.get_kind() == Flatpak.RefKind.APP
+            if app:
+                ref.load_appdata()
             size = 0
             if time.monotonic() - start < SIZE_BUDGET:
                 try:
@@ -172,7 +160,7 @@ def flatpaks():
                 'size': size,
                 'type': 'flatpak',
                 'origin': f"{ref.get_origin()} · {scope}"
-                          + ('' if app else ' · runtime'),
+                          + ('' if app else ' · runtime · ' + ref.get_branch()),
                 'summary': (ref.get_appdata_summary() or '').strip(),
                 # Everything the installer needs to find this again, without
                 # having to guess a scope or re-derive an arch.
@@ -180,8 +168,76 @@ def flatpaks():
                             'app': app},
                 'packages': [],
             })
+            try:
+                import configparser
+                metadata = configparser.ConfigParser(interpolation=None)
+                metadata.read_string(bytes(ref.load_metadata(None).get_data()).decode())
+                parent = metadata.get('ExtensionOf', 'ref', fallback='')
+                if not parent:
+                    runtime = metadata.get('Runtime', 'runtime', fallback='')
+                    parent = 'runtime/' + runtime if runtime else ''
+                rows[-1]['_parent_ref'] = parent
+            except Exception:
+                pass
+    rows = group_flatpaks(rows)
     rows.sort(key=lambda r: (not r['flatpak']['app'], r['name'].lower()))
     return rows
+
+
+def mint_system_flatpaks():
+    """Use Mint's own grouped system-Flatpak records, including versions."""
+    worker = os.path.join(MINT, 'flatpak-update-worker.py')
+    result = subprocess.run([worker, '--fetch-updates'], capture_output=True,
+                            text=True, timeout=45, check=True)
+    data = result.stdout.strip()
+    if data == 'no-installed':
+        return []
+    updates = json.loads(data)
+    rows = []
+    for update in updates:
+        def refs(item):
+            found = [] if item.get('installing') else [item['ref']]
+            for child in item.get('sub_updates', []):
+                found.extend(refs(child))
+            return found
+        rows.append({'name': update['name'], 'source': update['real_source_name'],
+                     'old': update['old_version'], 'new': update['new_version'],
+                     'size': int(update['size']), 'type': 'flatpak',
+                     'origin': update['origin'] + ' · system', 'summary': update['summary'],
+                     'packages': [], 'flatpak': {'scope': 'system', 'ref': update['ref'],
+                     'refs': refs(update), 'app': update['flatpak_type'] == 'app'}})
+    return rows
+
+
+def group_flatpaks(rows):
+    """Count a Flatpak and its associated extensions once, with every ref kept."""
+    index = {(r['flatpak']['scope'], r['flatpak']['ref']): r for r in rows}
+    children = set()
+    for row in sorted(rows, key=lambda r: len(r['source']), reverse=True):
+        parent = index.get((row['flatpak']['scope'], row.pop('_parent_ref', '')))
+        if parent is not None and parent is not row:
+            parent['size'] += row['size']
+            parent['flatpak'].setdefault('refs', [parent['flatpak']['ref']]).extend(
+                row['flatpak'].get('refs', [row['flatpak']['ref']]))
+            children.add(id(row))
+    return [r for r in rows if id(r) not in children]
+
+
+def input_signature():
+    """Cheap discrimination of meaningful changes from unrelated dconf writes."""
+    paths = ('/var/cache/apt/pkgcache.bin', '/var/lib/dpkg/status',
+             '/var/lib/flatpak/.changed', os.path.expanduser('~/.local/share/flatpak/.changed'))
+    parts = []
+    for path in paths:
+        try:
+            st = os.stat(path); parts.append((path, st.st_mtime_ns, st.st_size))
+        except OSError:
+            parts.append((path, None))
+    for key in ('blacklisted-packages', 'show-flatpak-updates'):
+        result = subprocess.run(['gsettings', 'get', 'com.linuxmint.updates', key],
+                                capture_output=True, text=True, timeout=3, check=True)
+        parts.append((key, result.stdout.strip()))
+    return hashlib.sha256(repr(parts).encode()).hexdigest()
 
 
 def previous():
@@ -202,7 +258,6 @@ def collect():
     """The updates, as plain dicts. Raises whatever APTCheck raises."""
     sys.path.insert(0, MINT)
     from checkAPT import APTCheck                                  # noqa: E402
-    from Classes import PRIORITY_UPDATES                           # noqa: E402
 
     check = APTCheck()
     check.find_changes()
@@ -210,12 +265,10 @@ def collect():
     check.apply_aliases()
     check.clean_descriptions()
 
-    skip = blacklisted()
     rows = []
     for update in check.get_updates():
-        if (update.source_name not in PRIORITY_UPDATES
-                and ignored(skip, update.real_source_name, update.new_version)):
-            continue
+        # APTCheck applies the live GSettings blacklist. The exported /etc
+        # file is for unattended upgrades and can disagree with the GUI.
         rows.append({
             'name': update.display_name,
             'source': update.source_name,
@@ -280,6 +333,39 @@ def human(n):
 
 def main():
     args = sys.argv[1:]
+    if '--json' in args:
+        return check(args)  # Read-only diagnostics do not create cache/lock files.
+    os.makedirs(CACHE, exist_ok=True)
+    with open(os.path.join(CACHE, 'updates-check.lock'), 'a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return 0
+        return check(args)
+
+
+def check(args):
+    signature = None
+    if '--if-changed' in args:
+        # dpkg may touch status once per package; wait for a quiet interval.
+        until = time.monotonic() + 60
+        while time.monotonic() < until:
+            try:
+                if time.time() - os.stat('/var/lib/dpkg/status').st_mtime >= 5:
+                    break
+            except OSError:
+                break
+            time.sleep(1)
+        else:
+            return 0
+    try:
+        signature = input_signature()
+        if '--if-changed' in args:
+            with open(os.path.join(CACHE, 'updates.inputs')) as previous_inputs:
+                if previous_inputs.read().strip() == signature:
+                    return 0
+    except (OSError, subprocess.SubprocessError):
+        pass
     error = ''
     try:
         rows = collect()
@@ -287,14 +373,21 @@ def main():
         # A failure here is a fact about the machine, not a crash: apt is busy,
         # or a source is broken. It goes in the file so the popup can say so
         # rather than showing a confident zero.
-        rows, error = [], f'{type(exc).__name__}: {exc}'[:200]
+        error = f'{type(exc).__name__}: {exc}'[:200]
+        try:
+            with open(LIST) as handle:
+                rows = [r for r in json.load(handle).get('updates', []) if r.get('type') != 'flatpak']
+        except (OSError, ValueError, TypeError):
+            rows = []
 
     # The flatpak half. Every way of not getting a fresh answer ends in the
     # same place: keep the last one, keep its timestamp, and say why. The one
     # thing that must never happen is an empty list dated now.
     fp_rows, fp_checked = previous()
     fp_error = ''
-    if '--no-net' in args:
+    if not flatpak_enabled():
+        fp_rows, fp_checked = [], int(time.time())
+    elif '--no-net' in args:
         fp_error = 'skipped (--no-net)'
     elif not online():
         fp_error = 'skipped, no route to the network'
@@ -313,6 +406,8 @@ def main():
         return 1 if error else 0
 
     write(rows, error, fp_checked, fp_error)
+    if signature and not error and not fp_error:
+        atomic(os.path.join(CACHE, 'updates.inputs'), signature)
     if error:
         print(f'could not read the APT cache: {error}', file=sys.stderr)
         return 1

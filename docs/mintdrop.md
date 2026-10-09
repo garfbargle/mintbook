@@ -1,7 +1,8 @@
 # Mintdrop — send a file to a machine that is nearby
 
-> 2026-09-11. Working between Linux machines. The phone half is not built
-> yet; the last section says exactly what it needs.
+> Current status (2026-10-08): Linux transfers and Android Quick Share sending
+> and receiving are supported. The dated development notes below record how
+> each part was brought up.
 
 Pick a name, send a file, no cloud and no cable. On this machine it costs
 nothing until it is used: there is no daemon, no timer and no polling — the

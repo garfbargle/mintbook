@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""Install the existing curve with shared keys/state and a persistent undo snapshot."""
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import time
+
+ROOT = Path(__file__).resolve().parent.parent
+HOME = Path.home()
+SAVED = HOME / '.config/mintbook/brightness-install.json'
+BIN = HOME / '.local/bin'
+UNITS = HOME / '.config/systemd/user'
+UNIT_NAMES = ('mintbook-backlight-curve.service', 'mintbook-redshift.service')
+SCRIPTS = ('backlight-curve', 'backlight-curve-watch', 'mintbook_backlight.py',
+           'mintbook-redshift', 'night-apply')
+PLUGIN = HOME / '.local/share/mintbook/control-center/plugins/30-brightness'
+PROP = '/xfce4-power-manager/handle-brightness-keys'
+KEYS = {key: str(BIN / 'backlight-curve') + ' step ' + value for key, value in
+        (('XF86MonBrightnessUp', '5'), ('XF86MonBrightnessDown', '-5'))}
+
+def run(*args, check=True):
+    return subprocess.run(args, text=True, capture_output=True, check=check)
+
+def targets():
+    return ([(ROOT / 'bin' / name, BIN / name) for name in SCRIPTS]
+            + [(ROOT / 'config/systemd' / name, UNITS / name) for name in UNIT_NAMES]
+            + [(ROOT / 'control-center/plugins/30-brightness', PLUGIN)])
+
+def property_value(channel, prop):
+    result = run('xfconf-query', '-c', channel, '-p', prop, check=False)
+    return result.stdout.strip() if result.returncode == 0 else None
+
+def set_property(channel, prop, kind, value):
+    if value is None:
+        run('xfconf-query', '-c', channel, '-p', prop, '-r', check=False)
+    else:
+        run('xfconf-query', '-c', channel, '-p', prop, '-n', '-t', kind, '-s', value)
+
+def main():
+    if sys.argv[1:] not in ([], ['--revert']):
+        sys.exit('usage: brightness-install [--revert]')
+    if sys.argv[1:]:
+        data = json.loads(SAVED.read_text())
+        for unit in UNIT_NAMES:
+            run('systemctl', '--user', 'stop', unit, check=False)
+        for entry in data['files']:
+            dest = Path(entry['path']); dest.unlink(missing_ok=True)
+            if entry['backup']: shutil.copy2(entry['backup'], dest, follow_symlinks=False)
+        for key, value in data['keys'].items():
+            set_property('xfce4-keyboard-shortcuts', '/commands/custom/' + key, 'string', value)
+        set_property('xfce4-power-manager', PROP, 'bool', data['power_keys'])
+        run('systemctl', '--user', 'daemon-reload')
+        for unit, enabled in data['enabled'].items():
+            run('systemctl', '--user', 'enable' if enabled else 'disable', unit, check=False)
+            if data['active'][unit]: run('systemctl', '--user', 'start', unit, check=False)
+        run('xfce4-power-manager', '--restart', check=False)
+        print('Restored the previous brightness setup; saved curve preferences are retained.')
+        return
+    if not os.environ.get('DISPLAY'):
+        sys.exit('run inside the desktop session (DISPLAY is unset)')
+    if not SAVED.exists():
+        backup = HOME / '.local/state/mintbook' / ('brightness-before-' + time.strftime('%Y%m%d-%H%M%S'))
+        backup.mkdir(parents=True)
+        data = {'files': [], 'keys': {}, 'enabled': {}, 'active': {},
+                'power_keys': property_value('xfce4-power-manager', PROP)}
+        for i, (_, dest) in enumerate(targets()):
+            entry = {'path': str(dest), 'backup': None}
+            if dest.exists() or dest.is_symlink():
+                copy = backup / str(i); shutil.copy2(dest, copy, follow_symlinks=False)
+                entry['backup'] = str(copy)
+            data['files'].append(entry)
+        for key in KEYS:
+            data['keys'][key] = property_value('xfce4-keyboard-shortcuts', '/commands/custom/' + key)
+        for unit in UNIT_NAMES:
+            data['enabled'][unit] = run('systemctl', '--user', 'is-enabled', unit, check=False).returncode == 0
+            data['active'][unit] = run('systemctl', '--user', 'is-active', unit, check=False).returncode == 0
+        SAVED.parent.mkdir(parents=True, exist_ok=True)
+        SAVED.write_text(json.dumps(data, indent=2))
+    for source, dest in targets():
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        # Replace copies/symlinks instead of modifying their targets.
+        temp = dest.with_name(dest.name + '.install')
+        temp.unlink(missing_ok=True); shutil.copy2(source, temp); os.replace(temp, dest)
+    prefs = SAVED.parent / 'backlight-curve.env'
+    if not prefs.exists():
+        prefs.write_text('BACKLIGHT_CURVE_GAMMA=1.7\nBACKLIGHT_CURVE_SOFT_FLOOR=0.35\nBACKLIGHT_CURVE_HW_FLOOR=12\n')
+    conf = HOME / '.config/redshift.conf'
+    if not conf.exists(): shutil.copy2(ROOT / 'config/redshift.conf', conf)
+    set_property('xfce4-power-manager', PROP, 'bool', 'false')
+    # XFCE 4.18 grabs these keys even when handling is disabled. Give
+    # xfsettingsd the first grab; then restore the power manager immediately.
+    run('xfce4-power-manager', '--quit')
+    try:
+        time.sleep(.3)
+        for key, value in KEYS.items():
+            prop = '/commands/custom/' + key
+            set_property('xfce4-keyboard-shortcuts', prop, 'string', None)
+            set_property('xfce4-keyboard-shortcuts', prop, 'string', value)
+        time.sleep(.3)
+    finally:
+        run('xfce4-power-manager', '--daemon')
+    run('systemctl', '--user', 'import-environment', 'DISPLAY', 'XAUTHORITY', check=False)
+    run('systemctl', '--user', 'daemon-reload')
+    run('systemctl', '--user', 'enable', *UNIT_NAMES)
+    run('systemctl', '--user', 'restart', *UNIT_NAMES)
+    print('Brightness keys and Control Center now share the curve and actual hardware state.')
+    print('Undo: bin/brightness-install --revert')
+
+if __name__ == '__main__':
+    main()

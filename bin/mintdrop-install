@@ -43,7 +43,7 @@ QS_ADVERT = Path('/etc/avahi/services/mintdrop-quickshare.service')
 
 SCRIPTS = ('mintdrop', 'mintdrop-accept', 'mintdrop-menu', 'mintdrop-probe',
            'mintdrop-visible',
-           'mintbook_drop.py', 'mintbook_quickshare.py')
+           'mintbook_drop.py', 'mintbook_quickshare.py', 'mintbook_appcolor.py')
 UNITS = ('mintbook-drop.socket', 'mintbook-drop@.service')
 SOCKET = 'mintbook-drop.socket'
 

@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""Migrate Input Boost after the root policy-state safety fix; keep an undo snapshot."""
+import json
+import os
+from pathlib import Path
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+
+ROOT = Path(__file__).resolve().parent.parent
+HOME = Path.home()
+UNIT = 'mintbook-input-boost.service'
+SAVED = HOME / '.config/mintbook/input-boost-install.json'
+TARGETS = [(ROOT / 'bin/input-boost', HOME / '.local/bin/input-boost'),
+           (ROOT / 'config/systemd' / UNIT, HOME / '.config/systemd/user' / UNIT)]
+
+def run(*args, check=True):
+    return subprocess.run(args, capture_output=True, text=True, check=check)
+
+def install_file(source, dest):
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp = tempfile.mkstemp(prefix='.input-boost-', dir=dest.parent)
+    os.close(fd)
+    try:
+        shutil.copy2(source, temp)
+        os.replace(temp, dest)
+    finally:
+        if os.path.exists(temp): os.unlink(temp)
+
+def main():
+    if sys.argv[1:] not in ([], ['--revert']): sys.exit('usage: input-boost-install [--revert]')
+    if sys.argv[1:]:
+        data = json.loads(SAVED.read_text())
+        run('systemctl', '--user', 'stop', UNIT, check=False)
+        for item in data['files']:
+            dest = Path(item['path']); dest.unlink(missing_ok=True)
+            if item['backup']: shutil.copy2(item['backup'], dest, follow_symlinks=False)
+        run('systemctl', '--user', 'daemon-reload')
+        run('systemctl', '--user', 'enable' if data['enabled'] else 'disable', UNIT, check=False)
+        if data['active']: run('systemctl', '--user', 'start', UNIT)
+        print('Restored the previous Input Boost client and unit. Backup retained.')
+        return
+    for path, mode in [(Path('/run/mintbook-policy'), 0o755), (Path('/run/mintbook-policy/cap'), 0o644)]:
+        try: info = path.lstat()
+        except OSError: sys.exit('Authenticate bin/safety-install first; protected policy state is missing.')
+        if info.st_uid != 0 or stat.S_IMODE(info.st_mode) != mode or stat.S_ISLNK(info.st_mode):
+            sys.exit('Refusing unprotected policy state; authenticate bin/safety-install first.')
+    if not SAVED.exists():
+        backup = HOME / '.local/state/mintbook' / ('input-boost-before-' + time.strftime('%Y%m%d-%H%M%S'))
+        backup.mkdir(parents=True)
+        data = {'files': [], 'enabled': run('systemctl','--user','is-enabled',UNIT,check=False).returncode == 0,
+                'active': run('systemctl','--user','is-active',UNIT,check=False).returncode == 0}
+        for i, (_, dest) in enumerate(TARGETS):
+            item = {'path': str(dest), 'backup': None}
+            if dest.exists() or dest.is_symlink():
+                copy = backup / str(i); shutil.copy2(dest, copy, follow_symlinks=False); item['backup'] = str(copy)
+            data['files'].append(item)
+        SAVED.parent.mkdir(parents=True, exist_ok=True)
+        SAVED.write_text(json.dumps(data, indent=2))
+    run('systemctl', '--user', 'stop', UNIT, check=False)
+    for source, dest in TARGETS: install_file(source, dest)
+    run('systemctl', '--user', 'daemon-reload')
+    run('systemctl', '--user', 'enable', '--now', UNIT)
+    print('Input Boost now reads protected policy state. Undo: bin/input-boost-install --revert')
+
+if __name__ == '__main__': main()

@@ -40,6 +40,8 @@ if [ "${1:-}" = --revert ]; then
   systemctl --user disable --now mintbook-updates-check.timer 2>/dev/null || true
   systemctl --user disable --now mintbook-updates-check.path 2>/dev/null || true
 
+  systemctl --user stop mintbook-updates-local.service mintbook-updates-check.service 2>/dev/null || true
+
   echo "==> Mint Update Manager autostart"
   if [ -e "$MINTUPDATE_SAVED" ]; then
     install -dm755 "$AUTOSTART"
@@ -51,15 +53,15 @@ if [ "${1:-}" = --revert ]; then
 
   echo "==> panel"
   ids=$(current_ids | tr '\n' ' ')
-  xfce4-panel -q 2>/dev/null || true
+  timeout 5 xfce4-panel -q 2>/dev/null || true
   sleep 0.4
   out=(); for id in $ids; do [ "$id" = "$PLUGIN" ] || out+=("$id"); done
   write_ids "${out[@]}"
-  nohup xfce4-panel >/dev/null 2>&1 &
+  setsid -f xfce4-panel >/dev/null 2>&1
 
   echo "==> files"
-  P=$(cat "$HOME/.cache/mintbook/updates-menu.pid" 2>/dev/null || true)
-  [ -n "$P" ] && kill "$P" 2>/dev/null || true
+  # Leave an active popup worker alive; it may be installing Flatpaks.
+  echo "Close the update popup after any active job has finished."
   rm -f "$BIN/panel-updates" "$BIN/updates-menu" "$BIN/updates-check"
   rm -f "$SHARE/70-updates" "$CONF"
   rm -rf "$HOME/.local/share/mintbook/updates"
@@ -76,7 +78,7 @@ command -v mintupdate-cli >/dev/null \
 
 echo "==> $BIN"
 install -dm755 "$BIN"
-for f in panel-updates updates-menu updates-check mintbook_keys.py; do
+for f in panel-updates updates-menu updates-check mintbook_keys.py mintbook_instance.py; do
   rm -f "$BIN/$f"                       # it may be running; replace, don't write
   install -m755 "$ROOT/bin/$f" "$BIN/$f"
 done
@@ -118,10 +120,8 @@ if [ ! -e "$MINTUPDATE_SAVED" ] && [ ! -e "$MINTUPDATE_WAS_ABSENT" ]; then
   fi
 fi
 install -m644 "$ROOT/config/autostart/mintupdate.desktop" "$MINTUPDATE_AUTOSTART"
-# The override takes effect at the next login. Stop the existing tray instance
-# now as well; aptkit owns any active package transaction, so it is not killed
-# with this UI process.
-pkill -x mintUpdate 2>/dev/null || true
+# The override takes effect at the next login. An existing Mint Update Manager
+# may own a Flatpak worker, so never kill it during an installer rerun.
 
 echo "==> genmon-$PLUGIN.rc"
 install -dm755 "$PANEL_RC"
@@ -133,7 +133,7 @@ echo "==> panel"
 
 # Running plugins write xfconf back on shutdown, so stop the panel first.
 ids=$(current_ids | tr '\n' ' ')
-xfce4-panel -q 2>/dev/null || true
+timeout 5 xfce4-panel -q 2>/dev/null || true
 sleep 0.4
 xfconf-query -c xfce4-panel -p "/plugins/plugin-$PLUGIN" -n -t string -s genmon 2>/dev/null || true
 
@@ -151,12 +151,13 @@ done
 if [ ! -e "$STATE/system.conf" ] && [ "$placed" = 0 ]; then out=("$PLUGIN" "${out[@]}"); fi
 write_ids "${out[@]}"
 
-nohup xfce4-panel >/dev/null 2>&1 &
+setsid -f xfce4-panel >/dev/null 2>&1
 sleep 1
 
 echo "==> timer and cache watch"
 install -dm755 "$UNITS"
 install -m644 "$ROOT/config/systemd/mintbook-updates-check.service" "$UNITS/"
+install -m644 "$ROOT/config/systemd/mintbook-updates-local.service" "$UNITS/"
 install -m644 "$ROOT/config/systemd/mintbook-updates-check.timer" "$UNITS/"
 # The timer is the floor; the path unit is what keeps the badge from sitting
 # hours behind a refresh that has already happened. See the unit's own header.
@@ -166,7 +167,7 @@ systemctl --user enable --now mintbook-updates-check.timer
 systemctl --user enable --now mintbook-updates-check.path
 
 echo "==> first check"
-"$BIN/updates-check" || true
+timeout 120 "$BIN/updates-check" || true
 # No panel nudge here any more. The `--plugin-event=plugin-<id>` form this
 # sent matched nothing — the panel matches on the plugin *name* — and the
 # working form reaches only the first genmon widget on the bar, which is the

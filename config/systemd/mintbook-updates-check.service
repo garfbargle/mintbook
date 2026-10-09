@@ -1,14 +1,10 @@
-# User service. Reads the APT cache that is already on disk and writes what is
-# waiting to ~/.cache/mintbook/updates.state, which is the only thing the bar
-# indicator ever looks at. No root, no network, no writes outside $HOME — the
-# package lists are refreshed by the popup's own button, or by whatever else
-# on this machine refreshes them — mintbook-updates-check.path is how this
-# hears about it when they do. See docs/updates.md.
+# Read local APT state and query Flatpak remotes; no privileged writes.
 [Unit]
 Description=mintbook update check — what apt has waiting
 
 [Service]
 Type=oneshot
-ExecStart=%h/mintbook/bin/updates-check
+ExecStart=%h/.local/bin/updates-check
+TimeoutStartSec=120
 Nice=19
 IOSchedulingClass=idle

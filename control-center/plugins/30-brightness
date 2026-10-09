@@ -1,24 +1,29 @@
 #!/usr/bin/env bash
-# Display brightness. logind's SetBrightness needs no password for the active
-# session; /sys/class/backlight is root-owned, so writing it directly does not
-# work. xfce4-power-manager keeps its own idea of brightness and is unaffected.
+# A cheap live reading on the same scale used by the brightness keys.
+set -euo pipefail
 BL=/sys/class/backlight/acpi_video0
-[ -d "$BL" ] || { for d in /sys/class/backlight/*; do BL=$d; break; done; }
 [ -d "$BL" ] || { echo 'skip = on'; exit 0; }
-max=$(cat "$BL/max_brightness" 2>/dev/null || echo 100)
-name=$(basename "$BL")
-
+max=$(cat "$BL/max_brightness")
+cur=$(cat "$BL/brightness")
 case "${1:-read}" in
   set)
+    if [ -x "$HOME/.local/bin/backlight-curve" ]; then
+      exec "$HOME/.local/bin/backlight-curve" apply "${2:-50}"
+    fi
     pct=${2:-50}
-    want=$(( pct * max / 100 ))
-    [ "$want" -lt 1 ] && want=1          # never black the panel out entirely
-    busctl --system call org.freedesktop.login1 \
+    [[ "$pct" =~ ^[0-9]+$ ]] && [ "$pct" -le 100 ] || exit 2
+    want=$(( pct * max / 100 )); [ "$want" -ge 1 ] || want=1
+    exec busctl --system call org.freedesktop.login1 \
       /org/freedesktop/login1/session/auto org.freedesktop.login1.Session \
-      SetBrightness ssu backlight "$name" "$want" >/dev/null 2>&1
-    exit 0 ;;
+      SetBrightness ssu backlight acpi_video0 "$want" ;;
 esac
-
-cur=$(cat "$BL/brightness" 2>/dev/null || echo 0)
-printf 'kind = slider\nglyph = sun\ntitle = Display\nvalue = %s\n' \
-  "$(( cur * 100 / max ))"
+pct=$(( cur * 100 / max ))
+STATE="${XDG_CONFIG_HOME:-$HOME/.config}/mintbook/backlight-curve.state"
+if [ -r "$STATE" ] && [ -x "$HOME/.local/bin/backlight-curve" ]; then
+  req='' hw=''
+  while IFS='=' read -r key value; do
+    case "$key" in req_pct) req=$value ;; hw) hw=$value ;; esac
+  done < "$STATE"
+  if [[ "$req" =~ ^[0-9]+$ ]] && [ "$req" -le 100 ] && [ "$hw" = "$cur" ]; then pct=$req; fi
+fi
+printf 'kind = slider\nglyph = sun\ntitle = Display\nvalue = %s\nlive = 1\n' "$pct"
