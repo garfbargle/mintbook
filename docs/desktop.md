@@ -1495,3 +1495,12 @@ locked seat; black captures and ignored synthetic key events are not valid UX
 results. Full logout/login and suspend/resume were not exercised. The watchdog
 checks plugin presence; a plugin that is alive but has its own hung UI thread
 is outside that check, even though a frozen panel UI thread is detected.
+
+The final 45-second counter sample measured **5.13% of one core** for the bar,
+its readers and recovery combined; the supervisor and its health-query children
+accounted for **0.20%**. Temperature sampling fell from **0.36% to 0.044%** in
+these samples. The earlier whole-bar sample was **4.96%**, so this is not evidence
+of a whole-bar CPU reduction: the CPU reader varied and the seat was locked for
+the second sample. The controlled interleaved temperature benchmark above is
+the measured performance improvement; graph and status refresh periods remain
+unchanged. The two-second Python CPU graph is still the dominant recurring cost.
