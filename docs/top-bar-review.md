@@ -133,3 +133,23 @@ then use the exact `safety-install --revert BACKUP` printed by the root installe
 Other feature installers accept `--revert`; their original snapshots are kept.
 Root fixes committed to Git do not protect installed old helpers until this
 administrator step succeeds.
+
+## Completed deployment follow-up (2026-10-08)
+
+The root fixes were installed with targeted three-file backups and no
+Timeshift/rsync. Installed login/power helpers match the reviewed source;
+protected policy state is root-owned with the expected permissions. Input
+Boost was migrated and is active. The current power-saver profile and its
+70% CPU policy cap were retained. The refreshed health cache reports
+**93 passed, 3 warnings, 0 failures**; the existing hardware/boot warnings remain.
+
+After unlocking, the shared brightness controller was verified on hardware.
+The XFCE Down shortcut and tray both reported 50% from an initial 55%; Up
+restored 55%. Synthetic key events were sent with held modifiers cleared.
+The full suite now passes **329 tests**, including targeted-backup installation,
+explicit snapshot opt-in, and failure-before-write behavior.
+
+Root rollback backup:
+`/var/lib/mintbook/safety-backups/20261008-190048`. Restore the user policy client
+first with `bin/input-boost-install --revert`, then authenticate
+`bin/safety-install --revert /var/lib/mintbook/safety-backups/20261008-190048`.
