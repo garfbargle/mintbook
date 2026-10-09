@@ -198,11 +198,15 @@ require kernel 7.0 on this machine.
 
 ## Make a change. Keep a way back.
 
-Before any system-level change:
+Before invasive system changes:
 
 ```bash
 sudo timeshift --create --comments "before <change>"
 ```
+
+The targeted `bin/safety-install` helper update instead backs up only its three
+root files and prints a restore command. It does not run Timeshift or rsync by
+default; `--snapshot` explicitly requests a full Timeshift snapshot.
 
 Installers print their own undo instructions. `bin/overview-install` adds the
 Overview bar icon and shortcut; its `--revert` removes the icon while preserving

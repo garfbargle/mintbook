@@ -117,11 +117,16 @@ sudo bin/safety-install
 bin/input-boost-install
 ```
 
-The first command creates a Timeshift snapshot, saves the previous root files
-under `/var/lib/mintbook/safety-backups`, replaces only the login/power helpers
+The first command saves just the three previous root files under
+`/var/lib/mintbook/safety-backups`, replaces only the login/power helpers
 and power tmpfiles config, and reasserts the current profile. The second updates
 the user Input Boost client/unit only after protected policy state exists.
 Doctor checks installed helper revisions and policy-state ownership.
+
+This targeted update does not run Timeshift or rsync by default. File backups
+are retained and its exact undo command is printed. Use
+`sudo bin/safety-install --snapshot` only if a full snapshot is wanted; on this
+machine the rsync snapshot takes too long for the small helper update.
 
 Undo the user policy client with `bin/input-boost-install --revert` first,
 then use the exact `safety-install --revert BACKUP` printed by the root installer.

@@ -1146,6 +1146,6 @@ and FIFOs are refused without blocking. Reinstall with `sudo bin/power-install`
 after a Timeshift snapshot, then restart Input Boost. No tuning values change.
 
 For an existing installation, `sudo bin/safety-install` deploys the reviewed
-helper fixes with Timeshift and root-file backups; afterward run
+helper fixes with targeted root-file backups (no Timeshift/rsync by default); afterward run
 `bin/input-boost-install` as the desktop user. See
 [the top-bar review](top-bar-review.md) for deployment status and undo details.

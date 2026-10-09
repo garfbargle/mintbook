@@ -1,5 +1,5 @@
 #!/usr/bin/python3 -I
-"""Install only the audited root helper fixes, with a snapshot and file backups."""
+"""Install only the audited root helper fixes, with targeted file backups."""
 import argparse
 import grp
 import json
@@ -32,10 +32,13 @@ def replace(target, source=None, text=None, mode=0o755):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--dry-run', action='store_true')
+    parser.add_argument('--snapshot', action='store_true',
+                        help='also create a full Timeshift snapshot (may take a long time)')
     parser.add_argument('--revert', type=Path, metavar='BACKUP')
     args = parser.parse_args()
     if args.dry_run:
-        print('Create a Timeshift snapshot, back up and replace:')
+        if args.snapshot: print('Create a full Timeshift snapshot first.')
+        print('Back up and replace only these three files:')
         for path in TARGETS.values(): print(path)
         print('Create root-owned policy state and reassert the current power profile.')
         return
@@ -62,7 +65,8 @@ def main():
         parser.error('unsupported desktop group')
     for name in ('login-apply', 'power-apply'):
         subprocess.run(['bash', '-n', str(ROOT / 'bin' / name)], check=True)
-    subprocess.run(['timeshift', '--create', '--comments', 'before mintbook helper safety fixes'], check=True)
+    if args.snapshot:
+        subprocess.run(['timeshift', '--create', '--comments', 'before mintbook helper safety fixes'], check=True)
     backup = BACKUPS / time.strftime('%Y%m%d-%H%M%S')
     backup.mkdir(parents=True, mode=0o700)
     manifest = {}
