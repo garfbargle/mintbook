@@ -299,7 +299,10 @@ def icon_file(name, size=SIZE):
     import gi
     gi.require_version('Gtk', '3.0')
     from gi.repository import Gtk
-    info = Gtk.IconTheme.get_default().lookup_icon(name, size, 0)
+    theme = Gtk.IconTheme.get_default()
+    if theme is None:
+        return ''
+    info = theme.lookup_icon(name, size, 0)
     return info.get_filename() or '' if info else ''
 
 

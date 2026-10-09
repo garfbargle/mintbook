@@ -308,3 +308,14 @@ Three things this got wrong first, all of them now in the code:
   needs root. First run is the first test.
 - **No screenshot in this repository.** `Cmd+Shift+3` is a session binding and
   the greeter is not the session. `--preview --shot` is how to take one.
+
+### 2026-10-08: privileged-helper safety
+
+Wallpaper paths are written as literal configuration values, including shell and
+sed metacharacters. Newlines in paths are rejected. Dconf is written through
+Gio with typed values in one lightdm D-Bus session; no configuration value is
+executed as shell source. A private picture is copied as the invoking user.
+Missing appearance assets now require the authenticated `login-install` rather
+than copying a user-controlled theme tree through the passwordless helper.
+Reinstall with `sudo bin/login-install` after the README Timeshift snapshot.
+The installer's existing `--revert` restores the original login setup.

@@ -50,6 +50,8 @@ import os
 import re
 import socket
 import subprocess
+import tempfile
+import time
 import unicodedata
 
 # 'MNTD' is also the protocol dispatch. The listener reads four bytes before
@@ -156,7 +158,8 @@ def safe_name(name):
     name = unicodedata.normalize('NFC', str(name))
     name = _UNSAFE.sub('_', name).strip()
     name = name.lstrip('.') or 'received'
-    return name[:200]
+    # NAME_MAX limits bytes, not Unicode code points; leave room for suffixes.
+    return name.encode('utf-8')[:200].decode('utf-8', 'ignore') or 'received'
 
 
 def unique_path(directory, name):
@@ -174,6 +177,43 @@ def unique_path(directory, name):
     return candidate
 
 
+def incoming_temp(directory):
+    """Exclusive, unpredictable staging file; never a sender-selected path."""
+    return tempfile.mkstemp(prefix='.mintdrop-', dir=directory)
+
+
+def publish_file(partial, directory, name):
+    """Atomically publish without replacing any file or following a symlink.
+
+    link() fails if the destination exists, including if another receiver
+    published after our check. Each transfer owns a different staging inode.
+    """
+    while True:
+        final = unique_path(directory, safe_name(name))
+        try:
+            os.link(partial, final, follow_symlinks=False)
+        except FileExistsError:
+            continue
+        os.unlink(partial)
+        return final
+
+
+class PrefixedSocket:
+    """Replay a consumed protocol prefix before reading the underlying socket."""
+
+    def __init__(self, sock, prefix):
+        self.sock, self.prefix = sock, prefix
+
+    def recv(self, count):
+        if self.prefix:
+            chunk, self.prefix = self.prefix[:count], self.prefix[count:]
+            return chunk
+        return self.sock.recv(count)
+
+    def __getattr__(self, name):
+        return getattr(self.sock, name)
+
+
 # ---------------------------------------------------------------------------
 # framing
 # ---------------------------------------------------------------------------
@@ -182,11 +222,19 @@ class DropError(Exception):
     """A transfer that cannot continue. The message is shown to the user."""
 
 
-def read_exactly(sock, count):
+def read_exactly(sock, count, deadline=None):
     parts = []
     got = 0
     while got < count:
-        chunk = sock.recv(count - got)
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise DropError('the sender did not provide its protocol header in time')
+            sock.settimeout(remaining)
+        try:
+            chunk = sock.recv(count - got)
+        except socket.timeout as exc:
+            raise DropError('the sender stalled') from exc
         if not chunk:
             raise DropError('the connection closed early')
         parts.append(chunk)

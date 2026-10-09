@@ -36,16 +36,23 @@ die() { echo "$*" >&2; exit 1; }
 # Best effort: a greeter with the right conf and a stale dconf is the situation
 # we were already in, so a failure here is not worth failing an apply over.
 sync_dconf() {
-  local script=""
-  while IFS='=' read -r key value; do
-    case "$key" in ''|\#*) continue ;; esac
-    # gsettings parses the value against the schema, so an empty string has to
-    # be spelled as one rather than passed as nothing at all.
-    script="$script gsettings set $SCHEMA $key \"${value:-''}\";"
-  done < <(sed -n '/^\[Greeter\]/,$p' "$CONF" | sed -n 's/^\([a-z-]*=.*\)/\1/p')
-  [ -n "$script" ] || return 0
   runuser -u lightdm -- env HOME=/var/lib/lightdm \
-      dbus-run-session -- sh -c "$script" 2>/dev/null ||
+      dbus-run-session -- /usr/bin/python3 -I - "$CONF" "$SCHEMA" <<'PY' 2>/dev/null ||
+import configparser, sys
+from gi.repository import Gio, GLib
+conf = configparser.ConfigParser(interpolation=None)
+conf.read(sys.argv[1])
+settings = Gio.Settings.new(sys.argv[2])
+schema = settings.props.settings_schema
+for key, value in conf.items('Greeter'):
+    if not schema.has_key(key):
+        continue
+    kind = settings.get_value(key).get_type()
+    variant = (GLib.Variant('s', value) if kind.dup_string() == 's'
+               else GLib.Variant.parse(kind, value, None, None))
+    settings.set_value(key, variant)
+Gio.Settings.sync()
+PY
     echo "note: could not write lightdm's dconf; the conf is still correct" >&2
 }
 
@@ -82,7 +89,12 @@ if [ -n "$background" ]; then
   # Resolve first, then judge the resolved path: a symlink into somewhere
   # unreadable is the interesting case, not the link itself.
   background=$(readlink -f -- "$background") || die 'cannot resolve that path'
+  [[ "$background" != *$'\n'* && "$background" != *$'\r'* ]] || die 'picture paths cannot contain newlines'
   [ -f "$background" ] || die "not a file: $background"
+  if [ -n "$uid" ]; then
+    caller=$(getent passwd "$uid" | cut -d: -f1)
+    [ -n "$caller" ] && runuser -u "$caller" -- test -r "$background" || die 'the calling user cannot read that picture'
+  fi
   case "$(file -Lb --mime-type -- "$background")" in
     image/*) ;;
     *) die "not an image: $background" ;;
@@ -94,7 +106,16 @@ if [ -n "$background" ]; then
   if ! runuser -u lightdm -- test -r "$background" 2>/dev/null; then
     install -dm755 "$SHARE"
     name="mintbook-$(date +%Y%m%d%H%M%S)-$(basename -- "$background")"
-    install -m644 -- "$background" "$SHARE/$name"
+    # Read as the caller: replacing a home symlink during the copy must not
+    # turn a passwordless background change into a root file-read primitive.
+    copy=$(mktemp "$SHARE/mintbook-XXXXXXXX")
+    if [ -n "${caller:-}" ]; then
+      runuser -u "$caller" -- cat -- "$background" > "$copy" || { rm -f "$copy"; die 'cannot read that picture'; }
+    else
+      cat -- "$background" > "$copy"
+    fi
+    chmod 644 "$copy"
+    mv -fT -- "$copy" "$SHARE/$name"
     background="$SHARE/$name"
   fi
 fi
@@ -106,23 +127,36 @@ if [ -n "$appearance" ]; then
   # should not mean a trip to the terminal, so fetch the pair if it is absent.
   for pair in "themes/$theme" "icons/$icons"; do
     if [ ! -d "/usr/share/$pair" ]; then
-      where=${home:-the invoking user home}
-      [ -n "$home" ] && [ -d "$home/.$pair" ] || die "no $pair in /usr/share or $where"
-      install -dm755 "$(dirname "/usr/share/$pair")"
-      cp -a "$home/.$pair" "/usr/share/$pair"
-      chmod -R a+rX "/usr/share/$pair"
+      die "no /usr/share/$pair — install that appearance with bin/login-install first"
     fi
   done
 fi
 
 tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
-cp "$CONF" "$tmp"
-if [ -n "$background" ]; then sed -i "s|^background=.*|background=$background|" "$tmp"; fi
-if [ -n "$appearance" ]; then
-  sed -i "s|^background-color=.*|background-color=$color|; \
-          s|^theme-name=.*|theme-name=$theme|; \
-          s|^icon-theme-name=.*|icon-theme-name=$icons|" "$tmp"
-fi
+# Paths are data, never sed programs or shell source. Preserve comments and
+# unrelated sections, inserting a missing key in [Greeter] when needed.
+/usr/bin/python3 -I - "$CONF" "$tmp" "$background" "$appearance" "${color:-}" "${theme:-}" "${icons:-}" <<'PY'
+import pathlib, sys
+source, target, background, appearance, color, theme, icons = sys.argv[1:]
+values = {}
+if background:
+    values['background'] = background
+if appearance:
+    values.update({'background-color': color, 'theme-name': theme, 'icon-theme-name': icons})
+out, in_greeter, found = [], False, False
+for line in pathlib.Path(source).read_text().splitlines(keepends=True):
+    if line.strip().startswith('['):
+        if in_greeter:
+            out.extend(f'{k}={v}\n' for k, v in values.items()); values.clear()
+        in_greeter = line.strip() == '[Greeter]'
+        found |= in_greeter
+    key = line.partition('=')[0].strip()
+    out.append(f'{key}={values.pop(key)}\n' if in_greeter and key in values else line)
+if not found:
+    out.append('\n[Greeter]\n')
+out.extend(f'{k}={v}\n' for k, v in values.items())
+pathlib.Path(target).write_text(''.join(out))
+PY
 install -m644 "$tmp" "$CONF"
 
 # Prune copies nothing points at any more. Only ever files this script made,

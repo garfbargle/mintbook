@@ -804,16 +804,18 @@ class Incoming:
         self.written = 0
 
     def open(self, directory):
-        self.path = drop.unique_path(directory, self.name)
-        self.partial = self.path + '.part'
-        self.handle = open(self.partial, 'wb')
+        self.directory = directory
+        fd, self.partial = drop.incoming_temp(directory)
+        self.handle = os.fdopen(fd, 'wb')
 
     def write(self, offset, blob):
         if self.handle is None:
             return
         # Trust the offset, verify the total: a phone that seeks past the
         # declared size is not one to hand a file descriptor to.
-        if offset + len(blob) > self.size:
+        if offset != self.written:
+            raise ProtocolError(f'{self.name}: noncontiguous file offset')
+        if offset < 0 or offset + len(blob) > self.size:
             raise ProtocolError(f'{self.name}: more data than declared')
         self.handle.seek(offset)
         self.handle.write(blob)
@@ -822,14 +824,18 @@ class Incoming:
     def finish(self):
         if self.handle is None:
             return None
-        self.handle.close()
-        self.handle = None
         if self.written != self.size:
-            os.unlink(self.partial)
+            self.abandon()
             raise ProtocolError(f'{self.name}: {self.written} of {self.size} '
                                 f'bytes arrived')
-        os.chmod(self.partial, 0o644)
-        os.rename(self.partial, self.path)
+        self.handle.flush()
+        if os.fstat(self.handle.fileno()).st_size != self.size:
+            self.abandon()
+            raise ProtocolError(f'{self.name}: incorrect file length')
+        os.fchmod(self.handle.fileno(), 0o644)
+        self.handle.close()
+        self.handle = None
+        self.path = drop.publish_file(self.partial, self.directory, self.name)
         return self.path
 
     def abandon(self):
@@ -880,11 +886,15 @@ def save_text(directory, entry, blob):
     name = entry.name
     if entry.text == TEXT_URL and '://' in body_text:
         name = url_name(body_text)
-    path = drop.unique_path(directory, name)
-    with open(path, 'w', encoding='utf-8') as handle:
-        handle.write(body_text if body_text.endswith('\n')
-                     else body_text + '\n')
-    return path
+    fd, partial = drop.incoming_temp(directory)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+            handle.write(body_text if body_text.endswith('\n') else body_text + '\n')
+            os.fchmod(handle.fileno(), 0o644)
+        return drop.publish_file(partial, directory, name)
+    finally:
+        if os.path.exists(partial):
+            os.unlink(partial)
 
 
 def receive_from_phone(sock, ask=None, on_progress=None, directory=None,

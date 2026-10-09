@@ -1135,3 +1135,12 @@ is installed as a `.deb` and bundles its own runtime under
 Screenshot tooling is **`xfce4-screenshooter` only** — no `scrot`, `maim` or `import`.
 This keyboard has no Print key; the bindings are **Cmd+Shift+3 / 4 / 5**
 (saved under `~/Pictures/Screenshots/`, see [desktop.md](desktop.md)).
+
+### 2026-10-08: power-request isolation
+
+The desktop-writable `/run/mintbook-power` directory is only the request inbox.
+The authoritative cap moves to `/run/mintbook-policy/cap`, under a root-owned
+0755 directory, and is replaced atomically without following a leaf symlink.
+Input Boost reads that new path. Requests must be short regular files; symlinks
+and FIFOs are refused without blocking. Reinstall with `sudo bin/power-install`
+after a Timeshift snapshot, then restart Input Boost. No tuning values change.

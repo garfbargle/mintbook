@@ -29,7 +29,7 @@ import sys
 import time
 
 CAP = '/sys/devices/system/cpu/intel_pstate/max_perf_pct'
-POLICY = '/run/mintbook-power/cap'
+POLICY = '/run/mintbook-policy/cap'
 HOLD = float(os.environ.get('HOLD', '2'))          # seconds uncapped after the last press
 MAXBOOST = float(os.environ.get('MAXBOOST', '8'))  # longest boost in a row
 REARM = float(os.environ.get('REARM', '1'))        # press-free gap that re-arms after MAXBOOST

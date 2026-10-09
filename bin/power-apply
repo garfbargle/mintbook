@@ -36,7 +36,20 @@ if [ "$MODE" = "--from-request" ]; then
     echo "no $WANT" >&2
     exit 1
   fi
-  MODE=$(tr -d '[:space:]' < "$WANT")
+  MODE=$(/usr/bin/python3 -I - "$WANT" <<'PY'
+import os, stat, sys
+fd = os.open(sys.argv[1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+try:
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        sys.exit('power request must be a regular file')
+    request = os.read(fd, 128)
+    if len(request) >= 128:
+        sys.exit('power request is too long')
+    print(''.join(request.decode('ascii').split()))
+finally:
+    os.close(fd)
+PY
+  )
 fi
 
 online=1
@@ -63,8 +76,17 @@ pct_for() {
 # The cap in force by policy, for bin/input-boost: it lifts max_perf_pct at the
 # moment of input and has to know what to put back. Written wherever this
 # script sets the cap, so a profile change or an AC plug during a boost wins.
-POLICY=/run/mintbook-power/cap
-record_cap() { [ -d "${POLICY%/*}" ] && echo "$1" > "$POLICY" || true; }
+POLICY=/run/mintbook-policy/cap
+record_cap() {
+  # The parent is root-owned and not writable by the desktop user. Atomic
+  # replacement also avoids following a stale symlink at the leaf.
+  install -d -o root -g root -m755 "${POLICY%/*}"
+  local temp
+  temp=$(mktemp "${POLICY%/*}/.cap.XXXXXXXX")
+  printf '%s\n' "$1" > "$temp"
+  chmod 644 "$temp"
+  mv -fT -- "$temp" "$POLICY"
+}
 
 if [ "$MODE" = "--reassert" ]; then
   profile=$(powerprofilesctl get 2>/dev/null || echo '')

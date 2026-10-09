@@ -725,3 +725,18 @@ medium that matters.
   receiving* is baked into `/etc/avahi/services/` at install time, so
   changing it means re-running `bin/mintdrop-install`.
 
+
+### 2026-10-08: receive integrity and filename safety
+
+Both wire protocols stage in exclusive, unpredictable `.mintdrop-*` files,
+then publish with a hard link that cannot replace an existing destination.
+Parallel transfers, existing destination symlinks, and sender-selected `.part`
+names cannot truncate another file. UTF-8 names are bounded in bytes. Quick
+Share requires contiguous offsets and verifies the finished file length.
+Protocol dispatch reads all four prefix bytes under a 60-second deadline,
+including when TCP fragments them, and replays those bytes for the parser.
+The old predictable `.part` naming described above is historical.
+
+Regression coverage uses temporary files and actual loopback transfers; no
+phone or system configuration is changed by the tests. Reinstall with
+`bin/mintdrop-install`; its existing `--revert` restores the previous files.

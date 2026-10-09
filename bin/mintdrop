@@ -166,21 +166,6 @@ def ask(name, files, total, peer_ip):
     return ask_prompt(name, summary, total, peer_ip)
 
 
-def looks_like_quickshare(sock):
-    """Peek at the first four bytes without consuming them.
-
-    'MNTD' is mintdrop. Anything else on this port is a phone: Quick Share
-    opens with a length-prefixed protobuf, and a 4-byte big-endian length can
-    never spell MNTD. One socket, one systemd unit, two protocols — which is
-    why the magic was chosen to be dispatchable in the first place.
-    """
-    try:
-        head = sock.recv(4, socket.MSG_PEEK)
-    except OSError:
-        return False
-    return len(head) == 4 and head != drop.MAGIC
-
-
 def receive_quickshare(sock, peer_ip):
     """Hand this connection to the Quick Share server."""
     qs = quickshare()
@@ -253,7 +238,12 @@ def receive_on(sock, use_splice=True, auto=False):
     if not drop.is_local_address(peer_ip):
         log(f'refused {peer_ip}: not a local address')
         return 1
-    if looks_like_quickshare(sock):
+    # TCP can fragment even a four-byte header. Read exactly the prefix under
+    # a deadline, then replay it for whichever protocol owns this connection.
+    sock.settimeout(60)
+    prefix = drop.read_exactly(sock, 4, deadline=time.monotonic() + 60)
+    sock = drop.PrefixedSocket(sock, prefix)
+    if prefix != drop.MAGIC:
         return receive_quickshare(sock, peer_ip)
 
     sock.settimeout(60)
@@ -278,9 +268,7 @@ def receive_on(sock, use_splice=True, auto=False):
     landed = []
     try:
         for entry in files:
-            final = drop.unique_path(directory, entry['name'])
-            partial = final + '.part'
-            fd = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            fd, partial = drop.incoming_temp(directory)
             try:
                 drop.allocate(fd, entry['size'])
                 if splicer is not None:
@@ -293,10 +281,10 @@ def receive_on(sock, use_splice=True, auto=False):
                 # zero-length file that was preallocated would otherwise
                 # arrive the right size and the wrong length.
                 os.ftruncate(fd, entry['size'])
+                os.fchmod(fd, 0o644)
             finally:
                 os.close(fd)
-            os.chmod(partial, 0o644)
-            os.rename(partial, final)
+            final = drop.publish_file(partial, directory, entry['name'])
             landed.append(final)
             log(f'received {os.path.basename(final)}')
         sock.sendall(drop.ACCEPT)
@@ -333,7 +321,7 @@ def cmd_receive(args):
         return 2
     try:
         return receive_on(sock, use_splice=not args.no_splice)
-    except DropError as exc:
+    except (DropError, OSError) as exc:
         log(f'failed: {exc}')
         return 1
     finally:
@@ -364,7 +352,7 @@ def cmd_serve(args):
         conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         try:
             receive_on(conn, use_splice=not args.no_splice, auto=args.yes)
-        except DropError as exc:
+        except (DropError, OSError) as exc:
             log(f'failed: {exc}')
         finally:
             conn.close()
