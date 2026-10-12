@@ -38,8 +38,8 @@ def atomic(path, text):
 
 
 def publish(name, text, now=None):
-    now = time.time() if now is None else now
-    atomic(CACHE / (name + '.xml'), str(int(now + TTL[name])) + '\n' + text.rstrip() + '\n')
+    now = time.clock_gettime(time.CLOCK_BOOTTIME) if now is None else now
+    atomic(CACHE / (name + '.xml'), 'v2 ' + str(int(now + TTL[name])) + '\n' + text.rstrip() + '\n')
 
 
 def unavailable(name):
@@ -146,7 +146,7 @@ class Collector:
             publish('cpu', unavailable('cpu'))
             self.errors['cpu'] = str(exc)[:180]
         if not repaint:
-            atomic(CACHE / 'heartbeat', str(int(time.time() + 8)) + '\n')
+            atomic(CACHE / 'heartbeat', 'v2 ' + str(int(time.clock_gettime(time.CLOCK_BOOTTIME) + 8)) + '\n')
             notify('WATCHDOG=1')
             self.counter += 1
             if self.counter % 15 == 1:
@@ -230,6 +230,12 @@ class Collector:
 
     def panel_event(self, _connection, _sender, _path, _interface, _signal, args, _data):
         if args.unpack()[2]:
+            child = self.cpu.WATCH_CHILD
+            if child is not None:
+                if child.poll() is None:
+                    child.terminate()
+                child.wait(timeout=3)
+                self.cpu.WATCH_CHILD = None
             # The collector starts before the panel. Retire a failed startup
             # search (or watchers on the previous panel) as soon as it appears.
             try:

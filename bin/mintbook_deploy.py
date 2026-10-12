@@ -68,6 +68,9 @@ class Deployment:
                 if not path.resolve().is_relative_to(self.root):
                     raise ValueError('runtime source leaves its checkout: ' + str(path))
                 result[str(path.relative_to(self.root))] = (path.read_bytes(), path.stat().st_mode & 0o777)
+        for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md'):
+            path = self.root / name
+            if path.is_file(): result[name] = (path.read_bytes(), 0o644)
         return result
 
     def installed_paths(self):
@@ -243,7 +246,10 @@ class Deployment:
                 heartbeat = self.home / '.cache/mintbook/status/heartbeat'
                 try:
                     report = json.loads((heartbeat.parent / 'report.json').read_text())
-                    ok = (int(heartbeat.read_text()) >= time.time()
+                    value = heartbeat.read_text().split()
+                    fresh = (int(value[1]) >= time.clock_gettime(time.CLOCK_BOOTTIME)
+                             if value[0] == 'v2' else int(value[0]) >= time.time())
+                    ok = (fresh
                           and Path(report['release']).resolve() == self.current.resolve())
                 except (OSError, ValueError, KeyError):
                     ok = False

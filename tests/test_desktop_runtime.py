@@ -110,27 +110,27 @@ class CachedReaderTests(unittest.TestCase):
     def run_reader(self, name, heartbeat=None, valid=None, text='<txt>live</txt>\n'):
         with tempfile.TemporaryDirectory() as d:
             cache = Path(d) / '.cache/mintbook/status'; cache.mkdir(parents=True)
-            if heartbeat is not None: (cache / 'heartbeat').write_text(str(heartbeat))
-            if valid is not None: (cache / (name + '.xml')).write_text(str(valid) + '\n' + text)
+            if heartbeat is not None: (cache / 'heartbeat').write_text('v2 ' + str(heartbeat))
+            if valid is not None: (cache / (name + '.xml')).write_text('v2 ' + str(valid) + '\n' + text)
             return subprocess.run([str(ROOT / 'bin/panel-read'), name], env={**os.environ, 'HOME': d},
                                   capture_output=True, text=True, check=True).stdout
 
     def test_fresh_status_is_displayed(self):
-        now = int(time.time())
+        now = int(time.clock_gettime(time.CLOCK_BOOTTIME))
         self.assertEqual(self.run_reader('cpu', now + 8, now + 8), '<txt>live</txt>\n')
 
     def test_dead_collector_never_presents_cached_reading_as_live(self):
-        now = int(time.time())
+        now = int(time.clock_gettime(time.CLOCK_BOOTTIME))
         text = self.run_reader('cpu', now - 1, now + 100)
         self.assertIn('Status unavailable', text); self.assertNotIn('live', text)
-        self.assertIn('cpu-menu</click>', text)
+        self.assertIn('cpu-menu"</click>', text)
 
     def test_stale_backend_with_healthy_collector_is_explicitly_unavailable(self):
-        now = int(time.time())
+        now = int(time.clock_gettime(time.CLOCK_BOOTTIME))
         self.assertIn('Status unavailable', self.run_reader('wifi', now + 8, now - 1))
 
     def test_malformed_cache_does_not_crash_or_lose_the_action(self):
-        self.assertIn('system-menu</click>', self.run_reader('system', 'bad', 'bad'))
+        self.assertIn('system-menu"</click>', self.run_reader('system', 'bad', 'bad'))
 
     def test_invalid_component_cannot_read_an_arbitrary_cache_path(self):
         result = subprocess.run([str(ROOT / 'bin/panel-read'), '../private'], capture_output=True)

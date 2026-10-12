@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # Genmon reads cached output; it never starts a sampler or waits for a daemon.
 set -u
 name=${1:-}
@@ -14,18 +14,23 @@ case "$name" in
   *) echo 'usage: panel-read cpu|temp|wifi|bt|battery|control|system|overview' >&2; exit 2 ;;
 esac
 cache="${XDG_CACHE_HOME:-$HOME/.cache}/mintbook/status"
-expires=0
-{ read -r expires < "$cache/heartbeat"; } 2>/dev/null || true
-if [[ "$expires" =~ ^[0-9]+$ ]] && (( expires >= EPOCHSECONDS )); then
-  valid=0
-  if { read -r valid; } 2>/dev/null < "$cache/$name.xml" \
-      && [[ "$valid" =~ ^[0-9]+$ ]] && (( valid >= EPOCHSECONDS )); then
-    # Shell builtins also avoid a cat process on every tick.
-    { read -r _; while IFS= read -r line; do printf '%s\n' "$line"; done; } < "$cache/$name.xml"
-    exit 0
+# Boot time avoids a date process and survives wall-clock adjustments. It
+# includes sleep time, so a pre-suspend heartbeat cannot appear fresh on wake.
+IFS=' .' read -r now _ < /proc/uptime
+format='' expires=0
+{ read -r format expires < "$cache/heartbeat"; } 2>/dev/null || true
+case "$expires" in ''|*[!0-9]*) expires=0 ;; esac
+if [ "$format" = v2 ] && [ "$expires" -ge "$now" ]; then
+  format='' valid=0
+  if { read -r format valid; } 2>/dev/null < "$cache/$name.xml"; then
+    case "$valid" in ''|*[!0-9]*) valid=0 ;; esac
+    if [ "$format" = v2 ] && [ "$valid" -ge "$now" ]; then
+      { read -r _; while IFS= read -r line; do printf '%s\n' "$line"; done; } < "$cache/$name.xml"
+      exit 0
+    fi
   fi
 fi
-printf '<click>%s/.local/bin/%s</click>\n<iconclick>%s/.local/bin/%s</iconclick>\n' "$HOME" "$menu" "$HOME" "$menu"
+printf '<click>"%s/.local/bin/%s"</click>\n<iconclick>"%s/.local/bin/%s"</iconclick>\n' "$HOME" "$menu" "$HOME" "$menu"
 case "$name" in
   control) printf '<img>%s/.local/share/mintbook/control-center.svg</img>\n' "$HOME" ;;
   system) printf '<img>%s/.local/share/mintbook/system/system-alert.svg</img>\n' "$HOME" ;;
