@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+"""Tune XFCE trackpad scrolling and held-key repeat, with a persistent undo snapshot."""
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+
+DEVICE = 'Apple SPI Touchpad'
+SCROLL_ATOM = 'libinput Scrolling Pixel Distance'
+DELAY_PROP = '/Default/KeyRepeat/Delay'
+RATE_PROP = '/Default/KeyRepeat/Rate'
+SETTINGS = (('keyboards', DELAY_PROP), ('keyboards', RATE_PROP))
+SAVED = Path.home() / '.config/mintbook/input-feel.json'
+AUTOSTART = Path.home() / '.config/autostart/mintbook-input-feel.desktop'
+
+
+def run(*argv):
+    return subprocess.run(argv, check=True, text=True, capture_output=True,
+                          env={**os.environ, 'LC_ALL': 'C'}).stdout
+
+
+def preflight():
+    if not os.environ.get('DISPLAY'):
+        raise RuntimeError('Run this as your user in the XFCE X11 desktop session (DISPLAY is unset).')
+    if os.geteuid() == 0:
+        raise RuntimeError('Run as your desktop user, without sudo.')
+    for command in ('xfconf-query', 'xinput', 'xset'):
+        if not shutil.which(command):
+            raise RuntimeError(f'Missing dependency: {command}')
+
+
+def live():
+    props = run('xinput', 'list-props', DEVICE)
+    scroll = re.search(r'^\s*' + re.escape(SCROLL_ATOM) + r' \(\d+\):\s*(\d+)\s*$',
+                       props, re.MULTILINE)
+    repeat = re.search(r'auto repeat delay:\s*(\d+)\s+repeat rate:\s*(\d+)',
+                       run('xset', 'q'))
+    if not scroll or not repeat:
+        raise RuntimeError('Cannot read the trackpad scroll distance or X11 keyboard repeat settings.')
+    return [int(scroll[1]), int(repeat[1]), int(repeat[2])]
+
+
+def preferences():
+    # Listing first distinguishes an absent property from a failed D-Bus read.
+    channels = {'keyboards': run('xfconf-query', '-c', 'keyboards', '-l').splitlines()}
+    return [int(run('xfconf-query', '-c', channel, '-p', prop).strip())
+            if prop in channels[channel] else None for channel, prop in SETTINGS]
+
+
+def write_preference(channel, prop, value):
+    known = run('xfconf-query', '-c', channel, '-l').splitlines()
+    if value is None:
+        if prop in known:
+            run('xfconf-query', '-c', channel, '-p', prop, '-r')
+    else:
+        args = [] if prop in known else ['-n', '-t', 'int']
+        run('xfconf-query', '-c', channel, '-p', prop, *args, '-s', str(value))
+
+
+def apply(values):
+    for (channel, prop), value in zip(SETTINGS, values):
+        write_preference(channel, prop, value)
+
+
+def autostart_snapshot():
+    if AUTOSTART.is_symlink():
+        return {'symlink': os.readlink(AUTOSTART)}
+    return {'text': AUTOSTART.read_text()} if AUTOSTART.exists() else None
+
+
+def write_autostart(distance):
+    # XFCE 4.18's pointers helper only handles INTEGER, ATOM and FLOAT X11
+    # properties; this driver's scroll distance is CARDINAL. Use xinput once
+    # at login, with a config containing the preference and no resident process.
+    AUTOSTART.parent.mkdir(parents=True, exist_ok=True)
+    AUTOSTART.unlink(missing_ok=True)
+    AUTOSTART.write_text('[Desktop Entry]\nType=Application\n'
+                         'Name=Mintbook trackpad scrolling\n'
+                         'OnlyShowIn=XFCE;\n'
+                         f'Exec=xinput set-prop "{DEVICE}" "{SCROLL_ATOM}" {distance}\n'
+                         'Terminal=false\n')
+
+
+def verify(values):
+    actual = live()
+    if actual != values:
+        raise RuntimeError(f'Live settings do not match: expected {values}, got {actual}. '
+                           'Check that xfsettingsd is running; the undo snapshot is retained.')
+
+
+def install(values):
+    before = live()
+    saved_preferences = preferences()
+    if not SAVED.exists():
+        SAVED.parent.mkdir(parents=True, exist_ok=True)
+        # Keep the first snapshot on reruns and save it before any setting write.
+        with SAVED.open('x') as handle:
+            json.dump({'preferences': saved_preferences, 'live': before,
+                       'autostart': autostart_snapshot()}, handle, indent=2)
+            handle.write('\n')
+    apply(values[1:])
+    write_autostart(values[0])
+    run('xinput', 'set-prop', DEVICE, SCROLL_ATOM, str(values[0]))
+    verify(values)
+    print(f'Applied: scroll distance {values[0]}, repeat delay {values[1]} ms, '
+          f'repeat rate {values[2]}/second. Saved for future XFCE logins.')
+    print(f'Undo: {Path(__file__).resolve()} --revert')
+
+
+def restore():
+    if not SAVED.exists():
+        raise RuntimeError('No input-feel undo snapshot exists; nothing changed.')
+    data = json.loads(SAVED.read_text())
+    # Check the live device/session before removing any saved preference.
+    live()
+    apply(data['preferences'])
+    AUTOSTART.unlink(missing_ok=True)
+    if data['autostart'] is not None:
+        if 'symlink' in data['autostart']:
+            AUTOSTART.symlink_to(data['autostart']['symlink'])
+        else:
+            AUTOSTART.write_text(data['autostart']['text'])
+    # Removing an XFCE override does not reliably reset a live X property.
+    # Restore the observed original values as well as the preference presence.
+    run('xinput', 'set-prop', DEVICE, SCROLL_ATOM, str(data['live'][0]))
+    run('xset', 'r', 'rate', str(data['live'][1]), str(data['live'][2]))
+    verify(data['live'])
+    SAVED.unlink()
+    print('Restored the previous trackpad scrolling and keyboard repeat settings.')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--check', action='store_true', help='read live and saved settings without changing them')
+    mode.add_argument('--revert', action='store_true', help='restore settings from before the first apply')
+    parser.add_argument('--scroll-distance', type=int, default=30, help='larger means slower; default 30, stock 15')
+    parser.add_argument('--delay', type=int, default=600, help='milliseconds before a held key repeats; default 600')
+    parser.add_argument('--rate', type=int, default=25, help='repeats per second; default 25')
+    args = parser.parse_args()
+    if not 1 <= args.scroll_distance <= 1000 or not 100 <= args.delay <= 5000 or not 1 <= args.rate <= 100:
+        parser.error('scroll distance must be 1–1000, delay 100–5000 ms, and rate 1–100/second')
+    try:
+        preflight()
+        if args.check:
+            values = live()
+            print(f'Live: scroll distance {values[0]}, repeat delay {values[1]} ms, repeat rate {values[2]}/second.')
+            print('XFCE keyboard preferences (delay, rate):', preferences())
+            print('Scroll login setting:', AUTOSTART.read_text().strip() if AUTOSTART.exists() else 'none')
+            print('Undo snapshot:', SAVED if SAVED.exists() else 'none')
+        elif args.revert:
+            restore()
+        else:
+            install([args.scroll_distance, args.delay, args.rate])
+    except (RuntimeError, OSError, ValueError, subprocess.CalledProcessError) as error:
+        detail = error.stderr.strip() if isinstance(error, subprocess.CalledProcessError) else str(error)
+        print('input-feel:', detail, file=sys.stderr)
+        if SAVED.exists():
+            print(f'Undo snapshot retained: {SAVED}', file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

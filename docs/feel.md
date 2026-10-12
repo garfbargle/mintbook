@@ -4,9 +4,10 @@ Every pass in this repository so far has asked *how much work is the machine
 doing*. This one asks a different question: **how fast does it feel**, which is
 a different quantity and has different levers.
 
-Nothing here is applied. This is a candidate list, ranked, written on
-**2026-09-06** after probing the live machine. One measurement was taken, and it
-changes how the rest should be read.
+This began as a candidate list, ranked, written on **2026-09-06** after probing
+the live machine. Later sections record what was applied. Historical measurements
+retain their dates; current scrolling and keyboard preferences are documented in
+[input.md](input.md#4-scrolling-and-held-keys).
 
 ---
 
@@ -114,7 +115,13 @@ sudo install -m644 config/sysctl.d/99-mintbook-feel.conf /etc/sysctl.d/ && sudo 
 
 ## Ranked candidates
 
-### 1. Keyboard repeat — **applied**, 500 ms / 20 Hz → 200 ms / 40 Hz
+### 1. Keyboard repeat — historical experiment, 500 ms / 20 Hz → 200 ms / 40 Hz
+
+**Superseded on 2026-10-12:** the user found the 200 ms delay and 40 Hz rate
+too easy to trigger and too fast. Current values are **600 ms / 25 Hz**, applied
+with `bin/input-feel` alongside slower trackpad scrolling. See
+[input.md](input.md#4-scrolling-and-held-keys) for tuning and undo. The account
+below describes the earlier experiment, not the current preference.
 
 ```
 before   auto repeat delay:  500    repeat rate:  20
@@ -125,7 +132,8 @@ Nothing set it — the `keyboards` channel held only `/Default/Numlock`, so
 `xfsettingsd` left X11's own defaults in place. Every held arrow key, every
 backspace run, waited half a second and then crawled at 20 Hz.
 
-Set through xfconf, which both applies immediately and persists across logins:
+The historical change used xfconf, which applies immediately and persists across
+logins (these commands reproduce the old experiment):
 
 ```bash
 xfconf-query -c keyboards -p /Default/KeyRepeat       -n -t bool -s true
@@ -143,12 +151,14 @@ said macOS "ships far faster" on this hardware. It does not: macOS defaults to
 `InitialKeyRepeat` 25 (≈375 ms) and `KeyRepeat` 6 (≈90 ms, ≈11 Hz) — a *slower*
 repeat rate than X11's 20 Hz, with a shorter delay. The case for this change is
 not that macOS is quicker. It is that both defaults are conservative, the delay
-is the part a person feels, and 200 ms is where a held key stops feeling like a
-request and starts feeling like a control. The macOS-power-user equivalent is
-roughly 225 ms / 33 Hz, which is close to what is set here.
+is the part a person feels, and a 200 ms delay was the experiment's proposed
+preference. The macOS-power-user equivalent is roughly 225 ms / 33 Hz, close to
+that historical setting. The user's later feedback showed that this preference
+was too aggressive for daily typing.
 
-This changes no work the machine does. It was the highest felt value per minute
-of effort on the list, and it is done.
+This changes no work the machine does. The original pass ranked it highest for
+perceived value per minute of effort; the later correction is why a preference
+needs to remain adjustable and reversible.
 
 ### 2. Fix the worst moments, not the average — **built, measured, needs one root command**
 
