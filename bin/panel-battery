@@ -263,6 +263,13 @@ printf '<tool>Battery\n%s</tool>\n' "$info"
 # what was using the battery, so Firefox's dozen content processes arrive as
 # "firefox" rather than as twelve rows of "Isolated Web Co".
 
+# Event repainting does not accelerate the once-a-minute history sampler.
+if [ "${1:-}" = --render ]; then
+  printf '%s %s %s\n' "$sig" "$otick" "${oprev:-0}" > "$STATE.tmp"
+  mv -f "$STATE.tmp" "$STATE"
+  exit 0
+fi
+
 tick=$(( otick + 1 ))
 [ "${1:-}" = --sample ] && tick=$SAMPLE_EVERY
 if [ $(( tick % SAMPLE_EVERY )) -ne 0 ]; then

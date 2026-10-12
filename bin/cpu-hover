@@ -32,6 +32,7 @@ install and nothing to clean up when the panel restarts. See docs/desktop.md.
 """
 import os
 import signal
+import socket
 import subprocess
 import sys
 
@@ -137,6 +138,17 @@ def nudge(_plugin=None):
     the hover goes back to waiting for the next 2 s tick — nothing breaks, it
     just stops being instant. docs/desktop.md has the experiment.
     """
+    # The collector repaints before nudging genmon, so a cached reader never
+    # races the flag write. Legacy installations keep the direct refresh.
+    control = os.path.join(os.environ.get('XDG_RUNTIME_DIR', f'/run/user/{os.getuid()}'),
+                           'mintbook/status-control.sock')
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as client:
+            client.settimeout(.2)
+            client.sendto(b'cpu', control)
+        return
+    except OSError:
+        pass
     run(['xfce4-panel', '--plugin-event=genmon:refresh:bool:true'])
 
 

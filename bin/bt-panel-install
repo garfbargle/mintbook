@@ -19,6 +19,14 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+# Installed desktops route feature changes through the release transaction.
+if [ "${MINTBOOK_INSTALL_TRANSACTION:-}" != 1 ] && [ -e "$HOME/.local/lib/mintbook/current/manifest.json" ]; then
+  exec "$ROOT/bin/desktop-install" --feature "$(basename "$0")" "$@"
+fi
+if [ "${MINTBOOK_PANEL_MAINTENANCE:-}" != 1 ]; then
+  exec "$ROOT/bin/panel-session" maintain -- "$0" "$@"
+fi
+
 BIN="$HOME/.local/bin"
 PANEL_RC="$HOME/.config/xfce4/panel"
 STATE="$HOME/.config/mintbook"
@@ -119,11 +127,11 @@ apply_panel() {
     echo "refusing to write an empty plugin list to the bar" >&2
     return 1
   fi
-  xfce4-panel -q 2>/dev/null || true
+  "$ROOT/bin/panel-session" stop 2>/dev/null || true
   sleep 0.4
   xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids --force-array "${args[@]}"
   systray_hidden "$hidden"
-  nohup xfce4-panel >/dev/null 2>&1 &
+  "$ROOT/bin/panel-session" start
   sleep 1
 }
 

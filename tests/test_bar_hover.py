@@ -150,7 +150,8 @@ class WatcherTests(unittest.TestCase):
         sent = []
         real, hover.run = hover.run, lambda args, **kw: sent.append(args) or ''
         self.addCleanup(setattr, hover, 'run', real)
-        hover.nudge(19)
+        with patch.object(hover.socket, 'socket', side_effect=OSError):
+            hover.nudge(19)
         self.assertEqual(len(sent), 1)
         self.assertEqual(sent[0][0], 'xfce4-panel')
         self.assertIn('--plugin-event=genmon:refresh:bool:true', sent[0])

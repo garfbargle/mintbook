@@ -1,0 +1,348 @@
+#!/usr/bin/env python3
+"""One session-bound collector; genmon reads files and menus stay on demand."""
+import concurrent.futures
+import contextlib
+import importlib.machinery
+import importlib.util
+import io
+import json
+import os
+from pathlib import Path
+import signal
+import socket
+import subprocess
+import sys
+import time
+
+HERE = Path(__file__).resolve().parent
+CACHE = Path(os.environ.get('XDG_CACHE_HOME', str(Path.home() / '.cache'))) / 'mintbook/status'
+PERIODS = {'wifi': 60, 'bt': 60, 'battery': 5, 'temp': 30, 'system': 30,
+           'control': 86400, 'overview': 86400}
+TTL = {'cpu': 8, 'battery': 15, 'temp': 95, 'system': 95,
+       'wifi': 180, 'bt': 180, 'control': 172800, 'overview': 172800}
+SCRIPTS = {'bt': 'panel-bt', **{name: 'panel-' + name for name in PERIODS if name != 'bt'}}
+
+
+def module(name, path):
+    loader = importlib.machinery.SourceFileLoader(name, str(path))
+    result = importlib.util.module_from_spec(importlib.util.spec_from_loader(name, loader))
+    loader.exec_module(result)
+    return result
+
+
+def atomic(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + '.new')
+    temporary.write_text(text)
+    temporary.replace(path)
+
+
+def publish(name, text, now=None):
+    now = time.time() if now is None else now
+    atomic(CACHE / (name + '.xml'), str(int(now + TTL[name])) + '\n' + text.rstrip() + '\n')
+
+
+def unavailable(name):
+    labels = {'wifi': 'Wi-Fi', 'bt': 'Bluetooth', 'cpu': 'CPU', 'temp': 'Temperature',
+              'battery': 'Battery', 'control': 'Control Center', 'system': 'System', 'overview': 'Overview'}
+    menu = {'temp': 'cpu-menu', 'control': 'control-center', 'system': 'system-menu',
+            'overview': 'overview'}.get(name, name + '-menu')
+    home = Path.home()
+    return (f'<click>{home}/.local/bin/{menu}</click>\n'
+            f'<iconclick>{home}/.local/bin/{menu}</iconclick>\n'
+            f'<txt>?</txt>\n<tool>{labels[name]}\nStatus unavailable\nOpen details to check the current state</tool>')
+
+
+def read_backend(name, render_only=False):
+    args = [str(HERE / SCRIPTS[name])]
+    if name == 'battery' and render_only:
+        args.append('--render')
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=10,
+                                stdin=subprocess.DEVNULL)
+        if result.returncode or not result.stdout.strip():
+            raise RuntimeError(result.stderr.strip() or 'no status returned')
+        return result.stdout, None
+    except (OSError, subprocess.SubprocessError, RuntimeError) as error:
+        return unavailable(name), str(error)[:180]
+
+
+def notify(message):
+    address = os.environ.get('NOTIFY_SOCKET')
+    if not address:
+        return
+    if address.startswith('@'):
+        address = '\0' + address[1:]
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as client:
+            client.connect(address)
+            client.sendall(message.encode())
+    except OSError:
+        pass
+
+
+class Collector:
+    def __init__(self, glib, gio):
+        self.GLib, self.Gio = glib, gio
+        self.loop = glib.MainLoop()
+        self.cpu = module('mintbook_bar_cpu', HERE / 'panel-cpu')
+        self.session = module('mintbook_panel_session', HERE / 'panel-session')
+        self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=3)
+        self.inflight = set()
+        self.pending = {}  # name -> render-only; a periodic sample wins over a render
+        self.events = set()
+        self.errors = {}
+        self.reads = {name: 0 for name in PERIODS}
+        self.closed = False
+        self.connection = None
+        self.owned_fds = []
+        self.started = time.time()
+        self.counter = 0
+
+    def request(self, name, render_only=False):
+        if self.closed:
+            return
+        if name in self.inflight:
+            self.pending[name] = self.pending.get(name, True) and render_only
+            return
+        self.inflight.add(name)
+        future = self.pool.submit(read_backend, name, render_only)
+        future.add_done_callback(lambda done: self.GLib.idle_add(self.completed, name, done))
+
+    def completed(self, name, future):
+        self.inflight.discard(name)
+        if self.closed:
+            return False
+        try:
+            text, error = future.result()
+        except Exception as exc:
+            text, error = unavailable(name), str(exc)[:180]
+        self.reads[name] += 1
+        if error:
+            self.errors[name] = error
+        else:
+            self.errors.pop(name, None)
+        publish(name, text)
+        if name in self.pending:
+            self.request(name, self.pending.pop(name))
+        return False
+
+    def cpu_tick(self, repaint=False):
+        if self.closed:
+            return False
+        stream = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(stream):
+                if repaint:
+                    history = self.cpu.read_state()[2]
+                    self.cpu.render(history, str(CACHE.parent / 'cpu.svg'), self.cpu.hovering())
+                    self.cpu.emit(history[-1] if history else 0.0)
+                else:
+                    self.cpu.main()
+            publish('cpu', stream.getvalue())
+            self.errors.pop('cpu', None)
+        except Exception as exc:
+            publish('cpu', unavailable('cpu'))
+            self.errors['cpu'] = str(exc)[:180]
+        if not repaint:
+            atomic(CACHE / 'heartbeat', str(int(time.time() + 8)) + '\n')
+            notify('WATCHDOG=1')
+            self.counter += 1
+            if self.counter % 15 == 1:
+                self.report()
+        return not self.closed
+
+    def report(self):
+        atomic(CACHE / 'report.json', json.dumps({
+            'started': self.started, 'checked': time.time(), 'pid': os.getpid(),
+            'cpu_ticks': self.counter, 'backend_reads': self.reads,
+            'errors': self.errors, 'release': str(HERE.parent)}, indent=2))
+
+    def schedule(self, names):
+        self.events.update(names)
+        if not getattr(self, 'event_timer', None):
+            self.event_timer = self.GLib.timeout_add(200, self.flush_events)
+
+    def flush_events(self):
+        self.event_timer = None
+        names, self.events = self.events, set()
+        for name in sorted(names):
+            self.request(name, render_only=(name == 'battery'))
+        return False
+
+    def bus_event(self, _connection, sender, path, interface, signal_name, args, names):
+        self.schedule(names)
+
+    def sleep_event(self, _connection, _sender, _path, _interface, _signal, args, _data):
+        if not args.unpack()[0]:
+            # A resume is a new baseline, never a minutes-long process sample.
+            for path in (self.cpu.STATE, self.cpu.PROCS, CACHE.parent / 'cpu.io'):
+                Path(path).unlink(missing_ok=True)
+            self.cpu_tick()
+            self.schedule(PERIODS)
+
+    def appearance_tick(self):
+        try:
+            mode = (Path.home() / '.config/mintbook/appearance.mode').read_text().strip()
+            if mode == 'auto':
+                # The helper lives outside the collector's cgroup, so an
+                # appearance-triggered restart cannot kill its own caller.
+                connection = self.Gio.bus_get_sync(self.Gio.BusType.SESSION, None)
+                connection.call('org.freedesktop.systemd1', '/org/freedesktop/systemd1',
+                    'org.freedesktop.systemd1.Manager', 'StartUnit',
+                    self.GLib.Variant('(ss)', ('mintbook-appearance-refresh.service', 'replace')),
+                    None, self.Gio.DBusCallFlags.NONE, 2000, None, None, None)
+        except Exception:
+            pass
+        return not self.closed
+
+    def chrome_event(self, _monitor, file, _other, _event):
+        name = file.get_basename()
+        if name in ('system-chrome.env', 'appearance.applied'):
+            self.cpu_tick(repaint=True)
+            self.schedule(PERIODS)
+        elif name == 'appearance.mode':
+            self.appearance_tick()
+        elif name == 'battery.conf':
+            self.schedule({'battery'})
+
+    def cache_event(self, _monitor, file, _other, _event):
+        if file.get_basename() in ('health.json', 'updates.state'):
+            self.schedule({'system'})
+
+    def signal_event(self, _connection, _sender, _path, _interface, _signal, args, _data):
+        name = args.unpack()[0]
+        names = {'org.freedesktop.NetworkManager': {'wifi'}, 'org.bluez': {'bt'},
+                 'org.freedesktop.UPower': {'battery'}}.get(name)
+        if names:
+            self.schedule(names)
+
+    def panel_event(self, _connection, _sender, _path, _interface, _signal, args, _data):
+        if args.unpack()[2]:
+            # The collector starts before the panel. Retire a failed startup
+            # search (or watchers on the previous panel) as soon as it appears.
+            try:
+                subprocess.run([str(HERE / 'cpu-hover'), 'stop'], capture_output=True, timeout=3)
+            except (OSError, subprocess.SubprocessError):
+                pass
+
+    def repaint_event(self, _source, _condition):
+        try:
+            while True:
+                message = self.socket.recv(32)
+                if message == b'cpu':
+                    self.cpu_tick(repaint=True)
+                    self.nudge()
+        except BlockingIOError:
+            pass
+        return not self.closed
+
+    def nudge(self):
+        try:
+            connection = self.Gio.bus_get_sync(self.Gio.BusType.SESSION, None)
+            connection.call('org.xfce.Panel', '/org/xfce/Panel', 'org.xfce.Panel',
+                            'PluginEvent', self.GLib.Variant('(ssv)',
+                                ('genmon', 'refresh', self.GLib.Variant('b', True))),
+                            None, self.Gio.DBusCallFlags.NONE, 2000, None, None, None)
+        except Exception:
+            pass
+
+    def session_ended(self, _source, _condition):
+        self.stop()
+        return False
+
+    def stop(self):
+        if self.closed:
+            return
+        self.closed = True
+        (CACHE / 'heartbeat').unlink(missing_ok=True)
+        self.loop.quit()
+
+    def run(self):
+        pid = self.session.session_pid()
+        if pid is None:
+            return 0
+        self.session_fd = os.pidfd_open(pid)
+        self.owned_fds.append(self.session_fd)
+        self.GLib.io_add_watch(self.session_fd, self.GLib.IO_IN, self.session_ended)
+        runtime = Path(os.environ.get('XDG_RUNTIME_DIR', f'/run/user/{os.getuid()}')) / 'mintbook'
+        runtime.mkdir(mode=0o700, exist_ok=True)
+        self.socket_path = runtime / 'status-control.sock'
+        self.socket_path.unlink(missing_ok=True)
+        self.socket = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        self.socket.bind(str(self.socket_path))
+        self.socket.setblocking(False)
+        os.chmod(self.socket_path, 0o600)
+        self.GLib.io_add_watch(self.socket.fileno(), self.GLib.IO_IN, self.repaint_event)
+        self.monitors = []
+        for path, callback in ((Path.home() / '.config/mintbook', self.chrome_event),
+                               (CACHE.parent, self.cache_event)):
+            path.mkdir(parents=True, exist_ok=True)
+            monitor = self.Gio.File.new_for_path(str(path)).monitor_directory(self.Gio.FileMonitorFlags.NONE, None)
+            monitor.connect('changed', callback)
+            self.monitors.append(monitor)
+        try:
+            self.connection = self.Gio.bus_get_sync(self.Gio.BusType.SYSTEM, None)
+            for sender, names in (('org.freedesktop.NetworkManager', {'wifi'}),
+                                  ('org.bluez', {'bt'}), ('org.freedesktop.UPower', {'battery'})):
+                self.connection.signal_subscribe(sender, 'org.freedesktop.DBus.Properties',
+                    'PropertiesChanged', None, None, self.Gio.DBusSignalFlags.NONE,
+                    self.bus_event, names)
+                self.connection.signal_subscribe('org.freedesktop.DBus', 'org.freedesktop.DBus',
+                    'NameOwnerChanged', '/org/freedesktop/DBus', sender,
+                    self.Gio.DBusSignalFlags.NONE, self.signal_event, None)
+            self.connection.signal_subscribe('org.freedesktop.login1', 'org.freedesktop.login1.Manager',
+                'PrepareForSleep', '/org/freedesktop/login1', None, self.Gio.DBusSignalFlags.NONE,
+                self.sleep_event, None)
+        except Exception as error:
+            print('System event subscriptions unavailable; using bounded fallback reads:', error, flush=True)
+        for name, period in PERIODS.items():
+            self.request(name)
+            self.GLib.timeout_add_seconds(period, lambda n=name: (self.request(n), True)[1])
+        try:
+            session_bus = self.Gio.bus_get_sync(self.Gio.BusType.SESSION, None)
+            session_bus.signal_subscribe('org.freedesktop.DBus', 'org.freedesktop.DBus',
+                'NameOwnerChanged', '/org/freedesktop/DBus', 'org.xfce.Panel',
+                self.Gio.DBusSignalFlags.NONE, self.panel_event, None)
+        except Exception:
+            pass
+        self.cpu_tick()
+        notify('READY=1\nSTATUS=Collecting desktop status')
+        self.GLib.timeout_add(2000, self.cpu_tick)
+        self.GLib.timeout_add_seconds(60, self.appearance_tick)
+        self.appearance_tick()
+        self.GLib.unix_signal_add(self.GLib.PRIORITY_DEFAULT, signal.SIGTERM, lambda: (self.stop(), False)[1])
+        self.GLib.unix_signal_add(self.GLib.PRIORITY_DEFAULT, signal.SIGINT, lambda: (self.stop(), False)[1])
+        try:
+            self.loop.run()
+        finally:
+            self.stop()
+            self.pool.shutdown(wait=True, cancel_futures=True)
+            for monitor in self.monitors:
+                monitor.cancel()
+            self.socket.close()
+            self.socket_path.unlink(missing_ok=True)
+            for fd in self.owned_fds:
+                os.close(fd)
+        return 0
+
+
+def main():
+    if sys.argv[1:] == ['--report']:
+        try:
+            print((CACHE / 'report.json').read_text())
+        except OSError:
+            print('Desktop status is unavailable.', file=sys.stderr)
+            return 1
+        return 0
+    if sys.argv[1:]:
+        print('usage: desktop-status [--report]', file=sys.stderr)
+        return 2
+    import gi
+    gi.require_version('Gio', '2.0')
+    from gi.repository import Gio, GLib
+    return Collector(GLib, Gio).run()
+
+
+if __name__ == '__main__':
+    sys.exit(main())

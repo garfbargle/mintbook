@@ -1,0 +1,7 @@
+[Unit]
+Description=Recheck automatic desktop appearance
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/appearance-mode --refresh
+TimeoutStartSec=15

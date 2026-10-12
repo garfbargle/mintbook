@@ -9,6 +9,14 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+# Installed desktops route feature changes through the release transaction.
+if [ "${MINTBOOK_INSTALL_TRANSACTION:-}" != 1 ] && [ -e "$HOME/.local/lib/mintbook/current/manifest.json" ]; then
+  exec "$ROOT/bin/desktop-install" --feature "$(basename "$0")" "$@"
+fi
+if [ "${MINTBOOK_PANEL_MAINTENANCE:-}" != 1 ]; then
+  exec "$ROOT/bin/panel-session" maintain -- "$0" "$@"
+fi
+
 BIN="$HOME/.local/bin"
 SHARE="$HOME/.local/share/mintbook/control-center"
 PANEL_RC="$HOME/.config/xfce4/panel"
@@ -62,14 +70,14 @@ if [ ${#BLUETOOTH[@]} -eq 0 ]; then RETIRED=(21 "${RETIRED[@]}"); fi
 if [ "${1:-}" = --revert ]; then
   echo "==> restoring the bar"
   ids=$(cat "$SAVED" 2>/dev/null || echo '1 7 8 10 19 17 18 21 23 24 12 22 11 13')
-  xfce4-panel -q 2>/dev/null || true
+  "$ROOT/bin/panel-session" stop 2>/dev/null || true
   sleep 0.4
   args=(); for id in $ids; do args+=(-t int -s "$id"); done
   xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids --force-array "${args[@]}"
   for key in XF86AudioRaiseVolume XF86AudioLowerVolume XF86AudioMute XF86AudioMicMute; do
     xfconf-query -c xfce4-keyboard-shortcuts -p "/commands/custom/$key" -r 2>/dev/null || true
   done
-  nohup xfce4-panel >/dev/null 2>&1 &
+  "$ROOT/bin/panel-session" start
   rm -f "$STATE/system.conf"
   echo "the old indicators are back; plugins $PLUGIN and $SYSTEM_PLUGIN stay registered but unused"
   exit 0
@@ -116,7 +124,7 @@ echo "==> panel"
   | grep -oE '^[0-9]+$' | tr '\n' ' ' > "$SAVED"
 
 # Running plugins write xfconf back on shutdown, so stop the panel first.
-xfce4-panel -q 2>/dev/null || true
+"$ROOT/bin/panel-session" stop 2>/dev/null || true
 sleep 0.4
 xfconf-query -c xfce4-panel -p "/plugins/plugin-$PLUGIN" -n -t string -s genmon 2>/dev/null || true
 xfconf-query -c xfce4-panel -p "/plugins/plugin-$SYSTEM_PLUGIN" -n -t string -s genmon 2>/dev/null || true
@@ -124,7 +132,7 @@ xfconf-query -c xfce4-panel -p "/plugins/plugin-$SYSTEM_PLUGIN" -n -t string -s 
 args=(); for id in "${VISIBLE[@]}"; do args+=(-t int -s "$id"); done
 xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids --force-array "${args[@]}"
 
-nohup xfce4-panel >/dev/null 2>&1 &
+"$ROOT/bin/panel-session" start
 sleep 1
 
 echo "==> volume keys"

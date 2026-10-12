@@ -41,10 +41,20 @@ def human_size(value):
         value /= 1000
 
 
+def age_label(checked):
+    age = max(0, time.time() - checked)
+    if age < 60: return 'just now'
+    if age < 3600: return f'{int(age // 60)}m ago'
+    if age < 86400: return f'{int(age // 3600)}h ago'
+    return f'{int(age // 86400)}d ago'
+
+
 def health_snapshot(path=None):
     try:
         state = json.loads(read_text(path or HEALTH_STATE))
         rows = state['rows']
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            raise ValueError('invalid health rows')
         counts = {key: sum(row.get('status') == key for row in rows)
                   for key in ('ok', 'warn', 'fail')}
         return {**counts, 'checked': float(state.get('checked', 0)),
@@ -336,7 +346,7 @@ class Menu:
         else:
             glyph(cr, status, 24, y + 25, 20, c[{'ok':'green','warn':'amber','fail':'red'}[status]])
         text(cr, 'Doctor', 45, y + 12, 11, c['fg'], .94, 'bold')
-        checked = 'Not checked yet' if not self.health['checked'] else 'System checks'
+        checked = 'Not checked yet' if not self.health['checked'] else 'Last checked ' + age_label(self.health['checked'])
         text(cr, checked, 45, y + 32, 9, c['fg'], .45)
         run_rect = (w - 82, y + 11, 67, 28); hot = self.control('doctor:run', run_rect)
         rrect(cr, *run_rect, 8); rgba(cr, c['seg_on'], .95 if hot else .72); cr.fill()
@@ -364,7 +374,8 @@ class Menu:
         elif self.updates['count']:
             update_line = f"{self.updates['count']} ready" + (f" · {self.updates['security']} security" if self.updates['security'] else '')
         elif self.updates['checked']:
-            update_line = 'Up to date'
+            update_line = ('Up to date' if time.time() - self.updates['checked'] < 86400
+                           else 'Check needed · last checked ' + age_label(self.updates['checked']))
         else:
             update_line = 'Not checked yet'
         text(cr, update_line, 45, y + 29, 9.2, c['fg'], .46, width=w - 80); chevron(cr, w - 19, y + h / 2, c['fg'])
@@ -437,6 +448,8 @@ class Menu:
                             Gdk.KEY_Up, Gdk.KEY_Down):
             keys = [key for key, _rect in self.controls]; current = keys.index(self.keyboard_target) if self.keyboard_target in keys else -1
             reverse = event.keyval in (Gdk.KEY_ISO_Left_Tab, Gdk.KEY_Left, Gdk.KEY_Up) or (event.keyval == Gdk.KEY_Tab and event.state & Gdk.ModifierType.SHIFT_MASK)
+            if not keys: return False
+            current = (0 if reverse else -1) if current < 0 else current
             self.keyboard_target = keys[(current + (-1 if reverse else 1)) % len(keys)]
             self.hover = None; self.area.queue_draw(); return True
         if event.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_space) and self.keyboard_target:

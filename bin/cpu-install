@@ -11,6 +11,14 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+# Installed desktops route feature changes through the release transaction.
+if [ "${MINTBOOK_INSTALL_TRANSACTION:-}" != 1 ] && [ -e "$HOME/.local/lib/mintbook/current/manifest.json" ]; then
+  exec "$ROOT/bin/desktop-install" --feature "$(basename "$0")" "$@"
+fi
+if [ "${MINTBOOK_PANEL_MAINTENANCE:-}" != 1 ]; then
+  exec "$ROOT/bin/panel-session" maintain -- "$0" "$@"
+fi
+
 BIN="$HOME/.local/bin"
 
 nudge() {   # re-run the first genmon widget (the sparkline) now
@@ -32,7 +40,9 @@ if [ "${1:-}" = --revert ]; then
   rm -f "$BIN/cpu-menu" "$HOME/.cache/mintbook/cpu-menu.pid"
   rm -f "$BIN/cpu-hover" "$HOME/.cache/mintbook/cpu-hover.pid" \
         "$HOME/.cache/mintbook/cpu.hover"
+  rm -f "$BIN/panel-cpu"
   install -m755 "$ROOT/bin/panel-cpu" "$BIN/panel-cpu"
+  rm -f "$BIN/mintbook_cpu.py"
   install -m755 "$ROOT/bin/mintbook_cpu.py" "$BIN/mintbook_cpu.py"
   rm -f "$BIN/mintbook_appcolor.py"
   nudge   # and the bar goes back to a plain trace on its next tick

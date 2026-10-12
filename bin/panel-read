@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Genmon reads cached output; it never starts a sampler or waits for a daemon.
+set -u
+name=${1:-}
+case "$name" in
+  cpu) label=CPU; menu=cpu-menu ;;
+  temp) label=Temperature; menu=cpu-menu ;;
+  wifi) label='Wi-Fi'; menu=wifi-menu ;;
+  bt) label=Bluetooth; menu=bt-menu ;;
+  battery) label=Battery; menu=battery-menu ;;
+  control) label='Control Center'; menu=control-center ;;
+  system) label=System; menu=system-menu ;;
+  overview) label=Overview; menu=overview ;;
+  *) echo 'usage: panel-read cpu|temp|wifi|bt|battery|control|system|overview' >&2; exit 2 ;;
+esac
+cache="${XDG_CACHE_HOME:-$HOME/.cache}/mintbook/status"
+expires=0
+{ read -r expires < "$cache/heartbeat"; } 2>/dev/null || true
+if [[ "$expires" =~ ^[0-9]+$ ]] && (( expires >= EPOCHSECONDS )); then
+  valid=0
+  if { read -r valid; } 2>/dev/null < "$cache/$name.xml" \
+      && [[ "$valid" =~ ^[0-9]+$ ]] && (( valid >= EPOCHSECONDS )); then
+    # Shell builtins also avoid a cat process on every tick.
+    { read -r _; while IFS= read -r line; do printf '%s\n' "$line"; done; } < "$cache/$name.xml"
+    exit 0
+  fi
+fi
+printf '<click>%s/.local/bin/%s</click>\n<iconclick>%s/.local/bin/%s</iconclick>\n' "$HOME" "$menu" "$HOME" "$menu"
+case "$name" in
+  control) printf '<img>%s/.local/share/mintbook/control-center.svg</img>\n' "$HOME" ;;
+  system) printf '<img>%s/.local/share/mintbook/system/system-alert.svg</img>\n' "$HOME" ;;
+  overview) printf '<img>%s/.local/share/mintbook/overview.svg</img>\n' "$HOME" ;;
+  *) printf '<txt>?</txt>\n' ;;
+esac
+printf '<tool>%s\nStatus unavailable\nOpen details to check the current state</tool>\n' "$label"

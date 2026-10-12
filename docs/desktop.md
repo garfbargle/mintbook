@@ -1504,3 +1504,55 @@ of a whole-bar CPU reduction: the CPU reader varied and the seat was locked for
 the second sample. The controlled interleaved temperature benchmark above is
 the measured performance improvement; graph and status refresh periods remain
 unchanged. The two-second Python CPU graph is still the dominant recurring cost.
+
+### Versioned desktop runtime (2026-10-12)
+
+`bin/desktop-install` packages the desktop into self-contained releases under
+`~/.local/lib/mintbook/releases/`. Commands, user services, panel rc files and
+Control Center plugins point through one `current` link. A release contains the
+scripts, their Python modules, icons and configuration dependencies as real
+files; deleting a Git checkout cannot remove installed code. Source syntax and
+payload hashes are verified before activation, and runtime health is checked
+afterward. An activation failure restores the prior release. The initial
+baseline captures actual installed scripts and widget settings. Unrecognized
+local overrides in components outside the change are retained and recorded.
+User preferences, history and hardware configuration remain outside releases.
+
+`desktop-install --rollback` selects the previous release;
+`desktop-install --revert` selects the pre-collector baseline. Releases are
+retained rather than automatically deleting code an open popup might still be
+using. `desktop-install --status` identifies the release and retained overrides.
+The original top-bar recovery snapshot is preserved separately.
+
+The existing feature installers route through this transaction once versioned
+installation is active. Panel changes use `panel-session start`, `stop`,
+`restart`, `status`, or `maintain -- COMMAND ...`. Maintenance stops recovery
+and sampling while an installer changes settings, defers nested restarts, and
+restores a previously running bar on failure or interruption. A manager-owned
+restart protects callers launched by the services being restarted.
+
+`mintbook-status.service` is the one resident sampler. It keeps the CPU renderer
+loaded, samples every two seconds and retains the six-second process-history
+period. NetworkManager, BlueZ and UPower property events are debounced into
+bounded background reads, with a sixty-second connectivity fallback. Battery
+history retains its five-second ticks and once-a-minute samples; event repaints
+do not advance history counters. Temperature stays on its thirty-second period.
+Genmon only runs `panel-read`, a shell reader using builtins, at the established
+widget periods. Status caches carry individual expiry times and a short collector
+heartbeat. Missing, malformed or expired data becomes an explicit, clickable
+unavailable state rather than a plausible stale reading.
+
+CPU hover requests a repaint from the collector over a user-only Unix datagram
+socket; the collector renders before refreshing genmon. Session exit ends the
+collector through a pidfd; resume discards sampling baselines and refreshes
+status. systemd watchdog heartbeats cover a wedged collector. The panel and
+collector remain separate failure boundaries. Automatic appearance refresh
+uses an independent, bounded helper unit so a theme restart cannot terminate
+its own setting operation. Manual appearance modes do not run that helper.
+
+Popups remain on demand and use the existing setting backends. Unavailable
+Control Center settings retain their layout, retry automatically and cannot
+write settings. Reverse keyboard navigation starts at the last target across
+row menus and System. System labels the age of health checks and avoids calling
+an old update check current. No new UI framework, compositor or root daemon is
+introduced.
