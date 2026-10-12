@@ -11,15 +11,23 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+# Installed desktops route feature changes through the release transaction.
+if [ "${MINTBOOK_INSTALL_TRANSACTION:-}" != 1 ] && [ -e "$HOME/.local/lib/mintbook/current/manifest.json" ]; then
+  exec "$ROOT/bin/desktop-install" --feature "$(basename "$0")" "$@"
+fi
+if [ "${MINTBOOK_PANEL_MAINTENANCE:-}" != 1 ]; then
+  exec "$ROOT/bin/panel-session" maintain -- "$0" "$@"
+fi
+
 BIN="$HOME/.local/bin"
 PANEL_RC="$HOME/.config/xfce4/panel"
 PLUGIN=18
 
 nudge() {   # genmon only re-reads its .rc when the panel restarts
   [ -n "${DISPLAY:-}" ] || return 0
-  xfce4-panel -q 2>/dev/null || true
+  "$ROOT/bin/panel-session" stop 2>/dev/null || true
   sleep 0.4
-  nohup xfce4-panel >/dev/null 2>&1 &
+  "$ROOT/bin/panel-session" start
   sleep 1
 }
 
@@ -28,6 +36,7 @@ if [ "${1:-}" = --revert ]; then
   P=$(cat "$HOME/.cache/mintbook/wifi-menu.pid" 2>/dev/null || true)
   [ -n "$P" ] && kill "$P" 2>/dev/null || true
   rm -f "$BIN/wifi-menu" "$HOME/.cache/mintbook/wifi-menu.pid"
+  rm -f "$BIN/panel-wifi"
   install -m755 "$ROOT/bin/panel-wifi" "$BIN/panel-wifi"
   nudge
   echo "the bar icon opens nm-connection-editor again"

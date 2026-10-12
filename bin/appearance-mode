@@ -71,8 +71,8 @@ for generator in generate-wifi-genmon.py generate-bt-genmon.py generate-power-ge
   MINTBOOK_PANEL_FG="$foreground" python3 "$root/icons/$generator"
 done
 
-xfce4-panel -r
 printf '%s\n' "$mode" > "$applied_file"
+"$root/bin/panel-session" restart
 
 # The wallpaper pair follows the chrome. This runs only on a real change —
 # everything above returns early when the mode asked for is already applied —

@@ -11,6 +11,14 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+# Installed desktops route feature changes through the release transaction.
+if [ "${MINTBOOK_INSTALL_TRANSACTION:-}" != 1 ] && [ -e "$HOME/.local/lib/mintbook/current/manifest.json" ]; then
+  exec "$ROOT/bin/desktop-install" --feature "$(basename "$0")" "$@"
+fi
+if [ "${MINTBOOK_PANEL_MAINTENANCE:-}" != 1 ]; then
+  exec "$ROOT/bin/panel-session" maintain -- "$0" "$@"
+fi
+
 BIN="$HOME/.local/bin"
 SHARE="$HOME/.local/share/mintbook/control-center/plugins"
 PANEL_RC="$HOME/.config/xfce4/panel"
@@ -53,11 +61,11 @@ if [ "${1:-}" = --revert ]; then
 
   echo "==> panel"
   ids=$(current_ids | tr '\n' ' ')
-  timeout 5 xfce4-panel -q 2>/dev/null || true
+  "$ROOT/bin/panel-session" stop 2>/dev/null || true
   sleep 0.4
   out=(); for id in $ids; do [ "$id" = "$PLUGIN" ] || out+=("$id"); done
   write_ids "${out[@]}"
-  setsid -f xfce4-panel >/dev/null 2>&1
+  "$ROOT/bin/panel-session" start
 
   echo "==> files"
   # Leave an active popup worker alive; it may be installing Flatpaks.
@@ -133,7 +141,7 @@ echo "==> panel"
 
 # Running plugins write xfconf back on shutdown, so stop the panel first.
 ids=$(current_ids | tr '\n' ' ')
-timeout 5 xfce4-panel -q 2>/dev/null || true
+"$ROOT/bin/panel-session" stop 2>/dev/null || true
 sleep 0.4
 xfconf-query -c xfce4-panel -p "/plugins/plugin-$PLUGIN" -n -t string -s genmon 2>/dev/null || true
 
@@ -151,7 +159,7 @@ done
 if [ ! -e "$STATE/system.conf" ] && [ "$placed" = 0 ]; then out=("$PLUGIN" "${out[@]}"); fi
 write_ids "${out[@]}"
 
-setsid -f xfce4-panel >/dev/null 2>&1
+"$ROOT/bin/panel-session" start
 sleep 1
 
 echo "==> timer and cache watch"

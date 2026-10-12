@@ -244,20 +244,95 @@ def request_stop():
     STOPPING = True
 
 
-def main():
-    action = sys.argv[1] if len(sys.argv) == 2 else ''
-    if action == 'supervise':
-        return supervise()
-    if action == 'start':
-        if session_pid() is None:
-            return 0
-        # Import only desktop variables, never the whole shell environment.
-        variables = [name for name in ('DISPLAY', 'XAUTHORITY') if name in os.environ]
-        subprocess.run(['systemctl', '--user', 'import-environment', *variables], check=True)
-        subprocess.run(['systemctl', '--user', 'reset-failed', UNIT], check=False)
-        subprocess.run(['systemctl', '--user', 'start', UNIT], check=True)
+def service_installed():
+    return (Path.home() / '.config/systemd/user' / UNIT).exists()
+
+
+def service_command(action):
+    return subprocess.run(['systemctl', '--user', action, UNIT], check=True, timeout=20)
+
+
+def start():
+    if os.environ.get('MINTBOOK_PANEL_MAINTENANCE') == '1' or session_pid() is None:
         return 0
-    print('usage: panel-session start|supervise', file=sys.stderr)
+    if service_installed():
+        variables = [name for name in ('DISPLAY', 'XAUTHORITY') if name in os.environ]
+        subprocess.run(['systemctl', '--user', 'import-environment', *variables], check=True, timeout=10)
+        subprocess.run(['systemctl', '--user', 'reset-failed', UNIT, 'mintbook-status.service'],
+                       capture_output=True, timeout=10)
+        service_command('start')
+    elif bus_owner() is None:
+        subprocess.run(['systemd-run', '--user', '--collect', '--unit=mintbook-panel-unmanaged',
+                        '--property=KillMode=process', '--setenv=DISPLAY=' + os.environ['DISPLAY'],
+                        '--setenv=XAUTHORITY=' + os.environ.get('XAUTHORITY', str(Path.home() / '.Xauthority')),
+                        PANEL, '--disable-wm-check'], check=True, timeout=10)
+    return 0
+
+
+def stop():
+    if service_installed():
+        service_command('stop')
+    owner = bus_owner()
+    if owner:
+        try:
+            fd = panel_fd(owner)
+            try:
+                close_panel(fd)
+            finally:
+                os.close(fd)
+        except (OSError, ValueError):
+            pass
+    # These listeners are not applications; do not leave them on dead X windows.
+    watcher = Path(__file__).resolve().with_name('cpu-hover')
+    if watcher.exists():
+        subprocess.run([str(watcher), 'stop'], capture_output=True, timeout=5)
+    return 0
+
+
+def maintenance(argv):
+    """One stop/run/restore boundary, including a failed or interrupted installer."""
+    if argv and argv[0] == '--':
+        argv = argv[1:]
+    if not argv:
+        raise ValueError('maintain needs a command after --')
+    was_running = bus_owner() is not None or run(['systemctl', '--user', 'is-active', UNIT]) == 'active'
+    stop()
+    try:
+        env = dict(os.environ, MINTBOOK_PANEL_MAINTENANCE='1')
+        return subprocess.run(argv, env=env, timeout=120).returncode
+    finally:
+        if was_running:
+            start()
+
+
+def main():
+    args = sys.argv[1:]
+    action = args[0] if args else ''
+    if action == 'supervise' and len(args) == 1:
+        return supervise()
+    if action == 'start' and len(args) == 1:
+        return start()
+    if action == 'stop' and len(args) == 1:
+        return stop()
+    if action == 'restart' and len(args) == 1:
+        if os.environ.get('MINTBOOK_PANEL_MAINTENANCE') == '1':
+            return 0
+        if service_installed():
+            subprocess.run(['systemctl', '--user', 'reset-failed', UNIT, 'mintbook-status.service'], capture_output=True, timeout=10)
+            # Queue one manager-owned restart. The caller may itself have
+            # been launched by a service that this restart stops.
+            subprocess.run(['systemctl', '--user', '--no-block', 'restart', UNIT], check=True, timeout=10)
+            return 0
+        stop()
+        return start()
+    if action == 'maintain':
+        return maintenance(args[1:])
+    if action == 'status' and len(args) == 1:
+        owner = bus_owner()
+        reason = unhealthy(owner) if owner else 'panel absent'
+        print(reason or f'Panel {owner} is responsive; all external plugins are present.')
+        return int(reason is not None)
+    print('usage: panel-session start|stop|restart|status|supervise|maintain -- COMMAND...', file=sys.stderr)
     return 2
 
 

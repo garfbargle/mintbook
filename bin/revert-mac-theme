@@ -2,6 +2,10 @@
 # Undo the macOS-style XFCE customisation. Pass a backup directory explicitly,
 # set MINTBOOK_THEME_BACKUP, or let this choose the newest dated backup.
 set -e
+ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+if [ "${MINTBOOK_PANEL_MAINTENANCE:-}" != 1 ]; then
+  exec "$ROOT/bin/panel-session" maintain -- "$0" "$@"
+fi
 BK=${1:-${MINTBOOK_THEME_BACKUP:-}}
 if [ -z "$BK" ]; then
   shopt -s nullglob
@@ -21,7 +25,7 @@ echo "Using backup: $BK"
 echo "Stopping dock + panel..."
 pkill plank 2>/dev/null || true
 rm -f ~/.config/autostart/plank.desktop
-xfce4-panel -q 2>/dev/null || true
+"$ROOT/bin/panel-session" stop 2>/dev/null || true
 sleep 2
 echo "Restoring XFCE config..."
 pkill xfconfd 2>/dev/null || true
@@ -29,7 +33,7 @@ sleep 1
 tar xzf "$BK/xfce4-config.tar.gz" -C ~/.config
 sleep 1
 echo "Restarting..."
-nohup xfce4-panel >/dev/null 2>&1 &
+"$ROOT/bin/panel-session" start
 sleep 3
 nohup xfwm4 --replace >/dev/null 2>&1 &
 echo "Reverted. Themes remain in ~/.themes and ~/.icons (delete manually if unwanted)."

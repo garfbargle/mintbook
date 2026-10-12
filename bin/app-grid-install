@@ -5,13 +5,21 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+# Installed desktops route feature changes through the release transaction.
+if [ "${MINTBOOK_INSTALL_TRANSACTION:-}" != 1 ] && [ -e "$HOME/.local/lib/mintbook/current/manifest.json" ]; then
+  exec "$ROOT/bin/desktop-install" --feature "$(basename "$0")" "$@"
+fi
+if [ "${MINTBOOK_PANEL_MAINTENANCE:-}" != 1 ]; then
+  exec "$ROOT/bin/panel-session" maintain -- "$0" "$@"
+fi
+
 BIN="$HOME/.local/bin"
 APPS="$HOME/.local/share/applications"
 DESKTOP=mintbook-app-grid.desktop
 
 [ -n "${DISPLAY:-}" ] || { echo "DISPLAY is unset" >&2; exit 1; }
 
-xfce4-panel -q 2>/dev/null || true
+"$ROOT/bin/panel-session" stop 2>/dev/null || true
 sleep 0.4
 
 if [ "${1:-}" = --revert ]; then
@@ -23,14 +31,17 @@ if [ "${1:-}" = --revert ]; then
   xfconf-query -c xfce4-panel -p /plugins/plugin-1/show-button-icon -n -t bool -s true
   xfconf-query -c xfce4-panel -p /plugins/plugin-1/show-button-title -n -t bool -s false
   xfconf-query -c xfce4-keyboard-shortcuts -p /commands/custom/Super_L -s /bin/true
-  nohup xfce4-panel >/dev/null 2>&1 &
+  "$ROOT/bin/panel-session" start
   echo "restored Whisker menu"
   exit 0
 fi
 
 install -dm755 "$BIN" "$APPS"
+rm -f "$BIN/app-grid"
 install -m755 "$ROOT/bin/app-grid" "$BIN/app-grid"
+rm -f "$BIN/overview"
 install -m755 "$ROOT/bin/overview" "$BIN/overview"
+rm -f "$BIN/spotlight"
 install -m755 "$ROOT/bin/spotlight" "$BIN/spotlight"
 sed "s|^Exec=.*|Exec=$BIN/app-grid|" \
   "$ROOT/config/applications/$DESKTOP" > "$APPS/$DESKTOP"
@@ -42,7 +53,7 @@ xfconf-query -c xfce4-panel -p /plugins/plugin-1/items -n --force-array \
   -t string -s "$DESKTOP"
 xfconf-query -c xfce4-keyboard-shortcuts -p /commands/custom/Super_L -s /bin/true
 
-nohup xfce4-panel >/dev/null 2>&1 &
+"$ROOT/bin/panel-session" start
 sleep 1
 echo "app grid installed: panel button"
 echo "Overview remains: Super+Space"

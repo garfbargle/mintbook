@@ -5,6 +5,14 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Installed desktops route feature changes through the release transaction.
+if [ "${MINTBOOK_INSTALL_TRANSACTION:-}" != 1 ] && [ -e "$HOME/.local/lib/mintbook/current/manifest.json" ]; then
+  exec "$ROOT/bin/desktop-install" --feature "$(basename "$0")" "$@"
+fi
+if [ "${MINTBOOK_PANEL_MAINTENANCE:-}" != 1 ]; then
+  exec "$ROOT/bin/panel-session" maintain -- "$0" "$@"
+fi
+
 BIN="$HOME/.local/bin"
 PANEL_RC="$HOME/.config/xfce4/panel"
 AUTOSTART="$HOME/.config/autostart"
@@ -20,8 +28,11 @@ python3 "$ROOT/icons/generate-night-genmon.py"
 
 echo "==> $BIN"
 install -dm755 "$BIN"
+rm -f "$BIN/night-apply"
 install -m755 "$ROOT/bin/night-apply" "$BIN/night-apply"
+rm -f "$BIN/night-menu"
 install -m755 "$ROOT/bin/night-menu" "$BIN/night-menu"
+rm -f "$BIN/panel-night"
 install -m755 "$ROOT/bin/panel-night" "$BIN/panel-night"
 
 echo "==> redshift.conf"
@@ -41,7 +52,7 @@ rm -f "$AUTOSTART/redshift-gtk.desktop"
 
 echo "==> panel plugin $PLUGIN"
 # Running plugins write xfconf on shutdown, so stop first.
-xfce4-panel -q 2>/dev/null || true
+"$ROOT/bin/panel-session" stop 2>/dev/null || true
 sleep 0.4
 
 xfconf-query -c xfce4-panel -p /plugins/plugin-$PLUGIN -n -t string -s genmon
@@ -54,7 +65,7 @@ xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids \
   -t int -s $PLUGIN \
   -t int -s 12 -t int -s 22 -t int -s 11 -t int -s 13
 
-nohup xfce4-panel >/dev/null 2>&1 &
+"$ROOT/bin/panel-session" start
 sleep 0.8
 
 echo "==> apply auto"
@@ -62,5 +73,5 @@ echo "==> apply auto"
 
 echo
 echo "night light is plugin-$PLUGIN, Auto. click the moon: Auto / On / Off"
-echo "undo the icon: xfce4-panel -q; xfconf-query -c xfce4-panel -p /plugins/plugin-$PLUGIN -r -R"
+echo "undo the icon: "$ROOT/bin/panel-session" stop; xfconf-query -c xfce4-panel -p /plugins/plugin-$PLUGIN -r -R"
 echo "               then restore plugin-ids without $PLUGIN and start xfce4-panel"

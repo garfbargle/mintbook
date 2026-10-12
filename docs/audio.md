@@ -421,8 +421,11 @@ exhausts the budget and leaves the unit failed until it shows up in
 15 s deadline (`MB81_STARTUP_TIMEOUT`). Measured on a healthy card the probes
 resolve in 0.012 s, so there is no added startup latency; a card that never
 appears still gives up on time instead of hanging. Undo is a `git revert` — the
-script is in this repo and runs from the checkout via
-`~/.config/systemd/user/mb81-jack-switch.service.d/override.conf`.
+script was originally run from the checkout via
+`~/.config/systemd/user/mb81-jack-switch.service.d/override.conf`. The versioned
+desktop installer now routes this unchanged helper through
+`~/.local/bin/mb81-jack-switch`, with the helper retained on the stable manager
+release across UI rollbacks. Speaker EQ and jack behavior are unchanged.
 
 Bluetooth audio needs `hci0`. That adapter is working on 7.0 after the
 SSDC/UART DSDT override — [bluetooth.md](bluetooth.md). Not this codec.

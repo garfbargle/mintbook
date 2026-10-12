@@ -30,6 +30,7 @@ stays the /proc/stat pass. See docs/desktop.md.
 import os, sys
 import fcntl
 import signal
+import subprocess
 import time
 
 W, H      = 92, 36          # canvas; height sits inside the 52px bar
@@ -40,6 +41,7 @@ PROC_EVERY = 3              # walk /proc every Nth tick (2 s tick -> every 6 s)
 HOVER     = os.path.expanduser('~/.cache/mintbook/cpu.hover')
 WATCH_PID = os.path.expanduser('~/.cache/mintbook/cpu-hover.pid')
 MIN_TICK  = 0.6             # a run this soon after the last is a repaint
+WATCH_CHILD = None          # reaped by the resident collector on its next tick
 WATCH_RETRY = 30            # seconds before trying a failed watcher again
 FADE      = 0.16            # fraction of width faded at each edge
 NCPU      = os.cpu_count() or 1
@@ -294,9 +296,13 @@ def ensure_watcher():
     no watcher, so a survivor is killed rather than left listening, and a flag
     left behind by a hover that never got its leave goes too.
     """
-    if not os.access(WATCHER, os.X_OK):
+    global WATCH_CHILD
+    if WATCH_CHILD is not None and WATCH_CHILD.poll() is not None:
+        WATCH_CHILD = None
+    if not os.environ.get('DISPLAY') or not os.access(WATCHER, os.X_OK):
         return
     watchers = []
+    stamp = 0
     try:
         stamp = os.stat(WATCH_PID).st_mtime
         with open(WATCH_PID) as f:
@@ -307,7 +313,7 @@ def ensure_watcher():
                 and len(wrappers) == 1 and wrapper_matches(wrappers[0])):
             return
     except (OSError, ValueError, IndexError):
-        stamp = 0
+        pass  # retain the failed attempt timestamp, including an empty pidfile
     for pid in watchers:
         if not watcher_matches(pid):
             continue
@@ -321,15 +327,11 @@ def ensure_watcher():
         os.remove(HOVER)
     except OSError:
         pass
-    if os.fork() == 0:      # exits with the exec; no wait, no zombie
-        os.setsid()
-        null = os.open(os.devnull, os.O_RDWR)
-        for fd in (0, 1, 2):
-            os.dup2(null, fd)
-        try:
-            os.execv(WATCHER, [WATCHER, 'watch'])
-        finally:
-            os._exit(1)
+    # Popen performs the exec without running Python callbacks after fork;
+    # the collector also has worker/GIO threads, unlike a genmon one-shot.
+    env = {key: value for key, value in os.environ.items() if key not in ('NOTIFY_SOCKET', 'WATCHDOG_USEC', 'WATCHDOG_PID')}
+    WATCH_CHILD = subprocess.Popen([WATCHER, 'watch'], start_new_session=True,
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
 
 
 def emit(pct):

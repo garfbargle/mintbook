@@ -1,0 +1,15 @@
+[Unit]
+Description=Mintbook cached desktop readings
+PartOf=mintbook-panel.service
+After=graphical-session-pre.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=notify
+ExecStart=%h/.local/bin/desktop-status
+Restart=on-failure
+RestartSec=3
+WatchdogSec=30
+TimeoutStartSec=15
+TimeoutStopSec=15

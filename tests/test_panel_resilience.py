@@ -133,13 +133,24 @@ class StaleWatcherTests(unittest.TestCase):
         files = {bar.WATCH_PID: '123\n456\n', '/proc/123/cmdline': b'/usr/bin/python3\0other\0'}
         def opened(path, *args, **kwargs):
             return mock_open(read_data=files[path])(path, *args, **kwargs)
-        with patch('builtins.open', side_effect=opened), \
+        with patch.dict(bar.os.environ, {'DISPLAY': ':test'}), \
+                patch('builtins.open', side_effect=opened), \
                 patch.object(bar.os, 'stat') as stat, \
                 patch.object(bar.os, 'access', return_value=True), \
                 patch.object(bar.os, 'kill') as kill:
             stat.return_value.st_mtime = bar.time.time()
             bar.ensure_watcher()
         kill.assert_not_called()
+
+    def test_failed_empty_pidfile_obeys_retry_backoff(self):
+        with patch.dict(bar.os.environ, {'DISPLAY': ':test'}), \
+                patch('builtins.open', mock_open(read_data='')), \
+                patch.object(bar.os, 'stat') as stat, \
+                patch.object(bar.os, 'access', return_value=True), \
+                patch.object(bar.subprocess, 'Popen') as spawn:
+            stat.return_value.st_mtime = bar.time.time()
+            bar.ensure_watcher()
+        spawn.assert_not_called()
 
     def test_negative_pid_never_signals_a_process_group(self):
         self.assertFalse(bar.watcher_matches(-1))

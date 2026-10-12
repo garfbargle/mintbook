@@ -197,16 +197,32 @@ def spec_from(path, out, error=None):
     if error is None:
         try:
             spec = parse(out)
+            if not isinstance(spec, dict) or (not spec.get('skip') and spec.get('kind') not in ROWH):
+                raise ValueError('No readable setting returned')
         except Exception as e:
             error, spec = e, {}
     else:
         spec = {}
     if error is not None:
-        # A plugin that breaks gets a tile that says so, not a missing row.
-        spec = {"kind": "meter", "title": os.path.basename(path),
-                "subtitle": str(error)[:40], "value": "!"}
-    spec["path"] = path
-    spec["name"] = os.path.basename(path)
+        # Keep the same layout, an explicit unavailable state and a retry
+        # period. A transient backend failure must not disable future reads.
+        defaults = {
+            '10-wifi': ('toggle', 'Wi-Fi', 'wifi'),
+            '20-bluetooth': ('toggle', 'Bluetooth', 'bluetooth'),
+            '30-brightness': ('slider', 'Display', 'sun'),
+            '34-audio-output': ('menu', 'Output', 'speaker'),
+            '35-volume': ('slider', 'Sound', 'speaker'),
+            '40-appearance': ('cycle', 'Appearance', 'half'),
+            '50-night': ('cycle', 'Night Light', 'moon'),
+            '60-power': ('cycle', 'Power', 'bolt'),
+            '70-discoverable': ('toggle', 'Discoverable', 'box'),
+        }
+        name = os.path.basename(path)
+        kind, title, icon = defaults.get(name, ('meter', name.split('-', 1)[-1].replace('-', ' ').title(), 'dot'))
+        spec = {'kind': kind, 'title': title, 'glyph': icon, 'subtitle': 'Unavailable',
+                'value': '—', 'available': False, 'live': 2, 'error': str(error)}
+    spec['path'] = path
+    spec['name'] = os.path.basename(path)
     return spec
 
 
@@ -228,9 +244,11 @@ def collect(pending):
             specs.append(spec_from(path, "", "could not run"))
             continue
         try:
-            specs.append(spec_from(path, proc.communicate(timeout=4)[0]))
+            out = proc.communicate(timeout=4)[0]
+            specs.append(spec_from(path, out, 'Could not read setting' if proc.returncode else None))
         except Exception as e:
             proc.kill()
+            proc.wait()
             specs.append(spec_from(path, "", e))
     return [s for s in specs
             if s.get("kind") in ROWH and str(s.get("skip", "")).lower() not in TRUE]
@@ -587,8 +605,7 @@ class Tile(Gtk.DrawingArea):
         self.connect('motion-notify-event', self.on_motion)
         self.connect('scroll-event', self.on_scroll)
         self.connect('leave-notify-event', self.on_leave)
-        if spec.get('subtitle') and spec['kind'] in ('segment', 'slider',
-                                                     'meter', 'cycle'):
+        if spec.get('subtitle'):
             self.set_tooltip_text(spec['subtitle'])
 
     # ---- state helpers
@@ -628,6 +645,7 @@ class Tile(Gtk.DrawingArea):
     def update(self, spec):
         spec['path'], spec['name'] = self.spec['path'], self.spec['name']
         self.spec = spec
+        self.set_tooltip_text('Could not read this setting. It will retry automatically.' if spec.get('available') is False else spec.get('subtitle'))
         if self.drag_value is None:
             self.queue_draw()
 
@@ -637,7 +655,8 @@ class Tile(Gtk.DrawingArea):
         a = self.get_allocation()
         cr.set_antialias(_cairo.ANTIALIAS_BEST)
         cr.scale(SC, SC)
-        getattr(self, 'draw_' + self.spec['kind'])(cr, a.width / SC, a.height / SC)
+        draw = self.draw_meter if self.spec.get('available') is False else getattr(self, 'draw_' + self.spec['kind'])
+        draw(cr, a.width / SC, a.height / SC)
         if self.keyboard_part is not None:
             w, h = a.width / SC, a.height / SC
             x = w - DETAIL_W if self.keyboard_part == 'detail' and self.spec['kind'] != 'meter' else 2
@@ -942,6 +961,8 @@ class Tile(Gtk.DrawingArea):
         return True
 
     def on_scroll(self, _w, e):
+        if self.spec.get('available') is False:
+            return True
         if self.spec['kind'] != 'slider':
             return False
         step = 5 if e.direction in (Gdk.ScrollDirection.UP, Gdk.ScrollDirection.RIGHT) else -5
@@ -1342,7 +1363,7 @@ class Panel:
             return True
         targets = []
         for tile in self.tiles:
-            if tile.spec['kind'] != 'meter':
+            if tile.spec['kind'] != 'meter' and tile.spec.get('available') is not False:
                 targets.append((tile, 'value'))
             if tile.spec.get('detail'):
                 targets.append((tile, 'detail'))
@@ -1415,6 +1436,8 @@ class Panel:
     # ---- plugin traffic
 
     def set_value(self, tile, value):
+        if getattr(tile, 'spec', {}).get('available') is False:
+            return False
         tile.requested_value = value
         if getattr(tile, 'setting', False):
             return

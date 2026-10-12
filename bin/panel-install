@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -90,4 +91,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--revert', action='store_true')
     args = parser.parse_args()
+    runtime = ROOT / 'bin/desktop-install'
+    if runtime.exists() and (not args.revert or (HOME / '.local/lib/mintbook/current').exists()):
+        raise SystemExit(subprocess.run([str(runtime), *sys.argv[1:]]).returncode)
     revert() if args.revert else install()

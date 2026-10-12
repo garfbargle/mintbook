@@ -10,6 +10,3 @@ CC="$HOME/.local/bin/control-center"
 printf '<click>%s</click>\n<iconclick>%s</iconclick>\n' "$CC" "$CC"
 printf '<img>%s/.local/share/mintbook/control-center.svg</img>\n' "$HOME"
 printf '<tool>Control Center</tool>\n'
-
-# Emit the controls even if appearance refresh fails or blocks.
-timeout 8s "$HOME/.local/bin/appearance-mode" --refresh >/dev/null 2>&1 || true

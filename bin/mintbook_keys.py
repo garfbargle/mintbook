@@ -61,7 +61,9 @@ def key(panel, event, width):
     elif code == Gdk.KEY_End:
         index = len(choices) - 1
     elif index < 0:
-        index = 0
+        reverse = code in (Gdk.KEY_ISO_Left_Tab, Gdk.KEY_Up, Gdk.KEY_Left) or (
+            code == Gdk.KEY_Tab and event.state & Gdk.ModifierType.SHIFT_MASK)
+        index = len(choices) - 1 if reverse else 0
     elif not enter:
         reverse = code in (Gdk.KEY_ISO_Left_Tab, Gdk.KEY_Up, Gdk.KEY_Left) or (
             code == Gdk.KEY_Tab and event.state & Gdk.ModifierType.SHIFT_MASK)

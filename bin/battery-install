@@ -10,6 +10,14 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+# Installed desktops route feature changes through the release transaction.
+if [ "${MINTBOOK_INSTALL_TRANSACTION:-}" != 1 ] && [ -e "$HOME/.local/lib/mintbook/current/manifest.json" ]; then
+  exec "$ROOT/bin/desktop-install" --feature "$(basename "$0")" "$@"
+fi
+if [ "${MINTBOOK_PANEL_MAINTENANCE:-}" != 1 ]; then
+  exec "$ROOT/bin/panel-session" maintain -- "$0" "$@"
+fi
+
 BIN="$HOME/.local/bin"
 PANEL_RC="$HOME/.config/xfce4/panel"
 STATE="$HOME/.config/mintbook"
@@ -33,13 +41,13 @@ write_ids() {   # write_ids <id...>
 if [ "${1:-}" = --revert ]; then
   echo "==> putting the XFCE battery plugin back"
   ids=$(cat "$SAVED" 2>/dev/null || current_ids | tr '\n' ' ')
-  xfce4-panel -q 2>/dev/null || true
+  "$ROOT/bin/panel-session" stop 2>/dev/null || true
   sleep 0.4
   out=(); for id in $ids; do
     [ "$id" = "$PLUGIN" ] && out+=("$OLD") || out+=("$id")
   done
   write_ids "${out[@]}"
-  nohup xfce4-panel >/dev/null 2>&1 &
+  "$ROOT/bin/panel-session" start
   echo "plugin-$PLUGIN stays registered but unused; the log in"
   echo "~/.cache/mintbook/battery is left alone — delete it if you want it gone"
   exit 0
@@ -80,7 +88,7 @@ echo "==> panel"
 
 # Running plugins write xfconf back on shutdown, so stop the panel first.
 ids=$(current_ids | tr '\n' ' ')
-xfce4-panel -q 2>/dev/null || true
+"$ROOT/bin/panel-session" stop 2>/dev/null || true
 sleep 0.4
 xfconf-query -c xfce4-panel -p "/plugins/plugin-$PLUGIN" -n -t string -s genmon 2>/dev/null || true
 
@@ -97,7 +105,7 @@ done
 [ "$seen" = 1 ] || out+=("$PLUGIN")
 write_ids "${out[@]}"
 
-nohup xfce4-panel >/dev/null 2>&1 &
+"$ROOT/bin/panel-session" start
 sleep 1
 
 echo

@@ -110,4 +110,6 @@ def main():
     print('Undo: bin/brightness-install --revert')
 
 if __name__ == '__main__':
+    if (HOME / '.local/lib/mintbook/current/manifest.json').exists() and os.environ.get('MINTBOOK_INSTALL_TRANSACTION') != '1':
+        os.execv(str(ROOT / 'bin/desktop-install'), ['desktop-install', '--feature', Path(__file__).name, *sys.argv[1:]])
     main()

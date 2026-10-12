@@ -131,6 +131,13 @@ class WatcherTests(unittest.TestCase):
             hover.PANEL_RC = d
             self.assertEqual(hover.plugin_id(), 19)
 
+    def test_cached_cpu_widget_is_found_by_its_command(self):
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, 'genmon-9.rc').write_text('Command=/x/panel-read wifi\n')
+            Path(d, 'genmon-33.rc').write_text('Command=/x/panel-read cpu\n')
+            hover.PANEL_RC = d
+            self.assertEqual(hover.plugin_id(), 33)
+
     def test_no_cpu_widget_is_zero_not_a_guess(self):
         with tempfile.TemporaryDirectory() as d:
             Path(d, 'genmon-17.rc').write_text('Command=/x/panel-temp\n')
@@ -150,7 +157,8 @@ class WatcherTests(unittest.TestCase):
         sent = []
         real, hover.run = hover.run, lambda args, **kw: sent.append(args) or ''
         self.addCleanup(setattr, hover, 'run', real)
-        hover.nudge(19)
+        with patch.object(hover.socket, 'socket', side_effect=OSError):
+            hover.nudge(19)
         self.assertEqual(len(sent), 1)
         self.assertEqual(sent[0][0], 'xfce4-panel')
         self.assertIn('--plugin-event=genmon:refresh:bool:true', sent[0])
