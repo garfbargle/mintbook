@@ -211,7 +211,9 @@ default; `--snapshot` explicitly requests a full Timeshift snapshot.
 Installers print their own undo instructions. `bin/overview-install` adds the
 Overview bar icon and shortcut; its `--revert` removes the icon while preserving
 the established shortcut. Daily conveniences can be added or removed with
-`bin/daily-install` and `bin/daily-install --revert`. The original XFCE desktop
+`bin/daily-install` and `bin/daily-install --revert`. Once the desktop is configured,
+`bin/desktop-install` moves its installed components into self-contained releases,
+with shared status sampling and `~/.local/bin/desktop-install --rollback` for undo. The original XFCE desktop
 can always be restored with `bin/revert-mac-theme`.
 
 Nothing here asks you to trust a tweak you cannot inspect—or keep a change you

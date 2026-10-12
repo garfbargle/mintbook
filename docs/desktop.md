@@ -1509,7 +1509,9 @@ unchanged. The two-second Python CPU graph is still the dominant recurring cost.
 
 `bin/desktop-install` packages the desktop into self-contained releases under
 `~/.local/lib/mintbook/releases/`. Commands, user services, panel rc files and
-Control Center plugins point through one `current` link. A release contains the
+Control Center plugins point through the `current` link. The install/lifecycle
+manager and the migrated audio watcher have a separate `manager` link that
+stays on the latest compatible management code during a UI rollback. A release contains the
 scripts, their Python modules, icons and configuration dependencies as real
 files; deleting a Git checkout cannot remove installed code. Source syntax and
 payload hashes are verified before activation, and runtime health is checked
@@ -1556,3 +1558,51 @@ write settings. Reverse keyboard navigation starts at the last target across
 row menus and System. System labels the age of health checks and avoids calling
 an old update check current. No new UI framework, compositor or root daemon is
 introduced.
+
+Validation on October 12: **384 tests pass**, including a real private D-Bus
+integration test. On that bus, twenty irrelevant network-counter events produced
+no additional reads; a strength change produced one refresh; a resume event
+replaced old CPU baselines; ending a disposable session process removed the
+collector heartbeat and exited in about 2.2 seconds. This exercises application
+lifecycle handling without logging out or suspending the working desktop.
+Python/shell syntax, palette consistency and all three service definitions pass.
+
+All six bar popups were opened in both light and dark appearances (twelve checks),
+visually inspected at the current DPI and dismissed with Escape. Initial reverse
+focus and Tab navigation were exercised without activating device controls.
+Control Center reported 389 ms on screen in the light run and 275 ms in the dark
+run. The original dark appearance, pointer and focused application were restored.
+Desktop/greeter wallpaper changes were excluded from the appearance test.
+
+Actual installed-manager rollback to the prior release and restoration both
+passed. The newest manager remained available throughout; cache expiry formats
+from either release were accepted by its health check. A controlled collector
+SIGKILL recovered in **3.16 seconds** while the panel stayed responsive. The
+whole-machine Doctor reported **96 passed, 2 notes, no failures**, and no failed
+user services were present. The remaining checkout reference in the audio
+watcher's user-unit override was migrated; its default output remains
+`input.MacBook_Speaker`, the EQ path. The original checkout's unrelated brightness
+edit is untouched.
+
+The same 45-second process/child CPU-counter probe measured **5.835% of one core**
+before migration and **2.619%** after the final sampler/cache-reader refinements,
+about **55% less** in these windows. Widget update periods are unchanged. These
+are live desktop samples, not a controlled battery-power experiment. The first
+collector measurement regressed: a failed hover search reset its retry timestamp
+and restarted Python every two seconds. Cached command detection, proper retry
+backoff and immediate startup listener replacement corrected that failure. The
+cached reader uses `/bin/sh` builtins and boot-time expiry rather than starting
+`date` or depending on wall-clock adjustments. Closed popups run no new work.
+
+No physical logout or suspend was forced; hardware recovery continues to use
+the documented existing hooks. Release payloads remain read-only and retained;
+local private-file permissions are not widened. Integration tests verify that
+removing a source checkout cannot break installed commands, that damaged payloads
+and escaping target paths are rejected, and that failed activation restores the
+previous release. The first recovery installer backup remains intact.
+
+Doctor now derives work area expectations from the live desktop geometry rather
+than assuming the panel's native 2304×1440 resolution. The current 1920×1200
+session correctly reserves 52 pixels, with a 1920×1148 work area; a missing strut
+still fails the check. Final validation reports **96 passed, 2 notes, no failures**.
+The install manager also rejects malformed shell payloads before switching code.

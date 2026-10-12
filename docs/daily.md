@@ -3,7 +3,9 @@
 `bin/daily-install` enables this set in the current desktop session. It snapshots
 replaced files, the three window shortcuts and lid actions before changing them, prints an
 undo command, and does not restart the panel. Reopen menus to see the changes.
-The installed files link to this checkout, which must remain at its current path.
+Legacy installations link files to the checkout. `bin/desktop-install` migrates
+the configured desktop to self-contained releases; later feature updates use
+that activation boundary and no longer depend on a checkout path.
 `bin/daily-install --revert` restores the prior files, shortcuts, lid actions and health timer;
 backup files are retained in `~/.local/state/mintbook/daily-before-*`.
 

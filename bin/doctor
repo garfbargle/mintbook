@@ -301,6 +301,13 @@ if [ -x "$SLEEP_REPORT" ]; then
 fi
 if [ -e /sys/class/leds/spi::kbd_backlight ]; then ok "keyboard backlight" "spi::kbd_backlight"; else warn "keyboard backlight" "led node missing"; fi
 
+workarea_fits_bar() {
+  local width=$1 height=$2 bar=$3 area=$4
+  [[ "$width" =~ ^[0-9]+$ && "$height" =~ ^[0-9]+$ && "$bar" =~ ^[0-9]+$ ]] || return 1
+  (( width > 0 && height > bar )) || return 1
+  [ "$area" = "0,$bar,$width,$((height - bar))" ]
+}
+
 section "Desktop"
 if pgrep -u "$(id -u)" -x xfce4-panel >/dev/null 2>&1; then
   if busctl --user --timeout=2 call org.xfce.Panel /org/xfce/Panel org.xfce.Panel PluginEvent ssv mintbook-health ping b false >/dev/null 2>&1; then
@@ -331,11 +338,18 @@ esac
 WA=$(xprop -root _NET_WORKAREA 2>/dev/null | cut -d= -f2 | tr -d ' ' | cut -d, -f1-4)
 if [ -z "$WA" ]; then
   warn "_NET_WORKAREA" "cannot query the X display — run doctor inside the desktop session"
-elif [ "$WA" = "0,$PSZ,2304,$((1440 - PSZ))" ]; then
-  ok "_NET_WORKAREA" "$WA — apps that place their own windows clear the bar"
 else
-  bad "_NET_WORKAREA" "$WA — expected 0,$PSZ,2304,$((1440 - PSZ)); windows will open under the bar"
+  GEOMETRY=$(xprop -root _NET_DESKTOP_GEOMETRY 2>/dev/null | cut -d= -f2 | tr -d ' ')
+  IFS=, read -r DESKTOP_WIDTH DESKTOP_HEIGHT <<< "$GEOMETRY"
+  if workarea_fits_bar "${DESKTOP_WIDTH:-}" "${DESKTOP_HEIGHT:-}" "$PSZ" "$WA"; then
+    ok "_NET_WORKAREA" "$WA — apps that place their own windows clear the bar"
+  elif [[ "${DESKTOP_WIDTH:-}" =~ ^[0-9]+$ && "${DESKTOP_HEIGHT:-}" =~ ^[0-9]+$ && "$PSZ" =~ ^[0-9]+$ ]]; then
+    bad "_NET_WORKAREA" "$WA — expected 0,$PSZ,$DESKTOP_WIDTH,$((DESKTOP_HEIGHT - PSZ)); windows may open under the bar"
+  else
+    warn "_NET_WORKAREA" "$WA — could not read the current desktop geometry"
+  fi
 fi
+
 # The genmon plugins actually on the bar, asked of the bar. This used to be the
 # literal list "17 18 19 21 22 23", written down once and left there: 21, 22 and
 # 23 have not been on the bar since the Control Center took Bluetooth, power and

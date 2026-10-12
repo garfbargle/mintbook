@@ -19,9 +19,12 @@ Keep each change bounded and retain the measured decisions in the relevant doc.
    both appearances at this machine's actual DPI. Do not install updates,
    disconnect devices or suspend the machine just to smoke-test a menu.
 6. Install with the feature's installer. `bin/daily-install` installs the daily
-   conveniences and their shared keyboard module using repository symlinks;
-   reruns retain the original undo snapshot. It prints its revert command.
-   Avoid changing files directly in `~/.local/bin`: they may be copies or links.
+   conveniences and their shared keyboard module;
+   reruns retain the original undo snapshot. Once `bin/desktop-install` has
+   migrated the desktop, feature installers use its maintenance and release
+   transaction. Install code through that command; keep preferences outside
+   release directories. `--rollback` restores the previous desktop release.
+   Avoid changing files directly in `~/.local/bin`: they are managed links.
 7. Record what changed, what was tested, limits and undo steps in the feature doc.
    Keep historical measurements labelled with their original date.
 

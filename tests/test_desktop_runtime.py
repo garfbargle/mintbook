@@ -3,6 +3,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import tempfile
@@ -84,6 +85,11 @@ class ReleaseTests(unittest.TestCase):
         path.write_text(json.dumps(manifest))
         with self.assertRaisesRegex(ValueError, 'target leaves'):
             self.deployment.validate(release)
+
+    def test_broken_shell_payload_is_rejected_before_activation(self):
+        path = self.source / 'bin/broken'; path.write_text('#!/bin/sh\nif true; then\n'); path.chmod(0o755)
+        with self.assertRaises(subprocess.CalledProcessError): self.deployment.build()
+        self.assertFalse(self.deployment.current.exists())
 
     def test_payload_mutation_is_detected(self):
         release = self.deployment.build()
@@ -220,6 +226,49 @@ class CollectorTests(unittest.TestCase):
         collector.stop = Mock()
         self.assertFalse(collector.session_ended(None, None))
         collector.stop.assert_called_once()
+
+
+class WorkareaTests(unittest.TestCase):
+    def fits(self, width, height, bar, area):
+        source = (ROOT / 'bin/doctor').read_text()
+        start = source.index('workarea_fits_bar() {')
+        function = source[start:source.index('\n}', start) + 2]
+        return subprocess.run(['bash', '-c', function + '\nworkarea_fits_bar "$@"',
+                               'workarea-test', str(width), str(height), str(bar), area], capture_output=True).returncode == 0
+
+    def test_current_resolution_is_used_instead_of_native_panel_resolution(self):
+        self.assertTrue(self.fits(1920, 1200, 52, '0,52,1920,1148'))
+        self.assertTrue(self.fits(2304, 1440, 52, '0,52,2304,1388'))
+
+    def test_missing_strut_is_still_a_failure(self):
+        self.assertFalse(self.fits(1920, 1200, 52, '0,0,1920,1200'))
+
+    def test_unreadable_geometry_is_not_arithmetic_input(self):
+        self.assertFalse(self.fits('unknown', 1200, 52, '0,52,1920,1148'))
+
+
+class PrivateBusLifecycleTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('dbus-run-session'), 'requires a private D-Bus')
+    def test_actual_bus_events_resume_and_session_exit(self):
+        with tempfile.TemporaryDirectory() as home:
+            session = subprocess.Popen(['sleep', '15'])
+            try:
+                result = subprocess.run(['dbus-run-session', '--', '/usr/bin/python3',
+                    str(ROOT / 'tests/fixtures/desktop_bus_probe.py'),
+                    str(ROOT / 'bin/desktop-status'), str(session.pid)],
+                    env={**os.environ, 'HOME': home, 'XDG_RUNTIME_DIR': home},
+                    capture_output=True, text=True, timeout=12)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                report = json.loads(result.stdout)
+                self.assertEqual(report['before_noise'], report['after_noise'])
+                self.assertGreater(report['after_strength'], report['after_noise'])
+                self.assertTrue(report['resume_baseline_reset'])
+                self.assertTrue(report['heartbeat_removed'])
+                self.assertEqual(report['exit'], 0)
+                self.assertLess(report['milliseconds'], 6000)
+            finally:
+                if session.poll() is None: session.terminate()
+                session.wait()
 
 
 class LifecycleTests(unittest.TestCase):

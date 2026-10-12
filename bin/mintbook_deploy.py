@@ -185,6 +185,10 @@ class Deployment:
                 if not path.is_file(): continue
                 if path.suffix == '.py' or path.read_bytes().split(b'\n', 1)[0].startswith((b'#!/usr/bin/env python', b'#!/usr/bin/python')):
                     compile(path.read_bytes(), str(path), 'exec')
+                elif path.read_bytes().split(b'\n', 1)[0].startswith((b'#!/usr/bin/env bash', b'#!/bin/bash')):
+                    run('bash', '-n', str(path))
+                elif path.read_bytes().split(b'\n', 1)[0].startswith((b'#!/bin/sh', b'#!/usr/bin/env sh')):
+                    run('sh', '-n', str(path))
             self.validate(stage)
             # Read-only release payloads prevent legacy installers from
             # accidentally following a command symlink and editing active code.
