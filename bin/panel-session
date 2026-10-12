@@ -299,7 +299,7 @@ def maintenance(argv):
     stop()
     try:
         env = dict(os.environ, MINTBOOK_PANEL_MAINTENANCE='1')
-        return subprocess.run(argv, env=env).returncode
+        return subprocess.run(argv, env=env, timeout=120).returncode
     finally:
         if was_running:
             start()

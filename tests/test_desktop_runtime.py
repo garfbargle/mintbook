@@ -287,6 +287,15 @@ class LifecycleTests(unittest.TestCase):
             with self.assertRaises(KeyboardInterrupt): panel.maintenance(['/a/installer'])
         start.assert_called_once()
 
+    def test_cpu_installer_does_not_launch_a_foreground_panel_during_maintenance(self):
+        with tempfile.TemporaryDirectory() as home:
+            result = subprocess.run([str(ROOT / 'bin/cpu-install')],
+                env={**os.environ, 'HOME': home, 'DISPLAY': ':not-a-real-display',
+                     'MINTBOOK_PANEL_MAINTENANCE': '1', 'MINTBOOK_INSTALL_TRANSACTION': '1'},
+                capture_output=True, text=True, timeout=5)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((Path(home) / '.local/bin/cpu-menu').exists())
+
     def test_start_is_deferred_during_maintenance(self):
         with patch.dict(os.environ, {'MINTBOOK_PANEL_MAINTENANCE': '1'}), \
                 patch.object(panel, 'session_pid') as session:

@@ -22,6 +22,9 @@ fi
 BIN="$HOME/.local/bin"
 
 nudge() {   # re-run the first genmon widget (the sparkline) now
+  # The transaction owns the final restart; invoking xfce4-panel here when
+  # absent would start a foreground panel and prevent the installer returning.
+  [ "${MINTBOOK_PANEL_MAINTENANCE:-}" = 1 ] && return 0
   # The event matches on the plugin *name*: plugin-19:refresh, which this used
   # to send, was delivered to nothing and returned FALSE. bin/cpu-hover has
   # the same working event. Only the first matching widget handles it.

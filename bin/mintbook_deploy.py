@@ -163,7 +163,10 @@ class Deployment:
         hashes = {name: digest(data) for name, (data, _mode) in sorted(files.items())}
         targets = self.target_paths(files)
         content = digest(json.dumps({'files': hashes, 'targets': targets}, sort_keys=True).encode())[:16]
-        commit = run('git', '-C', str(self.root), 'rev-parse', '--short=12', 'HEAD', check=False).stdout.strip() or 'local'
+        commit = run('git', '-C', str(self.root), 'rev-parse', '--short=12', 'HEAD', check=False).stdout.strip()
+        if not commit and (self.root / 'manifest.json').exists():
+            commit = json.loads((self.root / 'manifest.json').read_text()).get('commit', 'local')
+        commit = commit or 'local'
         identity = ('baseline-' if baseline else '') + commit + '-' + content
         target = self.releases / identity
         if target.exists():
@@ -319,7 +322,7 @@ class Deployment:
                 if '/' in name or not name.endswith('-install') or not (self.root / 'bin' / name).is_file():
                     raise ValueError('unknown desktop feature installer')
                 result = subprocess.run([str(self.root / 'bin' / name), *args],
-                    env=dict(os.environ, MINTBOOK_INSTALL_TRANSACTION='1', MINTBOOK_PANEL_MAINTENANCE='1'))
+                    env=dict(os.environ, MINTBOOK_INSTALL_TRANSACTION='1', MINTBOOK_PANEL_MAINTENANCE='1'), timeout=120)
                 if result.returncode:
                     raise RuntimeError(f'{name} failed ({result.returncode})')
             release = self.build()
