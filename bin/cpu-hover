@@ -223,6 +223,8 @@ def stop():
         pids = []
     expected = {os.path.realpath(SELF), os.path.realpath(f'{HOME}/.local/bin/cpu-hover')}
     for pid in pids:
+        if pid <= 1:
+            continue
         try:
             with open(f'/proc/{pid}/cmdline', 'rb') as handle:
                 args = handle.read().decode().split('\0')

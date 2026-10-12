@@ -10,6 +10,8 @@ icons = home / '.local/share/mintbook/system'
 fail = notes = passed = 0
 try:
     rows = json.loads((home / '.cache/mintbook/health.json').read_text())['rows']
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        raise ValueError('invalid health rows')
     fail = sum(row.get('status') == 'fail' for row in rows)
     notes = sum(row.get('status') == 'warn' for row in rows)
     passed = sum(row.get('status') == 'ok' for row in rows)

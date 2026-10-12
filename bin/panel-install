@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+"""Install top-bar recovery and bounded status readers; retain the first undo."""
+import argparse
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import time
+
+ROOT = Path(__file__).resolve().parents[1]
+HOME = Path.home()
+STATE = HOME / '.local/state/mintbook/panel-before.json'
+BIN = HOME / '.local/bin'
+UNIT = 'mintbook-panel.service'
+
+
+def run(*args, check=True):
+    return subprocess.run(args, check=check, timeout=20)
+
+
+def targets():
+    result = [(ROOT / 'bin' / name, BIN / name) for name in (
+        'panel-session', 'panel-cpu', 'cpu-hover', 'panel-wifi', 'panel-bt',
+        'panel-temp', 'panel-control', 'panel-system', 'doctor')]
+    result += [(ROOT / 'config/systemd' / UNIT, HOME / '.config/systemd/user' / UNIT),
+               (ROOT / 'config/autostart/mintbook-panel.desktop',
+                HOME / '.config/autostart/mintbook-panel.desktop')]
+    return result
+
+
+def snapshot():
+    if STATE.exists():
+        return json.loads(STATE.read_text())
+    backup = STATE.parent / ('panel-before-' + str(time.time_ns()))
+    backup.mkdir(parents=True)
+    data = []
+    for i, (_source, target) in enumerate(targets()):
+        saved = None
+        if target.exists() or target.is_symlink():
+            saved = backup / str(i)
+            shutil.copy2(target, saved, follow_symlinks=False)
+        data.append({'path': str(target), 'backup': str(saved) if saved else None})
+    STATE.write_text(json.dumps(data, indent=2))
+    return data
+
+
+def install():
+    if not os.environ.get('DISPLAY'):
+        raise SystemExit('Run from the XFCE desktop with DISPLAY set.')
+    run('systemctl', '--user', 'stop', UNIT, check=False)
+    snapshot()
+    for source, target in targets():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_name(target.name + '.mintbook-new')
+        temporary.unlink(missing_ok=True)
+        if target.name == 'mintbook-panel.desktop':
+            # Desktop Exec is not a shell command; quote the absolute path.
+            executable = str(BIN / 'panel-session').replace('\\', '\\\\').replace('"', '\\"')
+            temporary.write_text(source.read_text().replace('Exec=panel-session start', f'Exec="{executable}" start'))
+        else:
+            temporary.symlink_to(source)
+        temporary.replace(target)
+    run('systemctl', '--user', 'daemon-reload')
+    run(str(BIN / 'panel-session'), 'start')
+    print('Top bar recovery installed. Existing panel configuration retained.')
+    print(f'Undo: {ROOT}/bin/panel-install --revert')
+
+
+def revert():
+    if not STATE.exists():
+        raise SystemExit('No panel install snapshot found.')
+    run('systemctl', '--user', 'stop', UNIT, check=False)
+    for entry in json.loads(STATE.read_text()):
+        target = Path(entry['path'])
+        target.unlink(missing_ok=True)
+        if entry['backup']:
+            shutil.copy2(entry['backup'], target, follow_symlinks=False)
+    run('systemctl', '--user', 'daemon-reload')
+    STATE.unlink()
+    # Restore a normal session-owned panel, detached from this installer.
+    run('systemd-run', '--user', '--collect', '--unit=mintbook-panel-restored',
+        '--setenv=DISPLAY=' + os.environ['DISPLAY'],
+        '--setenv=XAUTHORITY=' + os.environ.get('XAUTHORITY', str(HOME / '.Xauthority')),
+        '/usr/bin/xfce4-panel', '--disable-wm-check')
+    print('Previous bar readers restored; recovery removed.')
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--revert', action='store_true')
+    args = parser.parse_args()
+    revert() if args.revert else install()

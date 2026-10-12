@@ -1,0 +1,15 @@
+[Unit]
+Description=Mintbook top bar with session-aware recovery
+After=graphical-session-pre.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/panel-session supervise
+Restart=on-failure
+RestartSec=5
+# A launcher may have started an application in this unit. Never kill the
+# whole cgroup: panel-session closes only the verified panel via its pidfd.
+KillMode=process
+TimeoutStopSec=10

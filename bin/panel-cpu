@@ -28,6 +28,7 @@ chart. I/O is opened only for the top N, not for every pid — the walk's cost
 stays the /proc/stat pass. See docs/desktop.md.
 """
 import os, sys
+import fcntl
 import signal
 import time
 
@@ -258,6 +259,30 @@ def state_age():
         return None
 
 
+def watcher_matches(pid):
+    """A stale pidfile must never signal a different process after PID reuse."""
+    if pid <= 1:
+        return False
+    try:
+        with open(f'/proc/{pid}/cmdline', 'rb') as handle:
+            args = handle.read().decode().split('\0')
+        expected = {os.path.realpath(WATCHER),
+                    os.path.realpath(os.path.expanduser('~/.local/bin/cpu-hover'))}
+        return (os.path.basename(args[0]) == 'xdotool' and 'behave' in args and
+                any(os.path.realpath(a) in expected for a in args if a.startswith('/')))
+    except (OSError, UnicodeError, IndexError):
+        return False
+
+
+def wrapper_matches(pid):
+    try:
+        with open(f'/proc/{pid}/cmdline', 'rb') as handle:
+            args = handle.read().decode().split('\0')
+        return any('libgenmon.so' in arg for arg in args)
+    except (OSError, UnicodeError):
+        return False
+
+
 def ensure_watcher():
     """Keep bin/cpu-hover alive, without an autostart entry to install.
 
@@ -277,12 +302,15 @@ def ensure_watcher():
         with open(WATCH_PID) as f:
             lines = f.read().split('\n')
         watchers = [int(p) for p in lines[0].split()]
-        pids = watchers + [int(p) for p in lines[1].split()]
-        if pids and all(os.path.exists(f'/proc/{pid}') for pid in pids):
+        wrappers = [int(p) for p in lines[1].split()]
+        if (len(watchers) == 2 and all(watcher_matches(pid) for pid in watchers)
+                and len(wrappers) == 1 and wrapper_matches(wrappers[0])):
             return
     except (OSError, ValueError, IndexError):
         stamp = 0
     for pid in watchers:
+        if not watcher_matches(pid):
+            continue
         try:
             os.kill(pid, signal.SIGTERM)
         except OSError:
@@ -313,6 +341,20 @@ def emit(pct):
 
 
 def main():
+    # Hover refreshes and scheduled ticks share files. A nonblocking lock
+    # makes a concurrent invocation a display-only read instead of two writers.
+    os.makedirs(os.path.dirname(STATE), exist_ok=True)
+    with open(STATE + '.lock', 'a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            hist = read_state()[2]
+            emit(hist[-1] if hist else 0.0)
+            return
+        sample_and_render()
+
+
+def sample_and_render():
     out_svg = os.path.expanduser('~/.cache/mintbook/cpu.svg')
     ensure_watcher()
     age = state_age()

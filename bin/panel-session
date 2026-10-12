@@ -1,0 +1,265 @@
+#!/usr/bin/env python3
+"""Keep the XFCE bar present, responsive and bound to this desktop session.
+
+One stdlib process sleeps on kernel pidfds between 30-second health checks.
+It adopts a restored panel rather than competing with XFCE's session manager.
+A restart closes only the panel, never an application's process group. Stop
+with `systemctl --user stop mintbook-panel.service` for panel maintenance.
+"""
+import configparser
+import os
+from pathlib import Path
+import selectors
+import signal
+import subprocess
+import sys
+import time
+
+INTERVAL = 30
+TIMEOUT = 2
+PANEL = '/usr/bin/xfce4-panel'
+UNIT = 'mintbook-panel.service'
+STOPPING = False
+
+
+def run(args, timeout=TIMEOUT):
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        return result.stdout.strip() if result.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def display_id(value):
+    # :0 and :0.0 name the same local X server.
+    return value.rsplit('.', 1)[0] if '.' in value.rsplit(':', 1)[-1] else value
+
+
+def session_pid():
+    display = display_id(os.environ.get('DISPLAY', ''))
+    if not display:
+        return None
+    for entry in Path('/proc').glob('[0-9]*'):
+        try:
+            if entry.stat().st_uid != os.getuid() or (entry / 'comm').read_text().strip() != 'xfce4-session':
+                continue
+            env = (entry / 'environ').read_bytes().split(b'\0')
+            values = dict(row.split(b'=', 1) for row in env if b'=' in row)
+            if display_id(values.get(b'DISPLAY', b'').decode()) == display:
+                return int(entry.name)
+        except (OSError, ValueError, UnicodeError):
+            continue
+    return None
+
+
+def bus_owner():
+    reply = run(['busctl', '--user', '--timeout=2', 'call',
+                 'org.freedesktop.DBus', '/org/freedesktop/DBus',
+                 'org.freedesktop.DBus', 'GetConnectionUnixProcessID', 's', 'org.xfce.Panel'])
+    try:
+        return int(reply.split()[1]) if reply and reply.startswith('u ') else None
+    except (ValueError, IndexError):
+        return None
+
+
+def panel_fd(pid):
+    """Open the pidfd before checking identity, closing the PID reuse race."""
+    fd = os.pidfd_open(pid)
+    try:
+        proc = Path(f'/proc/{pid}')
+        if proc.stat().st_uid != os.getuid() or (proc / 'exe').resolve() != Path(PANEL):
+            raise ValueError("not this user's panel")
+        return fd
+    except Exception:
+        os.close(fd)
+        raise
+
+
+def ping():
+    # An event for a nonexistent plugin is a no-op handled by the UI thread.
+    # Peer.Ping can be answered by GDBus without that thread making progress.
+    return run(['busctl', '--user', '--timeout=2', 'call', 'org.xfce.Panel',
+                '/org/xfce/Panel', 'org.xfce.Panel', 'PluginEvent',
+                'ssv', 'mintbook-health', 'ping', 'b', 'false']) is not None
+
+
+def expected_wrappers():
+    """Only configured external plugins; numbers and installation paths vary."""
+    # xfconf merges distribution defaults with the user's XML; reading only
+    # that XML missed systray (a default whose override has type="empty").
+    values = run(['xfconf-query', '-c', 'xfce4-panel', '-lv'])
+    panels = run(['xfconf-query', '-c', 'xfce4-panel', '-p', '/panels'])
+    if values is None or panels is None:
+        return set()
+    props = dict(line.split(None, 1) for line in values.splitlines()
+                 if len(line.split(None, 1)) == 2)
+    expected = set()
+    try:
+        for panel in panels.splitlines():
+            if not panel.strip().isdigit():
+                continue
+            ids = run(['xfconf-query', '-c', 'xfce4-panel', '-p',
+                       f'/panels/panel-{int(panel)}/plugin-ids']) or ''
+            for ident in ids.splitlines():
+                if not ident.strip().isdigit():
+                    continue
+                ident = int(ident)
+                name = props.get(f'/plugins/plugin-{ident}', '')
+                if not name or '/' in name or name in ('.', '..'):
+                    continue
+                conf = configparser.ConfigParser(interpolation=None)
+                conf.read(f'/usr/share/xfce4/panel/plugins/{name}.desktop')
+                if conf.get('Xfce Panel', 'X-XFCE-Internal', fallback='TRUE').lower() == 'false':
+                    expected.add(ident)
+        return expected
+    except (OSError, ValueError, configparser.Error):
+        return set()
+
+
+def present_wrappers(panel_pid):
+    found = set()
+    for entry in Path('/proc').glob('[0-9]*'):
+        try:
+            # Do not count orphaned wrappers or plugins belonging to another panel.
+            stat = (entry / 'stat').read_text().rsplit(') ', 1)[1].split()
+            if int(stat[1]) != panel_pid:
+                continue
+            args = (entry / 'cmdline').read_bytes().split(b'\0')
+            if Path(os.fsdecode(args[0])).name == 'wrapper-2.0' and len(args) > 2:
+                found.add(int(args[2]))
+        except (OSError, ValueError, IndexError):
+            continue
+    return found
+
+
+def unhealthy(panel_pid):
+    if not ping():
+        return 'panel did not answer D-Bus'
+    missing = expected_wrappers() - present_wrappers(panel_pid)
+    return 'missing plugins: ' + ', '.join(map(str, sorted(missing))) if missing else None
+
+
+def close_panel(fd):
+    """Signal the held identity, with a deadline for a frozen GTK main loop."""
+    try:
+        # A stopped process must be continued to handle SIGTERM.
+        signal.pidfd_send_signal(fd, signal.SIGCONT)
+        signal.pidfd_send_signal(fd, signal.SIGTERM)
+        with selectors.DefaultSelector() as waiter:
+            waiter.register(fd, selectors.EVENT_READ)
+            if not waiter.select(3):
+                signal.pidfd_send_signal(fd, signal.SIGKILL)
+                waiter.select(1)
+    except ProcessLookupError:
+        pass
+
+
+def supervise():
+    global STOPPING
+    session = session_pid()
+    if session is None:
+        print('No matching XFCE session; leaving the bar stopped.', flush=True)
+        return 0
+    session_fd = os.pidfd_open(session)
+    wake_read, wake_write = os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC)
+    previous_wakeup = signal.set_wakeup_fd(wake_write)
+    signal.signal(signal.SIGTERM, lambda *_: request_stop())
+    signal.signal(signal.SIGINT, lambda *_: request_stop())
+    panel = child = fd = None
+    failures = 0
+    backoff = 3
+    next_check = next_start = time.monotonic()
+    born = next_check
+    with selectors.DefaultSelector() as events:
+        events.register(session_fd, selectors.EVENT_READ, 'session')
+        events.register(wake_read, selectors.EVENT_READ, 'signal')
+        try:
+            while not STOPPING:
+                now = time.monotonic()
+                if fd is None and now >= next_start:
+                    panel = bus_owner()
+                    if panel is None:
+                        child = subprocess.Popen([PANEL, '--disable-wm-check', '--sm-client-disable'])
+                        panel = child.pid
+                    try:
+                        fd = panel_fd(panel)
+                        events.register(fd, selectors.EVENT_READ, 'panel')
+                        born = now
+                        next_check = now + INTERVAL
+                        failures = 0
+                        print(f'Watching panel {panel}', flush=True)
+                    except (OSError, ValueError):
+                        if child is not None:
+                            child.wait(timeout=5)
+                            child = None
+                        panel = fd = None
+                        next_start = now + backoff
+                        backoff = min(30, backoff * 2)
+                deadline = next_check if fd is not None else next_start
+                ready = events.select(max(0, deadline - time.monotonic()))
+                if any(key.data == 'signal' for key, _mask in ready):
+                    os.read(wake_read, 4096)
+                if STOPPING:
+                    break
+                if any(key.data == 'session' for key, _mask in ready):
+                    break
+                gone = any(key.data == 'panel' for key, _mask in ready)
+                now = time.monotonic()
+                if fd is not None and not gone and now >= next_check:
+                    reason = unhealthy(panel)
+                    failures = failures + 1 if reason else 0
+                    next_check = now + INTERVAL
+                    if failures >= 2:
+                        print(f'Recovering: {reason}', flush=True)
+                        close_panel(fd)
+                        gone = True
+                if gone:
+                    now = time.monotonic()
+                    events.unregister(fd)
+                    os.close(fd)
+                    if child is not None:
+                        child.wait(timeout=5)
+                        child = None
+                    fd = panel = None
+                    if now - born >= 60:
+                        backoff = 3
+                    next_start = now + backoff
+                    backoff = min(30, backoff * 2)
+                    print(f'Panel exited; retry in {next_start - now:.0f}s', flush=True)
+        finally:
+            if fd is not None:
+                close_panel(fd)
+                os.close(fd)
+            if child is not None:
+                child.wait(timeout=5)
+            os.close(session_fd)
+            signal.set_wakeup_fd(previous_wakeup)
+            os.close(wake_read)
+            os.close(wake_write)
+    return 0
+
+
+def request_stop():
+    global STOPPING
+    STOPPING = True
+
+
+def main():
+    action = sys.argv[1] if len(sys.argv) == 2 else ''
+    if action == 'supervise':
+        return supervise()
+    if action == 'start':
+        if session_pid() is None:
+            return 0
+        # Import only desktop variables, never the whole shell environment.
+        variables = [name for name in ('DISPLAY', 'XAUTHORITY') if name in os.environ]
+        subprocess.run(['systemctl', '--user', 'import-environment', *variables], check=True)
+        subprocess.run(['systemctl', '--user', 'reset-failed', UNIT], check=False)
+        subprocess.run(['systemctl', '--user', 'start', UNIT], check=True)
+        return 0
+    print('usage: panel-session start|supervise', file=sys.stderr)
+    return 2
+
+
+if __name__ == '__main__':
+    sys.exit(main())

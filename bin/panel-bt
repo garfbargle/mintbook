@@ -34,7 +34,7 @@ adapters=(/sys/class/bluetooth/hci*)
 shopt -u nullglob
 [ ${#adapters[@]} -eq 0 ] && emit bt-off 'Bluetooth\nNo adapter'
 
-objs=$(dbus-send --system --print-reply --dest=org.bluez / \
+objs=$(dbus-send --reply-timeout=2000 --system --print-reply --dest=org.bluez / \
          org.freedesktop.DBus.ObjectManager.GetManagedObjects 2>/dev/null) \
   || emit bt-off 'Bluetooth\nStatus unknown'
 [ -z "$objs" ] && emit bt-off 'Bluetooth\nStatus unknown'
