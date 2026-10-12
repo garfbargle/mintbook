@@ -318,6 +318,7 @@ def main():
         if os.environ.get('MINTBOOK_PANEL_MAINTENANCE') == '1':
             return 0
         if service_installed():
+            subprocess.run(['systemctl', '--user', 'reset-failed', UNIT, 'mintbook-status.service'], capture_output=True, timeout=10)
             # Queue one manager-owned restart. The caller may itself have
             # been launched by a service that this restart stops.
             subprocess.run(['systemctl', '--user', '--no-block', 'restart', UNIT], check=True, timeout=10)

@@ -68,6 +68,23 @@ class ReleaseTests(unittest.TestCase):
         self.deployment.activate(release)
         self.assertEqual(json.loads(self.deployment.state.read_text())['previous'], before)
 
+    def test_rollback_keeps_the_latest_manager_for_older_cache_protocols(self):
+        new = self.deployment.build(); data = self.deployment.snapshot()
+        old = self.deployment.releases / data['baseline']
+        self.deployment.activate(new, data)
+        self.deployment.activate(old, data, update_manager=False)
+        self.assertEqual(self.deployment.current.resolve(), old)
+        self.assertEqual(self.deployment.manager.resolve(), new)
+        self.assertEqual((self.home / '.local/bin/desktop-install').resolve(), new / 'bin/desktop-install')
+
+    def test_target_dotdot_escape_is_rejected(self):
+        release = self.deployment.build(); path = release / 'manifest.json'
+        path.chmod(0o644); manifest = json.loads(path.read_text())
+        manifest['targets']['bin/control-center'] = str(self.home / '.local/bin/../../outside')
+        path.write_text(json.dumps(manifest))
+        with self.assertRaisesRegex(ValueError, 'target leaves'):
+            self.deployment.validate(release)
+
     def test_payload_mutation_is_detected(self):
         release = self.deployment.build()
         path = release / 'bin/control-center'; path.chmod(0o755); path.write_text('changed')
@@ -79,6 +96,12 @@ class ReleaseTests(unittest.TestCase):
         (self.source / 'bin/external').symlink_to(outside)
         with self.assertRaisesRegex(ValueError, 'leaves its checkout'):
             self.deployment.build()
+
+    def test_private_local_plugin_does_not_gain_other_user_read_permissions(self):
+        path = self.home / '.local/share/mintbook/control-center/plugins/90-private'
+        path.parent.mkdir(parents=True); path.write_text('#!/bin/sh\necho private\n'); path.chmod(0o700)
+        release = self.deployment.build()
+        self.assertEqual((release / 'control-center/plugins/90-private').stat().st_mode & 0o777, 0o500)
 
     def test_unknown_local_plugin_is_preserved(self):
         path = self.home / '.local/share/mintbook/control-center/plugins/90-custom'

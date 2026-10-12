@@ -605,8 +605,7 @@ class Tile(Gtk.DrawingArea):
         self.connect('motion-notify-event', self.on_motion)
         self.connect('scroll-event', self.on_scroll)
         self.connect('leave-notify-event', self.on_leave)
-        if spec.get('subtitle') and spec['kind'] in ('segment', 'slider',
-                                                     'meter', 'cycle'):
+        if spec.get('subtitle'):
             self.set_tooltip_text(spec['subtitle'])
 
     # ---- state helpers
@@ -646,7 +645,7 @@ class Tile(Gtk.DrawingArea):
     def update(self, spec):
         spec['path'], spec['name'] = self.spec['path'], self.spec['name']
         self.spec = spec
-        self.set_tooltip_text('Could not read this setting. It will retry automatically.' if spec.get('available') is False else None)
+        self.set_tooltip_text('Could not read this setting. It will retry automatically.' if spec.get('available') is False else spec.get('subtitle'))
         if self.drag_value is None:
             self.queue_draw()
 

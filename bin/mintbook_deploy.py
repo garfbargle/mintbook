@@ -56,6 +56,7 @@ class Deployment:
         self.base = self.home / '.local/lib/mintbook'
         self.releases = self.base / 'releases'
         self.current = self.base / 'current'
+        self.manager = self.base / 'manager'
         self.state = self.home / '.local/state/mintbook/desktop-install.json'
         self.panel = None
 
@@ -97,7 +98,15 @@ class Deployment:
     def changed_paths(self):
         result = run('git', '-C', str(self.root), 'diff', '--name-only', 'origin/main', '--', *TREES, check=False)
         added = run('git', '-C', str(self.root), 'ls-files', '--others', '--exclude-standard', '--', *TREES, check=False)
-        return set(result.stdout.splitlines() + added.stdout.splitlines())
+        changed = set(result.stdout.splitlines() + added.stdout.splitlines())
+        source_manifest = self.root / 'manifest.json'
+        if source_manifest.exists() and self.current.exists():
+            desired = json.loads(source_manifest.read_text())
+            active = json.loads((self.current / 'manifest.json').read_text())
+            overrides = set(active.get('local_overrides', []))
+            changed.update(name for name, value in desired['files'].items()
+                           if value != active['files'].get(name) and name not in overrides)
+        return changed
 
     def payload(self, baseline=False):
         files = self.source_files()
@@ -168,7 +177,9 @@ class Deployment:
             # Read-only release payloads prevent legacy installers from
             # accidentally following a command symlink and editing active code.
             for path in stage.rglob('*'):
-                if path.is_file(): path.chmod(0o555 if path.stat().st_mode & 0o111 else 0o444)
+                if path.is_file():
+                    mode = path.stat().st_mode & 0o777
+                    path.chmod(mode & (0o555 if mode & 0o111 else 0o444))
             stage.rename(target)
             return target
         finally:
@@ -179,7 +190,7 @@ class Deployment:
         allowed = (self.home / '.local/bin', self.home / '.local/share/mintbook/control-center/plugins',
                    self.home / '.config/systemd/user', self.home / '.config/autostart', self.home / '.config/xfce4/panel')
         for target in manifest['targets'].values():
-            if not any(Path(target).is_relative_to(parent) for parent in allowed):
+            if not any(Path(os.path.abspath(target)).is_relative_to(parent) for parent in allowed):
                 raise ValueError('release target leaves desktop installation paths')
         for name, expected in manifest['files'].items():
             path = release / name
@@ -212,13 +223,15 @@ class Deployment:
         atomic_text(self.state, json.dumps(data, indent=2))
         return data
 
-    def activate(self, release, data=None):
+    def activate(self, release, data=None, update_manager=True):
         self.validate(release)
         data = self.snapshot() if data is None else data
         previous = self.current.resolve() if self.current.exists() else self.releases / data['baseline']
         # On the first migration all bridges point at the prepared baseline.
         # Subsequent releases change one symlink; targets never point at Git.
         if not self.current.exists(): atomic_link(self.current, previous)
+        if not self.manager.exists(): atomic_link(self.manager, previous)
+        if update_manager: atomic_link(self.manager, release)
         destinations = self.destinations(release)
         if self.current.exists():
             for relative, path in self.destinations(self.current.resolve()).items():
@@ -229,11 +242,13 @@ class Deployment:
         for relative, path in destinations.items():
             if str(path) not in known:
                 data['files'].append({'relative': relative, 'path': str(path), 'present': path.exists() or path.is_symlink()})
-            atomic_link(path, self.current / relative)
+            bridge = self.manager if relative in ('bin/desktop-install', 'bin/mintbook_deploy.py', 'bin/panel-session') else self.current
+            atomic_link(path, bridge / relative)
         atomic_link(self.current, release)
         if previous != release:
             data['previous'] = previous.name
         data['current'] = release.name
+        data['manager'] = self.manager.resolve().name
         atomic_text(self.state, json.dumps(data, indent=2))
         return previous
 
@@ -251,7 +266,7 @@ class Deployment:
                              if value[0] == 'v2' else int(value[0]) >= time.time())
                     ok = (fresh
                           and Path(report['release']).resolve() == self.current.resolve())
-                except (OSError, ValueError, KeyError):
+                except (OSError, ValueError, KeyError, IndexError, TypeError):
                     ok = False
             if ok: return
             time.sleep(.2)
@@ -263,6 +278,7 @@ class Deployment:
             raise RuntimeError('run desktop-install from the matching XFCE session')
         data = self.snapshot()
         previous = self.current.resolve() if self.current.exists() else self.releases / data['baseline']
+        old_manager = self.manager.resolve() if self.manager.exists() else previous
         self.panel.stop()
         try:
             if feature:
@@ -289,7 +305,8 @@ class Deployment:
             return release
         except BaseException:
             self.panel.stop()
-            self.activate(previous, data)
+            atomic_link(self.manager, old_manager)
+            self.activate(previous, data, update_manager=False)
             run('systemctl', '--user', 'daemon-reload')
             self.panel.start()
             raise
@@ -304,14 +321,14 @@ class Deployment:
         self.panel = load_panel(self.root)
         self.panel.stop()
         try:
-            self.activate(release, data)
+            self.activate(release, data, update_manager=False)
             run('systemctl', '--user', 'daemon-reload')
             self.panel.start()
             self.verify()
             return release
         except BaseException:
             self.panel.stop()
-            self.activate(original, data)
+            self.activate(original, data, update_manager=False)
             run('systemctl', '--user', 'daemon-reload')
             self.panel.start()
             raise
