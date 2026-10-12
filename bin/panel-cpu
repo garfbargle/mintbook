@@ -299,7 +299,7 @@ def ensure_watcher():
     global WATCH_CHILD
     if WATCH_CHILD is not None and WATCH_CHILD.poll() is not None:
         WATCH_CHILD = None
-    if not os.access(WATCHER, os.X_OK):
+    if not os.environ.get('DISPLAY') or not os.access(WATCHER, os.X_OK):
         return
     watchers = []
     stamp = 0

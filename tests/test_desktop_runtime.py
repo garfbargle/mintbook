@@ -103,6 +103,15 @@ class ReleaseTests(unittest.TestCase):
         release = self.deployment.build()
         self.assertEqual((release / 'control-center/plugins/90-private').stat().st_mode & 0o777, 0o500)
 
+    def test_audio_watcher_dropin_uses_a_stable_installed_entry_point(self):
+        helper = self.source / 'bin/mb81-jack-switch'; helper.write_text('#!/usr/bin/env python3\nprint("same helper")\n'); helper.chmod(0o755)
+        dropin = self.home / '.config/systemd/user/mb81-jack-switch.service.d/override.conf'
+        dropin.parent.mkdir(parents=True); dropin.write_text('[Service]\nExecStart=\nExecStart=/old/checkout/bin/mb81-jack-switch\n')
+        release = self.deployment.build()
+        path = release / 'config/systemd/user-overrides/mb81-jack-switch.service.d/override.conf'
+        self.assertIn(str(self.home / '.local/bin/mb81-jack-switch'), path.read_text())
+        self.assertIn('bin/mb81-jack-switch', self.deployment.destinations(release))
+
     def test_unknown_local_plugin_is_preserved(self):
         path = self.home / '.local/share/mintbook/control-center/plugins/90-custom'
         path.parent.mkdir(parents=True); path.write_text('#!/bin/sh\necho local\n'); path.chmod(0o755)

@@ -12,6 +12,8 @@ import time
 
 TREES = ('bin', 'icons', 'config', 'control-center', 'vendor')
 CORE = {'desktop-install', 'desktop-status', 'panel-read', 'panel-session', 'mintbook_deploy.py'}
+MANAGED = {'bin/desktop-install', 'bin/mintbook_deploy.py', 'bin/panel-session',
+           'bin/mb81-jack-switch', 'config/systemd/user-overrides/mb81-jack-switch.service.d/override.conf'}
 STATUS_NAMES = {'cpu', 'temp', 'wifi', 'bt', 'battery', 'system', 'control', 'overview'}
 
 
@@ -84,6 +86,9 @@ class Deployment:
         for path in (self.home / '.config/systemd/user').glob('mintbook-*'):
             if path.is_file() and (self.root / 'config/systemd' / path.name).is_file():
                 result['config/systemd/' + path.name] = path
+        jack = self.home / '.config/systemd/user/mb81-jack-switch.service.d/override.conf'
+        if jack.is_file():
+            result['config/systemd/user-overrides/mb81-jack-switch.service.d/override.conf'] = jack
         for path in (self.home / '.config/autostart').glob('mintbook-*'):
             if path.is_file() and (self.root / 'config/autostart' / path.name).is_file():
                 result['config/autostart/' + path.name] = path
@@ -117,6 +122,13 @@ class Deployment:
         for relative, path in installed.items():
             data = path.read_bytes()
             mode = path.stat().st_mode & 0o777
+            if relative == 'config/systemd/user-overrides/mb81-jack-switch.service.d/override.conf':
+                rows = data.decode().splitlines()
+                for i, row in enumerate(rows):
+                    if row.startswith('ExecStart=') and 'mb81-jack-switch' in row:
+                        rows[i] = 'ExecStart=' + str(self.home / '.local/bin/mb81-jack-switch')
+                files[relative] = (('\n'.join(rows) + '\n').encode(), mode)
+                continue
             # Preserve actual rc layout/fonts/periods; source templates are not
             # the user's configuration. The command is transformed below.
             if relative.startswith('config/xfce4-panel/'):
@@ -202,6 +214,8 @@ class Deployment:
 
     def target_paths(self, files):
         result = self.installed_paths()
+        if 'config/systemd/user-overrides/mb81-jack-switch.service.d/override.conf' in files:
+            result['bin/mb81-jack-switch'] = self.home / '.local/bin/mb81-jack-switch'
         for name in CORE:
             result['bin/' + name] = self.home / '.local/bin' / name
         result['config/systemd/mintbook-panel.service'] = self.home / '.config/systemd/user/mintbook-panel.service'
@@ -233,6 +247,11 @@ class Deployment:
         if not self.manager.exists(): atomic_link(self.manager, previous)
         if update_manager: atomic_link(self.manager, release)
         destinations = self.destinations(release)
+        # Lifecycle management and migrated hardware entry points stay on the
+        # newest manager while UI/sampler releases can roll backward.
+        for name, target in self.destinations(self.manager.resolve()).items():
+            if name in MANAGED:
+                destinations[name] = target
         if self.current.exists():
             for relative, path in self.destinations(self.current.resolve()).items():
                 if relative not in destinations and path.is_symlink():
@@ -242,7 +261,7 @@ class Deployment:
         for relative, path in destinations.items():
             if str(path) not in known:
                 data['files'].append({'relative': relative, 'path': str(path), 'present': path.exists() or path.is_symlink()})
-            bridge = self.manager if relative in ('bin/desktop-install', 'bin/mintbook_deploy.py', 'bin/panel-session') else self.current
+            bridge = self.manager if relative in MANAGED else self.current
             atomic_link(path, bridge / relative)
         atomic_link(self.current, release)
         if previous != release:
@@ -279,6 +298,8 @@ class Deployment:
         data = self.snapshot()
         previous = self.current.resolve() if self.current.exists() else self.releases / data['baseline']
         old_manager = self.manager.resolve() if self.manager.exists() else previous
+        jack = self.home / '.config/systemd/user/mb81-jack-switch.service.d/override.conf'
+        migrate_jack = jack.exists() and str(self.home / '.local/bin/mb81-jack-switch') not in jack.read_text()
         self.panel.stop()
         try:
             if feature:
@@ -302,6 +323,8 @@ class Deployment:
             run('systemctl', '--user', 'daemon-reload')
             self.panel.start()
             self.verify()
+            if migrate_jack:
+                run('systemctl', '--user', 'try-restart', 'mb81-jack-switch.service')
             return release
         except BaseException:
             self.panel.stop()
