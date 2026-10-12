@@ -1559,7 +1559,7 @@ row menus and System. System labels the age of health checks and avoids calling
 an old update check current. No new UI framework, compositor or root daemon is
 introduced.
 
-Validation on October 12: **384 tests pass**, including a real private D-Bus
+Validation on October 12: **385 tests pass**, including a real private D-Bus
 integration test. On that bus, twenty irrelevant network-counter events produced
 no additional reads; a strength change produced one refresh; a resume event
 replaced old CPU baselines; ending a disposable session process removed the
@@ -1606,3 +1606,14 @@ than assuming the panel's native 2304×1440 resolution. The current 1920×1200
 session correctly reserves 52 pixels, with a 1920×1148 work area; a missing strut
 still fails the check. Final validation reports **96 passed, 2 notes, no failures**.
 The install manager also rejects malformed shell payloads before switching code.
+
+The real `desktop-install --feature cpu-install` path was exercised after
+migration. Refresh is deferred while maintenance owns the panel: invoking the
+legacy genmon event command with no panel could otherwise start a foreground
+panel and prevent the installer returning. A regression test uses an invalid
+X display to prove no panel launch is attempted. Maintenance commands and feature
+runs have a two-minute outer budget, with restoration on timeout. Feature builds
+from the installed manager inherit its source commit provenance rather than
+being mislabeled as an untraceable local release. The temporary QA idle inhibitors
+have been released; normal idle behavior and the user's Keep Awake setting are
+preserved.
