@@ -328,8 +328,9 @@ def ensure_watcher():
         pass
     # Popen performs the exec without running Python callbacks after fork;
     # the collector also has worker/GIO threads, unlike a genmon one-shot.
+    env = {key: value for key, value in os.environ.items() if key not in ('NOTIFY_SOCKET', 'WATCHDOG_USEC', 'WATCHDOG_PID')}
     WATCH_CHILD = subprocess.Popen([WATCHER, 'watch'], start_new_session=True,
-        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
 
 
 def emit(pct):

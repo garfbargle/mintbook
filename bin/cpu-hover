@@ -32,6 +32,7 @@ install and nothing to clean up when the panel restarts. See docs/desktop.md.
 """
 import os
 import signal
+import shlex
 import socket
 import subprocess
 import sys
@@ -68,7 +69,13 @@ def plugin_id():
                 body = handle.read()
         except OSError:
             continue
-        if 'panel-cpu' in body:
+        command = next((row.partition('=')[2].strip() for row in body.splitlines() if row.startswith('Command=')), '')
+        try:
+            argv = shlex.split(command)
+        except ValueError:
+            continue
+        executable = os.path.basename(argv[0]) if argv else ''
+        if executable == 'panel-cpu' or (executable == 'panel-read' and argv[1:] == ['cpu']):
             try:
                 return int(name[len('genmon-'):-len('.rc')])
             except ValueError:

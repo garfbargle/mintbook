@@ -131,6 +131,13 @@ class WatcherTests(unittest.TestCase):
             hover.PANEL_RC = d
             self.assertEqual(hover.plugin_id(), 19)
 
+    def test_cached_cpu_widget_is_found_by_its_command(self):
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, 'genmon-9.rc').write_text('Command=/x/panel-read wifi\n')
+            Path(d, 'genmon-33.rc').write_text('Command=/x/panel-read cpu\n')
+            hover.PANEL_RC = d
+            self.assertEqual(hover.plugin_id(), 33)
+
     def test_no_cpu_widget_is_zero_not_a_guess(self):
         with tempfile.TemporaryDirectory() as d:
             Path(d, 'genmon-17.rc').write_text('Command=/x/panel-temp\n')

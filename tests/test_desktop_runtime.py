@@ -168,6 +168,15 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual({call.args[0] for call in collector.request.call_args_list}, {'wifi', 'bt'})
         self.assertEqual(collector.request.call_count, 2)
 
+    def test_network_byte_counters_do_not_trigger_status_reads(self):
+        collector = status.Collector.__new__(status.Collector); collector.schedule = Mock()
+        collector.bus_event(None, None, None, None, None,
+                            NS(unpack=lambda: ('Device.Statistics', {'RxBytes': 10}, [])), {'wifi'})
+        collector.schedule.assert_not_called()
+        collector.bus_event(None, None, None, None, None,
+                            NS(unpack=lambda: ('Device.Wireless', {'Strength': 80}, [])), {'wifi'})
+        collector.schedule.assert_called_once_with({'wifi'})
+
     def test_inflight_updates_keep_one_pending_sample(self):
         collector = status.Collector.__new__(status.Collector)
         collector.closed = False; collector.inflight = {'battery'}; collector.pending = {}

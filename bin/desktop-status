@@ -58,8 +58,9 @@ def read_backend(name, render_only=False):
     if name == 'battery' and render_only:
         args.append('--render')
     try:
+        env = {key: value for key, value in os.environ.items() if key not in ('NOTIFY_SOCKET', 'WATCHDOG_USEC', 'WATCHDOG_PID')}
         result = subprocess.run(args, capture_output=True, text=True, timeout=10,
-                                stdin=subprocess.DEVNULL)
+                                stdin=subprocess.DEVNULL, env=env)
         if result.returncode or not result.stdout.strip():
             raise RuntimeError(result.stderr.strip() or 'no status returned')
         return result.stdout, None
@@ -171,7 +172,17 @@ class Collector:
         return False
 
     def bus_event(self, _connection, sender, path, interface, signal_name, args, names):
-        self.schedule(names)
+        wanted = {'wifi': {'WirelessEnabled', 'Connectivity', 'State', 'ActiveAccessPoint', 'Strength', 'Ssid', 'Interface', 'PrimaryConnection', 'ActiveConnections'},
+                  'bt': {'Powered', 'Connected', 'Alias', 'Name', 'Address'},
+                  'battery': {'Percentage', 'State', 'EnergyRate', 'TimeToEmpty', 'TimeToFull', 'IsPresent', 'OnBattery'}}
+        try:
+            _iface, changed, invalidated = args.unpack()
+            keys = set(changed) | set(invalidated)
+        except (AttributeError, ValueError, TypeError):
+            return
+        relevant = {name for name in names if keys & wanted.get(name, set())}
+        if relevant:
+            self.schedule(relevant)
 
     def sleep_event(self, _connection, _sender, _path, _interface, _signal, args, _data):
         if not args.unpack()[0]:
