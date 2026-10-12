@@ -12,6 +12,10 @@ problems:
 `bin/input-check` reports all three. `sudo bin/input-install` copies the quirk and
 blacklist (if missing), and selects the working sleep mode.
 
+**Scrolling and key repeat:** `bin/input-feel` applies calmer user preferences
+immediately, saves them for future XFCE logins, and records the original settings
+for undo. No sudo or logout is needed. See [Scrolling and held keys](#4-scrolling-and-held-keys).
+
 **Two different failures look identical from the chair: no keyboard, no trackpad.**
 They are told apart by `using PIO` and by whether the machine slept —
 `bin/input-check --history` now prints a `SLEPT` column for exactly this reason.
@@ -501,3 +505,61 @@ To undo, delete `/etc/libinput/local-overrides.quirks` and log out again.
 - **Force Touch / haptic click.** There is no Linux haptic actuator path for this
   pad. Clickfinger (two-finger right-click) is the libinput default and is what is
   on.
+
+---
+
+## 4. Scrolling and held keys
+
+On 2026-10-12 the user reported that trackpad scrolling jumped too far and keys
+repeated too easily. The live session had scroll distance **15**, repeat delay
+**200 ms**, and repeat rate **40/second**. The keyboard values came from the
+earlier [perceived-speed experiment](feel.md#ranked-candidates).
+
+`bin/input-feel` changes these to **30**, **600 ms**, and **25/second**. Doubling
+the scroll distance halves the logical scroll delta for the same finger movement,
+including fractional smooth-scroll events. A held key now waits three times as
+long before repeating and repeats more slowly. These are a starting preference,
+not a measurement of subjective feel or a reproduction of macOS scrolling.
+
+```bash
+bin/input-feel
+bin/input-feel --check
+```
+
+Keyboard settings persist in XFCE's `keyboards` channel. The scroll setting is
+applied directly with `xinput` and saved as a one-time login command in
+`~/.config/autostart/mintbook-input-feel.desktop`. It launches no resident process
+and contains the preference directly, so it does not depend on a checkout or a
+desktop release. This command changes preferences only; it installs no desktop
+code and does not require a desktop release activation.
+
+**Why not the `pointers` channel?** Tested signed and unsigned values on this
+machine: XFCE 4.18.4 saved both but applied neither. Its
+[pointer helper](https://github.com/xfce-mirror/xfce4-settings/blob/xfce4-settings-4.18.4/xfsettingsd/pointers.c#L727)
+does not support the X11 `CARDINAL` type of `libinput Scrolling Pixel Distance`.
+`xinput set-prop` does. No incompatible `pointers` override is left installed.
+
+Further tuning retains the original undo snapshot:
+
+```bash
+bin/input-feel --scroll-distance 40 --delay 700 --rate 20
+bin/input-feel --revert
+```
+
+A larger scroll distance is slower; a larger delay gives more time before repeat;
+a smaller rate repeats more slowly. The first snapshot is kept in
+`~/.config/mintbook/input-feel.json`. Revert restores both live settings and the
+original keyboard overrides and login file (including absence or a symlink).
+Tap-to-click, natural scrolling, pointer acceleration and the existing input
+hardware fixes are independent of these preferences.
+
+Verification on 2026-10-12: live reads confirmed **30 / 600 / 25**, the login file
+passed `desktop-file-validate`, and applying, reverting and reapplying restored
+the exact original **15 / 200 / 40** before leaving the calmer values active.
+Regression tests cover reruns, partial failures, absent overrides, original
+login files/symlinks, and read-only checks. A future login was not exercised.
+Applications choose how to animate scroll events and whether to provide momentum
+after finger release; this adjustment reduces sensitivity without adding global
+inertial scrolling. An application already open during a change may need reopening
+if it caches the scroll increment. Neither a new kernel nor another input driver
+is needed.
