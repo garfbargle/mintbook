@@ -302,6 +302,7 @@ def ensure_watcher():
     if not os.access(WATCHER, os.X_OK):
         return
     watchers = []
+    stamp = 0
     try:
         stamp = os.stat(WATCH_PID).st_mtime
         with open(WATCH_PID) as f:
@@ -312,7 +313,7 @@ def ensure_watcher():
                 and len(wrappers) == 1 and wrapper_matches(wrappers[0])):
             return
     except (OSError, ValueError, IndexError):
-        stamp = 0
+        pass  # retain the failed attempt timestamp, including an empty pidfile
     for pid in watchers:
         if not watcher_matches(pid):
             continue

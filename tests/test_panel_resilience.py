@@ -141,6 +141,15 @@ class StaleWatcherTests(unittest.TestCase):
             bar.ensure_watcher()
         kill.assert_not_called()
 
+    def test_failed_empty_pidfile_obeys_retry_backoff(self):
+        with patch('builtins.open', mock_open(read_data='')), \
+                patch.object(bar.os, 'stat') as stat, \
+                patch.object(bar.os, 'access', return_value=True), \
+                patch.object(bar.subprocess, 'Popen') as spawn:
+            stat.return_value.st_mtime = bar.time.time()
+            bar.ensure_watcher()
+        spawn.assert_not_called()
+
     def test_negative_pid_never_signals_a_process_group(self):
         self.assertFalse(bar.watcher_matches(-1))
         with patch('builtins.open', mock_open(read_data='-1 0 1\n')), \
