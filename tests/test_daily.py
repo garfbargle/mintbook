@@ -398,5 +398,30 @@ class DailyTests(unittest.TestCase):
             finally:
                 server.close()
 
+    def test_all_gtk_surfaces_set_adwaita_and_popups_use_workarea(self):
+        for name in ('control-center', 'system-menu', 'cpu-menu', 'battery-menu',
+                     'wifi-menu', 'bt-menu', 'updates-menu', 'app-grid',
+                     'login-settings', 'mintbook-health', 'battery-history',
+                     'mintdrop-menu', 'mintdrop-accept', 'hud-notify',
+                     'screenshot', 'screenshot-notify'):
+            source = (ROOT / 'bin' / name).read_text()
+            self.assertIn('Adwaita', source, name)
+        for popup in ('control-center', 'system-menu', 'cpu-menu', 'battery-menu',
+                      'wifi-menu', 'bt-menu', 'updates-menu'):
+            source = (ROOT / 'bin' / popup).read_text()
+            self.assertIn('get_workarea()', source, popup)
+
+    def test_screenshot_notify_prefers_glass_toast_and_falls_back_cleanly(self):
+        sn = load('screenshot-notify')
+        with tempfile.TemporaryDirectory() as tmp:
+            img = Path(tmp) / 'shot.png'
+            img.write_bytes(b'png')
+            with (patch.object(sn, 'sys', NS(argv=['screenshot-notify', str(img)], stderr=sn.sys.stderr)),
+                  patch.object(sn, 'show_toast', return_value=True) as toast,
+                  patch.object(sn.subprocess, 'run') as notify_run):
+                sn.main()
+                toast.assert_called_once_with(img.resolve())
+                notify_run.assert_not_called()
+
 if __name__ == '__main__':
     unittest.main()

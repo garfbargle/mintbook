@@ -371,7 +371,16 @@ class Window:
         box.pack_start(self.area, False, False, 0)
         win.add(box)
         self.relayout()
+        Gtk.Widget.set_opacity(win, 0.0)
         win.show_all()
+        t0 = time.monotonic()
+
+        def fade():
+            f = min(1.0, (time.monotonic() - t0) / 0.095)
+            Gtk.Widget.set_opacity(win, f * f * (3 - 2 * f))
+            return f < 1.0
+
+        GLib.timeout_add(16, fade)
         self.recheck()
 
     # ------------------------------------------------------------ the numbers

@@ -8,6 +8,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 
 # Adwaita before the Gtk import, for the reason bin/control-center and
 # bin/bt-menu give: Gtk.init parses the GTK theme, WhiteSur's gtk.css is
@@ -473,9 +474,18 @@ class AppGrid:
         self.grouped_apps = self.group_applications(self.applications())
         self.populate_flow(None)
 
+        Gtk.Widget.set_opacity(self.win, 0.0)
         self.win.show_all()
         self.win.present()
         self.win.grab_focus()
+        t0 = time.monotonic()
+
+        def fade():
+            f = min(1.0, (time.monotonic() - t0) / 0.095)
+            Gtk.Widget.set_opacity(self.win, f * f * (3 - 2 * f))
+            return f < 1.0
+
+        GLib.timeout_add(16, fade)
 
     @staticmethod
     def applications():

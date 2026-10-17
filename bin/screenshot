@@ -23,6 +23,8 @@ xfce4-screenshooter "$mode" -s "$file"
 # Camera-style full-screen white flash. Override-redirect so xfwm4 does not
 # animate a fullscreen transition; 160ms then gone. Failures must not undo the save.
 python3 - <<'PY' || true
+import os
+os.environ.setdefault("GTK_THEME", "Adwaita")
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GLib, Gdk

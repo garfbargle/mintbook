@@ -8,7 +8,8 @@ import sys
 ROOT = Path(__file__).resolve().parent.parent
 FILES = ('control-center', 'wifi-menu', 'bt-menu', 'battery-menu', 'battery-history',
          'updates-menu', 'mintbook-health', 'system-menu', 'cpu-menu',
-         'hud-notify', 'mintdrop-menu', 'mintdrop-accept', 'login-settings')
+         'hud-notify', 'mintdrop-menu', 'mintdrop-accept', 'login-settings',
+         'screenshot-notify')
 ALIASES = {'accent': 'Blue'}
 
 

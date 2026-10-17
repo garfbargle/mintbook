@@ -1140,8 +1140,10 @@ latter would cost heat on this fanless Core M).
 - Geometry from `Gdk.Display.get_primary_monitor()`, not deprecated
   `Gdk.Screen.get_width()`.
 
-No shutter sound. `xclip` is still not installed; nothing is copied to the
-clipboard.
+After the flash, [`bin/screenshot-notify`](../bin/screenshot-notify) presents a
+floating Cairo glass thumbnail toast in the bottom-right corner of the workarea
+with **Copy** (owning `CLIPBOARD` via GTK until another owner replaces it) and
+**Open** actions, auto-dismissing after 5.5 seconds when not hovered.
 
 #### Why the first bind did nothing (two independent bugs)
 

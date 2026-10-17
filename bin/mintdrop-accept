@@ -17,6 +17,7 @@ import argparse
 import math
 import os
 import sys
+import time
 
 # Adwaita before the Gtk import, for the reason bin/control-center and
 # bin/bt-menu give: Gtk.init parses the GTK theme, WhiteSur's gtk.css is
@@ -248,6 +249,7 @@ def main():
 
     win.connect('key-press-event', on_key)
     win.connect('destroy', lambda *_: answer_with(DECLINE))
+    Gtk.Widget.set_opacity(win, 0.0)
     win.show_all()
     accept.grab_focus()
     win.present()
@@ -257,6 +259,14 @@ def main():
     gdk_win = win.get_window()
     if gdk_win is not None:
         gdk_win.focus(GLib.get_monotonic_time() // 1000 & 0xffffffff)
+    t0 = time.monotonic()
+
+    def fade():
+        f = min(1.0, (time.monotonic() - t0) / 0.095)
+        Gtk.Widget.set_opacity(win, f * f * (3 - 2 * f))
+        return f < 1.0
+
+    GLib.timeout_add(16, fade)
 
     Gtk.main()
     return answer['value']

@@ -884,6 +884,7 @@ class Menu:
     # ---- window
 
     def place(self, px, py):
+        self.anchor = (int(px), int(py))
         win = self.win
         win.realize()
         gdk_win = win.get_window()
@@ -894,13 +895,19 @@ class Menu:
         display = Gdk.Display.get_default()
         monitor = (display.get_monitor_at_point(px, py)
                    or display.get_primary_monitor())
-        geo = monitor.get_geometry()
+        work = monitor.get_workarea()
         edge = round(SHADOW * SC)
-        x = int(px - w + edge + round(24 * SC))
-        x = max(geo.x + 2, min(x, geo.x + geo.width - w + edge - 4))
-        y = 52 - edge + 4 if py < 64 else int(py) - edge + 8
-        if y + h > geo.y + geo.height:
-            y = geo.y + geo.height - h
+        left = work.x - edge + 4
+        right = work.x + work.width - w + edge - 4
+        x = max(left, min(int(px - w + edge + round(24 * SC)), right))
+        top = work.y - edge + 4
+        bottom = work.y + work.height - h + edge - 4
+        if py < work.y + round(32 * SC):
+            y = top
+        elif py > work.y + work.height - round(32 * SC):
+            y = bottom
+        else:
+            y = max(top, min(int(py) - edge + 8, bottom))
         win.move(x, y)
         # Gtk.Widget.set_opacity, not win.set_opacity: Gtk.Window overrides it
         # with a deprecated variant, and PyGObject picks the override, so every
