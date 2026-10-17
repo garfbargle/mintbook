@@ -306,10 +306,14 @@ class Window:
     BAR_Y, BAR_H = 154, 26
 
     def __init__(self):
-        try:
-            mode = APPLIED.read_text().strip()
-        except OSError:
-            mode = 'light'
+        override = os.environ.get('MINTBOOK_PREVIEW_APPEARANCE')
+        if override in ('light', 'dark'):
+            mode = override
+        else:
+            try:
+                mode = APPLIED.read_text().strip()
+            except OSError:
+                mode = 'light'
         self.colors = DARK if mode == 'dark' else LIGHT
         self.content_w = W - 2 * PAD
         self.state = load()
@@ -985,7 +989,10 @@ class Window:
 
 def show():
     global Gtk, Gdk, GLib, Pango, PangoCairo, cairo, math, SC
+    import importlib.machinery
+    import importlib.util
     import math
+    import signal
     import gi
     gi.require_version('Gtk', '3.0')
     gi.require_version('PangoCairo', '1.0')
@@ -993,10 +1000,20 @@ def show():
     from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo
     if Gdk.Screen.get_default() is None:
         raise SystemExit('No desktop display.')
-    SC = round((Gdk.Screen.get_default().get_resolution() or 96) / 96.0, 3) or 1.0
+    loader = importlib.machinery.SourceFileLoader(
+        'mintbook_instance', str(Path(__file__).resolve().parent / 'mintbook_instance.py'))
+    instance = importlib.util.module_from_spec(
+        importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(instance)
+    pidfile = Path.home() / '.cache/mintbook/mintbook-health.pid'
+    if not instance.claim(str(pidfile), 'mintbook-health', signal.SIGTERM):
+        raise SystemExit(0)
+    SC = float(os.environ.get('MINTBOOK_SCALE', 0)) or round((Gdk.Screen.get_default().get_resolution() or 96) / 96.0, 3) or 1.0
     Gdk.set_program_class('mintbook-health')
-    Window()
+    win = Window()
+    signal.signal(signal.SIGTERM, lambda *_: GLib.idle_add(Gtk.main_quit))
     Gtk.main()
+    pidfile.unlink(missing_ok=True)
 
 
 # GTK_THEME before the Gtk import, because Gtk.init is what reads it. WhiteSur's

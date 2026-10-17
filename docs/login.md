@@ -63,7 +63,7 @@ neither is anybody's business but this program's:
 
 | | |
 |---|---|
-| [`bin/login-settings`](../bin/login-settings) | The window. Cairo on the popup glass, like Control Center |
+| [`bin/login-settings`](../bin/login-settings) | The window. Cairo on the popup glass with soft multi-ring drop shadow, specular rim, header drag, hover states, and smooth scroll, managed by `bin/palette-generate` |
 | [`bin/login-apply`](../bin/login-apply) | The root half, installed as `/usr/local/sbin/mintbook-login-apply` |
 | [`config/polkit/org.mintbook.login.policy`](../config/polkit/org.mintbook.login.policy) | The action pkexec authorises, by path |
 | [`config/polkit/10-mintbook-login.rules`](../config/polkit/10-mintbook-login.rules) | Admin, local, active — no password on every click |
