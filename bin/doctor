@@ -60,11 +60,16 @@ check "settle timer" "mintbook-power-settle.timer" systemctl is-enabled mintbook
 check "tmpfiles" "/etc/tmpfiles.d/mintbook-power.conf" have /etc/tmpfiles.d/mintbook-power.conf
 AC=$(cat /sys/class/power_supply/ADP1/online 2>/dev/null || echo 1)
 PCT=$(cat /sys/devices/system/cpu/intel_pstate/max_perf_pct 2>/dev/null || echo '?')
-# bin/input-boost holds the cap at 100 for two seconds after a key press, and
-# starting this was one. Let the boost run out before judging the cap.
-if [ "$PCT" = 100 ] && pgrep -f bin/input-boost >/dev/null 2>&1; then
-  sleep 2.5
-  PCT=$(cat /sys/devices/system/cpu/intel_pstate/max_perf_pct 2>/dev/null || echo '?')
+# bin/input-boost holds the cap at 100 for 2 s after a key/button press (up to
+# 8 s MAXBOOST while typing or clicking). Let an active boost run out first.
+if [ "$PCT" = 100 ] && pgrep -f input-boost >/dev/null 2>&1; then
+  for _ in 1 2 3 4; do
+    sleep 2.2
+    PCT=$(cat /sys/devices/system/cpu/intel_pstate/max_perf_pct 2>/dev/null || echo '?')
+    [ "$PCT" != 100 ] && break
+    AGE=$(( $(date +%s) - $(stat -c %Y /sys/devices/system/cpu/intel_pstate/max_perf_pct 2>/dev/null || echo 0) ))
+    [ "$AGE" -gt 9 ] && break
+  done
 fi
 PROF=$(powerprofilesctl get 2>/dev/null || echo '?')
 if [ "$AC" = 1 ]; then WANT_PCT=100 WANT_PROF=balanced; else WANT_PCT=70 WANT_PROF=power-saver; fi

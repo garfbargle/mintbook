@@ -18,10 +18,11 @@ SCRIPTS = ('overview', 'spotlight', 'spotlight-actions', 'keep-awake', 'screensh
            'window-place', 'mintbook-health', 'doctor', 'control-center', 'system-menu', 'wifi-menu', 'bt-menu',
            'battery-menu', 'battery-history', 'sleep-report', 'updates-menu',
            'cpu-menu', 'panel-cpu', 'mintbook_cpu.py', 'mintbook_keys.py',
-           'session-logout', 'mintbook_instance.py', 'revert-mac-theme', 'input-boost')
+           'session-logout', 'mintbook_instance.py', 'revert-mac-theme', 'input-boost',
+           'input-feel', 'hud-notify')
 PLUGINS = ()
 UNIT = 'mintbook-health.timer'
-KEYS = {'<Super>Left': 'left', '<Super>Right': 'right', '<Super>Down': 'restore'}
+KEYS = {'<Super>Left': 'left', '<Super>Right': 'right', '<Super>Up': 'full', '<Super>Down': 'restore'}
 # The two ways to reach the login screen, where macOS keeps them. The lower
 # case `q` is not a typo and was not a guess: bound both ways and pressed,
 # `<Shift><Super>q` fires and `<Shift><Super>Q` does not — unlike the shifted
@@ -189,7 +190,7 @@ def install():
         run('xfconf-query', '-c', channel, '-p', prop, *args)
     run('systemctl', '--user', 'daemon-reload')
     run('systemctl', '--user', 'enable', '--now', UNIT)
-    print('Installed. Cmd+Space opens Overview; Cmd+Left/Right places windows; Cmd+Down restores.')
+    print('Installed. Cmd+Space opens Overview; Cmd+Left/Right/Up places windows; Cmd+Down restores.')
     print('Ctrl+Cmd+Q locks the screen; Cmd+Shift+Q logs out.')
     print('Keep Awake and Doctor are available from the System tray menu.')
     print(f'Undo: {ROOT}/bin/daily-install --revert')

@@ -959,6 +959,8 @@ class Menu:
             edge = round(SHADOW * SC)
             if not (edge < e.x < w - edge and edge < e.y < h - edge):
                 self.close()
+                from mintbook_instance import bar_handoff
+                bar_handoff(e, 'cpu-menu')
                 return True
             return False
         self.win.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)

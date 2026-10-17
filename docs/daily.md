@@ -12,8 +12,8 @@ backup files are retained in `~/.local/state/mintbook/daily-before-*`.
 ## Overview actions
 
 Cmd+Space combines rofi's application mode with a curated script mode. Search
-for `dark`, `Bluetooth`, `battery history`, `health`, `updates`, `keep awake` or
-`sleep check`.
+for `dark`, `Night Light`, `Mintdrop`, `input feel`, `Bluetooth`, `battery history`,
+`health`, `updates`, `keep awake` or `sleep check`.
 The app grid's first-keystroke handoff seeds the same combined search.
 
 `bin/spotlight-actions` supplies Overview's labels, keywords and fixed IDs. Selection launches
@@ -44,7 +44,14 @@ The state is in the user runtime directory, uses monotonic time, and verifies
 process start identity to reject stale PIDs. There is no permanent awake daemon.
 `keep-awake off` restores normal behavior immediately.
 
-## Screenshots and windows
+## Hardware HUD, screenshots and windows
+
+Volume, mute, microphone mute (`bin/volume-key`) and display brightness keys
+(`bin/backlight-curve step`) share [`bin/hud-notify`](../bin/hud-notify): a
+transient, click-through Cairo glass pill centered near the bottom of the active
+monitor. Repeat keypresses update the visible pill over a UNIX datagram socket
+in `$XDG_RUNTIME_DIR/mintbook-hud.sock` (~1 ms per repeat) and reset its 1.35 s
+fade timer; when the fade finishes, the process exits so nothing stays resident.
 
 Screenshot shortcuts keep their existing save behavior and flash. Afterward a
 notification offers **Copy** (an actual PNG image on the clipboard) and **Open**.
@@ -53,13 +60,20 @@ one, its owner stays for up to ten minutes or until another copy replaces it.
 Notification failure cannot undo the saved screenshot. Filenames include
 nanoseconds to avoid collisions between quick captures.
 
-Cmd+Left and Cmd+Right place the active window in half of its monitor's work area.
+Cmd+Left and Cmd+Right place the active window in half of its monitor's work area,
+and Cmd+Up fills the work area without entering fullscreen.
 Cmd+Down restores the original geometry, including a previously maximized state.
-Switching sides retains that original geometry. Fullscreen and desktop/dock
+Switching between halves or full work area retains that original geometry. Fullscreen and desktop/dock
 windows are left alone. Restored geometry is clamped to the current monitor if a
 monitor has gone away. Apps' own minimum-size constraints can prevent exact halves.
 
-## Keyboard menus
+## Keyboard menus and bar scrubbing
+
+Clicking another top-bar indicator while a bar popup (`control-center`, `system-menu`,
+`battery-menu`, `cpu-menu`, `wifi-menu`, `bt-menu`, `updates-menu`) is open closes
+the current popup and opens the clicked neighbor in one click, passing the click
+coordinates via `MINTBOOK_ANCHOR`. Clicking the same icon closes the popup without
+reopening it.
 
 Control Center: Tab and Shift+Tab move between controls, including a toggle's
 separate detail chevron. Enter/Space activates; arrows change options and sliders;

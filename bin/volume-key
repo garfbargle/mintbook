@@ -20,28 +20,41 @@ case "${1:-show}" in
   *) echo "usage: $(basename "$0") up|down|mute|mic" >&2; exit 2 ;;
 esac
 
+HERE="$(cd "$(dirname "$0")" && pwd)"
+HUD="$HOME/.local/bin/hud-notify"
+[ -x "$HUD" ] || HUD="$HERE/hud-notify"
+
 if [ "${1:-show}" = mic ]; then
   read -r _ _ m <<< "$(wpctl get-volume @DEFAULT_AUDIO_SOURCE@ 2>/dev/null)"
   [ "$m" = '[MUTED]' ] \
-    && icon=microphone-sensitivity-muted title='Microphone off' \
-    || icon=audio-input-microphone       title='Microphone on'
-  notify-send -h string:x-canonical-private-synchronous:mintbook-volume \
-    -i "$icon" "$title"
+    && icon=microphone-sensitivity-muted title='Microphone off' kind=mic-off \
+    || icon=audio-input-microphone       title='Microphone on'  kind=mic
+  if [ -n "${DISPLAY:-}" ] && [ -x "$HUD" ]; then
+    "$HUD" "$kind" "$title"
+  else
+    notify-send -h string:x-canonical-private-synchronous:mintbook-volume \
+      -i "$icon" "$title"
+  fi
   exit 0
 fi
 
 read -r _ vol muted <<< "$(wpctl get-volume "$SINK" 2>/dev/null)"
 pct=$(awk -v v="${vol:-0}" 'BEGIN { printf "%d", v * 100 + 0.5 }')
 if [ "$muted" = '[MUTED]' ]; then
-  icon=audio-volume-muted; title='Muted'; bar=0
+  icon=audio-volume-muted; title='Muted'; bar=0; kind=muted
 else
   bar=$pct
   title="${pct}%"
+  kind=volume
   if   [ "$pct" -ge 66 ]; then icon=audio-volume-high
   elif [ "$pct" -ge 33 ]; then icon=audio-volume-medium
   elif [ "$pct" -gt 0 ];  then icon=audio-volume-low
-  else                         icon=audio-volume-muted
+  else                         icon=audio-volume-muted; kind=muted
   fi
 fi
-notify-send -h string:x-canonical-private-synchronous:mintbook-volume \
-  -h "int:value:$bar" -i "$icon" 'Volume' "$title"
+if [ -n "${DISPLAY:-}" ] && [ -x "$HUD" ]; then
+  "$HUD" "$kind" 'Volume' "$bar"
+else
+  notify-send -h string:x-canonical-private-synchronous:mintbook-volume \
+    -h "int:value:$bar" -i "$icon" 'Volume' "$title"
+fi

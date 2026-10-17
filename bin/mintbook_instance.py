@@ -2,11 +2,30 @@
 import fcntl
 import os
 from pathlib import Path
+import re
+import shlex
 import signal
+import subprocess
 import tempfile
 import time
 
 _LOCKS = {}
+BAR_MENUS = {
+    'cpu': 'cpu-menu',
+    'temp': 'cpu-menu',
+    'bt': 'bt-menu',
+    'wifi': 'wifi-menu',
+    'battery': 'battery-menu',
+    'control': 'control-center',
+    'system': 'system-menu',
+    'overview': 'overview',
+    'night': 'night-menu',
+    'power': 'power-menu',
+    'updates': 'updates-menu',
+}
+_WRAPPER_RE = re.compile(
+    r'(0x[0-9a-f]+)\s+"wrapper-2\.0".*?(\d+)x(\d+)\+-?\d+\+-?\d+\s+\+(-?\d+)\+(-?\d+)'
+)
 
 
 def owner_matches(pid, script):
@@ -63,4 +82,92 @@ def claim(pidfile, script, signum=signal.SIGTERM):
     finally:
         if os.path.exists(temp):
             os.unlink(temp)
+    return True
+
+
+def _plugin_target(lib, plugin_id, panel_rc):
+    panel_rc = Path.home() / '.config/xfce4/panel' if panel_rc is None else Path(panel_rc)
+    if 'libgenmon.so' in lib:
+        rc = panel_rc / f'genmon-{plugin_id}.rc'
+        try:
+            for line in rc.read_text().splitlines():
+                if line.startswith('Command='):
+                    argv = shlex.split(line.partition('=')[2].strip())
+                    if not argv:
+                        return None
+                    exe = Path(argv[0]).name
+                    key = argv[1] if exe == 'panel-read' and len(argv) > 1 else exe.removeprefix('panel-')
+                    return BAR_MENUS.get(key)
+        except (OSError, ValueError):
+            return None
+    if 'liblauncher.so' in lib:
+        launcher_dir = panel_rc / f'launcher-{plugin_id}'
+        try:
+            for desktop in sorted(launcher_dir.glob('*.desktop')):
+                for line in desktop.read_text().splitlines():
+                    if line.startswith('Exec=') and line.partition('=')[2].strip().endswith('/app-grid'):
+                        return 'app-grid'
+        except OSError:
+            return None
+    return None
+
+
+def _cmdline(pid):
+    raw = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
+    return [os.fsdecode(a) for a in raw if a]
+
+
+def bar_target_at(x, y, panel_rc=None):
+    """Resolve which top-bar popup owns screen coordinate (x, y), if any."""
+    if not (0 <= y < 56 and x >= 0):
+        return None
+    try:
+        tree = subprocess.check_output(['xwininfo', '-root', '-tree'],
+                                       text=True, stderr=subprocess.DEVNULL, timeout=1)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in tree.splitlines():
+        if '"wrapper-2.0"' not in line:
+            continue
+        match = _WRAPPER_RE.search(line)
+        if not match:
+            continue
+        wid, w, h, wx, wy = (match.group(1), int(match.group(2)), int(match.group(3)),
+                             int(match.group(4)), int(match.group(5)))
+        if w > 10 and h > 10 and wx <= x < wx + w and wy <= y < wy + h:
+            try:
+                prop = subprocess.check_output(['xprop', '-id', wid, '_NET_WM_PID'],
+                                               text=True, stderr=subprocess.DEVNULL, timeout=1)
+                pid = int(prop.partition('=')[2].strip())
+                args = _cmdline(pid)
+            except (OSError, ValueError, subprocess.SubprocessError):
+                continue
+            if len(args) > 2 and Path(args[0]).name == 'wrapper-2.0':
+                target = _plugin_target(args[1], args[2], panel_rc)
+                if target:
+                    return target
+    return None
+
+
+def bar_handoff(event, current_script, bin_dir=None, panel_rc=None):
+    """When an outside click lands on another top-bar icon, open that menu directly."""
+    if getattr(event, 'button', 1) != 1:
+        return False
+    try:
+        x = int(round(float(getattr(event, 'x_root', -1))))
+        y = int(round(float(getattr(event, 'y_root', -1))))
+    except (TypeError, ValueError):
+        return False
+    target = bar_target_at(x, y, panel_rc=panel_rc)
+    if not target or target == current_script:
+        return False
+    base = Path.home() / '.local/bin' if bin_dir is None else Path(bin_dir)
+    exe = base / target
+    if not os.access(exe, os.X_OK):
+        return False
+    env = os.environ.copy()
+    env['MINTBOOK_ANCHOR'] = f'{x},{y}'
+    subprocess.Popen([str(exe)], env=env, stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
     return True

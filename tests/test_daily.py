@@ -310,5 +310,70 @@ class DailyTests(unittest.TestCase):
         keys.key(panel, NS(keyval=Gdk.KEY_Return,state=0), 350)
         self.assertEqual(activated, ['speaker-two'])
 
+    def test_spotlight_includes_mintdrop_night_light_and_input_feel(self):
+        actions = load('spotlight-actions')
+        self.assertEqual(actions.ACTIONS['mintdrop'][3], ['mintdrop-menu'])
+        self.assertEqual(actions.ACTIONS['night-on'][3], ['night-apply', 'on'])
+        self.assertEqual(actions.ACTIONS['night-auto'][3], ['night-apply', 'auto'])
+        self.assertEqual(actions.ACTIONS['night-off'][3], ['night-apply', 'off'])
+        self.assertEqual(actions.ACTIONS['input-feel'][3], ['input-feel'])
+
+    def test_daily_install_registers_full_placement_and_helpers(self):
+        installer = load('daily-install')
+        self.assertEqual(installer.KEYS.get('<Super>Up'), 'full')
+        self.assertIn('input-feel', installer.SCRIPTS)
+        self.assertIn('hud-notify', installer.SCRIPTS)
+
+    def test_window_place_full_preserves_original_geometry_for_restore(self):
+        wp = load('window-place')
+        calls = []
+        props = {
+            '_NET_WM_WINDOW_TYPE': '_NET_WM_WINDOW_TYPE_NORMAL',
+            '_NET_WM_PID': '4242',
+            'WM_CLASS': '"terminal"',
+            '_NET_WM_STATE': '',
+            '_NET_FRAME_EXTENTS': '0, 0, 0, 0',
+        }
+        foreign = NS(get_origin=lambda: (True, 200, 150),
+                     get_width=lambda: 900, get_height=lambda: 600)
+        work = NS(x=0, y=52, width=1920, height=1148)
+        display = NS(get_monitor_at_window=lambda _w: NS(get_workarea=lambda: work))
+        with tempfile.TemporaryDirectory() as tmp:
+            wp.STATE = Path(tmp) / 'windows.json'
+            with (patch.object(wp, 'run', side_effect=lambda *a: '101' if a == ('xdotool', 'getactivewindow') else calls.append(a) or ''),
+                  patch.object(wp, 'prop', side_effect=lambda _w, k: props[k]),
+                  patch('gi.repository.Gdk.Display.get_default', return_value=display),
+                  patch('gi.repository.GdkX11.X11Window.foreign_new_for_display', return_value=foreign)):
+                wp.place('left')
+                wp.place('full')
+                wp.place('restore')
+        move_Half = ('wmctrl', '-ir', '101', '-e', '0,0,52,960,1148')
+        move_Full = ('wmctrl', '-ir', '101', '-e', '0,0,52,1920,1148')
+        move_Restore = ('wmctrl', '-ir', '101', '-e', '0,200,150,900,600')
+        self.assertIn(move_Half, calls)
+        self.assertIn(move_Full, calls)
+        self.assertIn(move_Restore, calls)
+
+    def test_hud_notify_parses_and_coalesces_over_datagram_socket(self):
+        hud = load('hud-notify')
+        self.assertEqual(hud.parse_args(['volume', 'Volume', '65']),
+                         ('send', 'volume', 'Volume', 65))
+        self.assertEqual(hud.parse_args(['mic-off', 'Mic muted']),
+                         ('send', 'mic-off', 'Mic muted', None))
+        self.assertEqual(hud.parse_args(['brightness', 'Brightness', '80']),
+                         ('send', 'brightness', 'Brightness', 80))
+        with tempfile.TemporaryDirectory() as tmp:
+            hud.write_state('volume', 'Volume', 50, directory=tmp)
+            self.assertEqual(hud.read_state(directory=tmp),
+                             {'kind': 'volume', 'title': 'Volume', 'value': 50})
+            _, sock_path = hud.state_paths(tmp)
+            server = hud.socket.socket(hud.socket.AF_UNIX, hud.socket.SOCK_DGRAM)
+            server.bind(str(sock_path))
+            try:
+                self.assertTrue(hud.notify_running(directory=tmp))
+                self.assertEqual(server.recv(1024), b'update')
+            finally:
+                server.close()
+
 if __name__ == '__main__':
     unittest.main()

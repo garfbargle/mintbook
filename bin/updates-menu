@@ -1857,10 +1857,15 @@ def main():
                   lambda *_a: GLib.idle_add(menu.close))
     if TOGGLE_PENDING:
         GLib.idle_add(menu.toggle)
+    def on_outside(_w, e):
+        if not menu.outside(e):
+            return False
+        menu.close()
+        from mintbook_instance import bar_handoff
+        bar_handoff(e, 'updates-menu')
+        return True
     menu.win.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
-    menu.win.connect(
-        'button-press-event',
-        lambda _w, e: menu.close() or True if menu.outside(e) else False)
+    menu.win.connect('button-press-event', on_outside)
     menu.place(int(px), int(py))
     if os.environ.get('MINTBOOK_UPDATES_TIME'):
         print(f'{(time.monotonic() - T0) * 1000:.0f} ms to on screen',
