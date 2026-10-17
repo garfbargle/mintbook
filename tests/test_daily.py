@@ -403,13 +403,29 @@ class DailyTests(unittest.TestCase):
                      'wifi-menu', 'bt-menu', 'updates-menu', 'app-grid',
                      'login-settings', 'mintbook-health', 'battery-history',
                      'mintdrop-menu', 'mintdrop-accept', 'hud-notify',
-                     'screenshot', 'screenshot-notify'):
+                     'screenshot', 'screenshot-notify', 'overview'):
             source = (ROOT / 'bin' / name).read_text()
             self.assertIn('Adwaita', source, name)
         for popup in ('control-center', 'system-menu', 'cpu-menu', 'battery-menu',
                       'wifi-menu', 'bt-menu', 'updates-menu'):
             source = (ROOT / 'bin' / popup).read_text()
             self.assertIn('get_workarea()', source, popup)
+
+    def test_cairo_overview_parses_filter_and_ranks_matches(self):
+        ov = load('overview')
+        self.assertEqual(ov.parse_args([]), '')
+        self.assertEqual(ov.parse_args(['--filter', 'wall']), 'wall')
+        with self.assertRaises(ValueError):
+            ov.parse_args(['--unknown'])
+        entries = [
+            {'kind': 'app', 'title': 'Firefox', 'keywords': 'web browser'},
+            {'kind': 'action', 'title': 'Choose Wallpaper', 'keywords': 'background desktop login picture'},
+            {'kind': 'action', 'title': 'Open Control Center', 'keywords': 'settings brightness volume'},
+        ]
+        matched = ov.filter_entries(entries, 'wall')
+        self.assertEqual([e['title'] for e in matched], ['Choose Wallpaper'])
+        fuzzy = ov.filter_entries(entries, 'ffx')
+        self.assertEqual([e['title'] for e in fuzzy], ['Firefox'])
 
     def test_screenshot_notify_prefers_glass_toast_and_falls_back_cleanly(self):
         sn = load('screenshot-notify')
