@@ -318,16 +318,34 @@ class DailyTests(unittest.TestCase):
     def test_spotlight_includes_mintdrop_night_light_and_input_feel(self):
         actions = load('spotlight-actions')
         self.assertEqual(actions.ACTIONS['mintdrop'][3], ['mintdrop-menu'])
+        self.assertEqual(actions.ACTIONS['wallpaper'][3], ['login-settings'])
+        self.assertEqual(actions.ACTIONS['cpu'][3], ['cpu-menu'])
         self.assertEqual(actions.ACTIONS['night-on'][3], ['night-apply', 'on'])
         self.assertEqual(actions.ACTIONS['night-auto'][3], ['night-apply', 'auto'])
         self.assertEqual(actions.ACTIONS['night-off'][3], ['night-apply', 'off'])
         self.assertEqual(actions.ACTIONS['input-feel'][3], ['input-feel'])
+
+    def test_login_settings_background_preserves_cairo_matrix_and_glides(self):
+        import cairo
+        ls = load('login-settings')
+        ls.cairo = cairo
+        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 960, 700)
+        context = cairo.Context(surface)
+        win = ls.Window.__new__(ls.Window)
+        win.colors = ls.LIGHT
+        win.win = NS(get_allocation=lambda: NS(width=900, height=620))
+        before = tuple(context.get_matrix())
+        ls.Window.draw_background(win, None, context)
+        self.assertEqual(tuple(context.get_matrix()), before)
 
     def test_daily_install_registers_full_placement_and_helpers(self):
         installer = load('daily-install')
         self.assertEqual(installer.KEYS.get('<Super>Up'), 'full')
         self.assertIn('input-feel', installer.SCRIPTS)
         self.assertIn('hud-notify', installer.SCRIPTS)
+        self.assertIn('app-grid', installer.SCRIPTS)
+        self.assertIn('login-settings', installer.SCRIPTS)
+        self.assertIn('mintdrop-menu', installer.SCRIPTS)
 
     def test_window_place_full_preserves_original_geometry_for_restore(self):
         wp = load('window-place')

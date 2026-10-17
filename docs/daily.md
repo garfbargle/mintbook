@@ -12,8 +12,8 @@ backup files are retained in `~/.local/state/mintbook/daily-before-*`.
 ## Overview actions
 
 Cmd+Space combines rofi's application mode with a curated script mode. Search
-for `dark`, `Night Light`, `Mintdrop`, `input feel`, `Bluetooth`, `battery history`,
-`health`, `updates`, `keep awake` or `sleep check`.
+for `dark`, `wallpaper`, `Night Light`, `Mintdrop`, `input feel`, `Bluetooth`,
+`battery history`, `CPU`, `health`, `updates`, `keep awake` or `sleep check`.
 The app grid's first-keystroke handoff seeds the same combined search.
 
 `bin/spotlight-actions` supplies Overview's labels, keywords and fixed IDs. Selection launches

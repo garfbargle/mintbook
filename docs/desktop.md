@@ -178,16 +178,20 @@ was done here.
 
 The 3×3 button launches [`bin/app-grid`](../bin/app-grid), an undecorated GTK
 cover sized to the monitor work area: `y=52`, so the system bar remains visible
-and usable. It reads the desktop application index through Gio and shows every
-visible app in a dense, borderless 12-column grid with 96px icons. The
-background is the same cheap glass recipe as the Control Center: an ARGB window
-with a static translucent gradient and no backdrop blur pass.
+and usable. It reads the desktop application index through Gio and shows daily
+apps alongside two glass folder tiles (**Settings** and **System Tools**), each
+rendered as a rounded glass squircle with a 2×2 preview of its first four
+application icons. The background is the same cheap glass recipe as the Control
+Center: an ARGB window with a static translucent gradient, `GTK_THEME=Adwaita`
+before `Gtk.init` so WhiteSur's 400 KB CSS is never parsed, and no backdrop
+blur pass.
 
 The top-left controls stay close to the panel button: **Lock**, **Log Out**,
 **Restart**, and **Shut Down**. Their line icons are drawn in the active
 light/dark foreground instead of using WhiteSur's fixed black symbolic SVGs.
-Session-ending actions use a confirmation dialog; Escape, Super, or the close
-button dismisses the grid.
+Session-ending actions use an inline glass confirmation bar in the top bar
+rather than a stock GTK modal dialog; Escape cancels a pending confirmation or
+exits a folder group before dismissing the grid.
 
 Any printable key hides the grid and starts the existing centered Overview
 launcher with that first character already in its query. The panel button opens
