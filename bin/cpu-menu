@@ -963,8 +963,19 @@ class Menu:
                 bar_handoff(e, 'cpu-menu')
                 return True
             return False
-        self.win.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+
+        def on_motion(_w, e):
+            if e.window != gdk_win:
+                return False
+            edge = round(SHADOW * SC)
+            if not (edge < e.x < w - edge and edge < e.y < h - edge):
+                from mintbook_instance import bar_hover_handoff
+                return bar_hover_handoff(e, 'cpu-menu', self.close)
+            return False
+
+        self.win.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.POINTER_MOTION_MASK)
         self.win.connect('button-press-event', on_press)
+        self.win.connect('motion-notify-event', on_motion)
 
     @property
     def pixel_height(self):

@@ -112,20 +112,37 @@ def _plugin_target(lib, plugin_id, panel_rc):
     return None
 
 
+_BAR_CACHE = (0.0, None, ())
+_HOVER_STATE = {}
+SCRUB_MENUS = frozenset({
+    'cpu-menu',
+    'bt-menu',
+    'wifi-menu',
+    'battery-menu',
+    'control-center',
+    'system-menu',
+    'updates-menu',
+})
+
+
 def _cmdline(pid):
     raw = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
     return [os.fsdecode(a) for a in raw if a]
 
 
-def bar_target_at(x, y, panel_rc=None):
-    """Resolve which top-bar popup owns screen coordinate (x, y), if any."""
-    if not (0 <= y < 56 and x >= 0):
-        return None
+def bar_rects(panel_rc=None):
+    """Return cached [(wx, wy, w, h, target), ...] for top-bar plugin windows."""
+    global _BAR_CACHE
+    now = time.monotonic()
+    key = str(panel_rc) if panel_rc is not None else None
+    if _BAR_CACHE[1] == key and now - _BAR_CACHE[0] < 2.0:
+        return _BAR_CACHE[2]
     try:
         tree = subprocess.check_output(['xwininfo', '-root', '-tree'],
                                        text=True, stderr=subprocess.DEVNULL, timeout=1)
     except (OSError, subprocess.SubprocessError):
-        return None
+        return ()
+    rects = []
     for line in tree.splitlines():
         if '"wrapper-2.0"' not in line:
             continue
@@ -134,7 +151,7 @@ def bar_target_at(x, y, panel_rc=None):
             continue
         wid, w, h, wx, wy = (match.group(1), int(match.group(2)), int(match.group(3)),
                              int(match.group(4)), int(match.group(5)))
-        if w > 10 and h > 10 and wx <= x < wx + w and wy <= y < wy + h:
+        if w > 10 and h > 10 and 0 <= wy < 56:
             try:
                 prop = subprocess.check_output(['xprop', '-id', wid, '_NET_WM_PID'],
                                                text=True, stderr=subprocess.DEVNULL, timeout=1)
@@ -145,8 +162,33 @@ def bar_target_at(x, y, panel_rc=None):
             if len(args) > 2 and Path(args[0]).name == 'wrapper-2.0':
                 target = _plugin_target(args[1], args[2], panel_rc)
                 if target:
-                    return target
+                    rects.append((wx, wy, w, h, target))
+    rects = tuple(rects)
+    _BAR_CACHE = (now, key, rects)
+    return rects
+
+
+def bar_target_at(x, y, panel_rc=None):
+    """Resolve which top-bar popup owns screen coordinate (x, y), if any."""
+    if not (0 <= y < 56 and x >= 0):
+        return None
+    for wx, wy, w, h, target in bar_rects(panel_rc):
+        if wx <= x < wx + w and wy <= y < wy + h:
+            return target
     return None
+
+
+def _launch_bar_target(target, x, y, bin_dir=None):
+    base = Path.home() / '.local/bin' if bin_dir is None else Path(bin_dir)
+    exe = base / target
+    if not os.access(exe, os.X_OK):
+        return False
+    env = os.environ.copy()
+    env['MINTBOOK_ANCHOR'] = f'{x},{y}'
+    subprocess.Popen([str(exe)], env=env, stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
+    return True
 
 
 def bar_handoff(event, current_script, bin_dir=None, panel_rc=None):
@@ -161,13 +203,33 @@ def bar_handoff(event, current_script, bin_dir=None, panel_rc=None):
     target = bar_target_at(x, y, panel_rc=panel_rc)
     if not target or target == current_script:
         return False
-    base = Path.home() / '.local/bin' if bin_dir is None else Path(bin_dir)
-    exe = base / target
-    if not os.access(exe, os.X_OK):
+    return _launch_bar_target(target, x, y, bin_dir=bin_dir)
+
+
+def bar_hover_handoff(event, current_script, close_cb, bin_dir=None, panel_rc=None, dwell=0.055):
+    """Glide between top-bar popups on pointer hover across the top bar."""
+    try:
+        x = int(round(float(getattr(event, 'x_root', -1))))
+        y = int(round(float(getattr(event, 'y_root', -1))))
+    except (TypeError, ValueError):
         return False
-    env = os.environ.copy()
-    env['MINTBOOK_ANCHOR'] = f'{x},{y}'
-    subprocess.Popen([str(exe)], env=env, stdin=subprocess.DEVNULL,
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                     start_new_session=True)
-    return True
+    if not (0 <= y < 52 and x >= 0):
+        _HOVER_STATE.pop(current_script, None)
+        return False
+    target = bar_target_at(x, y, panel_rc=panel_rc)
+    if not target or target == current_script or target not in SCRUB_MENUS:
+        _HOVER_STATE.pop(current_script, None)
+        return False
+    now = time.monotonic()
+    prev = _HOVER_STATE.get(current_script)
+    if prev is None or prev[0] != target:
+        _HOVER_STATE[current_script] = (target, now)
+        if dwell > 0:
+            return False
+        prev = (target, now)
+    if now - prev[1] < dwell:
+        return False
+    _HOVER_STATE.pop(current_script, None)
+    close_cb()
+    return _launch_bar_target(target, x, y, bin_dir=bin_dir)
+

@@ -580,8 +580,16 @@ class Menu:
                 bar_handoff(event, 'system-menu')
                 return True
             return False
-        self.win.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        def hover(_window, event):
+            if event.window != gdk_win: return False
+            edge = round(SHADOW * SC)
+            if not (edge < event.x < w - edge and edge < event.y < h - edge):
+                from mintbook_instance import bar_hover_handoff
+                return bar_hover_handoff(event, 'system-menu', self.close)
+            return False
+        self.win.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.POINTER_MOTION_MASK)
         self.win.connect('button-press-event', outside)
+        self.win.connect('motion-notify-event', hover)
         started = time.monotonic()
         def fade():
             if self.closing: return False

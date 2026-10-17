@@ -15,11 +15,16 @@ BIN = HOME / '.local/bin'
 UNITS = HOME / '.config/systemd/user'
 UNIT_NAMES = ('mintbook-backlight-curve.service', 'mintbook-redshift.service')
 SCRIPTS = ('backlight-curve', 'backlight-curve-watch', 'mintbook_backlight.py',
-           'mintbook-redshift', 'night-apply', 'hud-notify')
+           'mintbook-redshift', 'night-apply', 'hud-notify', 'kbd-backlight')
 PLUGIN = HOME / '.local/share/mintbook/control-center/plugins/30-brightness'
 PROP = '/xfce4-power-manager/handle-brightness-keys'
-KEYS = {key: str(BIN / 'backlight-curve') + ' step ' + value for key, value in
-        (('XF86MonBrightnessUp', '5'), ('XF86MonBrightnessDown', '-5'))}
+KEYS = {
+    'XF86MonBrightnessUp': f'{BIN / "backlight-curve"} step 5',
+    'XF86MonBrightnessDown': f'{BIN / "backlight-curve"} step -5',
+    'XF86KbdBrightnessUp': f'{BIN / "kbd-backlight"} step 10',
+    'XF86KbdBrightnessDown': f'{BIN / "kbd-backlight"} step -10',
+    'XF86KbdLightOnOff': f'{BIN / "kbd-backlight"} toggle',
+}
 
 def run(*args, check=True):
     return subprocess.run(args, text=True, capture_output=True, check=check)

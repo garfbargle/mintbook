@@ -22,6 +22,7 @@ ACTIONS = {
     'night-on': ('Turn on Night Light', 'weather-clear-night', 'warm screen eyes redshift', ['night-apply', 'on']),
     'night-auto': ('Use automatic Night Light', 'preferences-desktop-theme', 'warm screen sunset redshift', ['night-apply', 'auto']),
     'night-off': ('Turn off Night Light', 'weather-clear', 'warm screen redshift', ['night-apply', 'off']),
+    'kbd-toggle': ('Toggle keyboard backlight', 'input-keyboard', 'keyboard illumination light keys', ['kbd-backlight', 'toggle']),
     'input-feel': ('Reapply touchpad and keyboard feel', 'input-touchpad', 'natural scroll tap click repeat', ['input-feel']),
     'awake30': ('Keep awake for 30 minutes', 'weather-clear', 'sleep screen presentation', ['keep-awake', '30']),
     'awake60': ('Keep awake for 1 hour', 'weather-clear', 'sleep screen presentation', ['keep-awake', '60']),

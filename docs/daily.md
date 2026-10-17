@@ -46,12 +46,16 @@ process start identity to reject stale PIDs. There is no permanent awake daemon.
 
 ## Hardware HUD, screenshots and windows
 
-Volume, mute, microphone mute (`bin/volume-key`) and display brightness keys
-(`bin/backlight-curve step`) share [`bin/hud-notify`](../bin/hud-notify): a
-transient, click-through Cairo glass pill centered near the bottom of the active
-monitor. Repeat keypresses update the visible pill over a UNIX datagram socket
-in `$XDG_RUNTIME_DIR/mintbook-hud.sock` (~1 ms per repeat) and reset its 1.35 s
-fade timer; when the fade finishes, the process exits so nothing stays resident.
+Volume, mute, microphone mute (`bin/volume-key`), display brightness
+(`bin/backlight-curve step`), and keyboard illumination (`bin/kbd-backlight`)
+share [`bin/hud-notify`](../bin/hud-notify): a transient, click-through Cairo
+glass pill centered near the bottom of the active monitor. Repeat keypresses
+update the visible pill over a UNIX datagram socket in
+`$XDG_RUNTIME_DIR/mintbook/hud.sock` (~1 ms per repeat) and reset its fade
+timer; when the fade finishes, the process exits so nothing stays resident.
+`bin/kbd-backlight` maps percentage steps onto a perceptual gamma curve
+(`spi::kbd_backlight`) via `org.freedesktop.login1.Session.SetBrightness` and
+remembers the last non-zero level across `toggle`.
 
 Screenshot shortcuts keep their existing save behavior and flash. Afterward a
 notification offers **Copy** (an actual PNG image on the clipboard) and **Open**.
@@ -69,11 +73,13 @@ monitor has gone away. Apps' own minimum-size constraints can prevent exact halv
 
 ## Keyboard menus and bar scrubbing
 
-Clicking another top-bar indicator while a bar popup (`control-center`, `system-menu`,
-`battery-menu`, `cpu-menu`, `wifi-menu`, `bt-menu`, `updates-menu`) is open closes
-the current popup and opens the clicked neighbor in one click, passing the click
-coordinates via `MINTBOOK_ANCHOR`. Clicking the same icon closes the popup without
-reopening it.
+Clicking or hovering across another top-bar indicator while a bar popup
+(`control-center`, `system-menu`, `battery-menu`, `cpu-menu`, `wifi-menu`,
+`bt-menu`, `updates-menu`) is open closes the current popup and opens the
+neighbor with `MINTBOOK_ANCHOR`. Hover scrubbing uses a short 55 ms dwell over
+cached bar rectangles so sweeping across the bar glides cleanly between menus
+without triggering while dragging a Control Center slider or opening Overview.
+Clicking the same icon closes the popup without reopening it.
 
 Control Center: Tab and Shift+Tab move between controls, including a toggle's
 separate detail chevron. Enter/Space activates; arrows change options and sliders;
