@@ -271,3 +271,90 @@ class BarScrubbing(unittest.TestCase):
                 self.assertEqual(popen.call_args.args[0], [str(bin_dir / 'battery-menu')])
                 self.assertEqual(popen.call_args.kwargs['env']['MINTBOOK_ANCHOR'], '1505,24')
 
+    def test_hover_scrub_glides_across_bar_after_dwell_and_skips_overview(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            panel_rc = Path(tmp) / 'panel'
+            panel_rc.mkdir()
+            (panel_rc / 'genmon-26.rc').write_text('Command=/home/cobo/.local/bin/panel-battery\n')
+            (panel_rc / 'genmon-25.rc').write_text('Command=/home/cobo/.local/bin/panel-overview\n')
+            bin_dir = Path(tmp) / 'bin'
+            bin_dir.mkdir()
+            for name in ('battery-menu', 'overview'):
+                p = bin_dir / name
+                p.write_text('#!/bin/sh\n')
+                p.chmod(0o755)
+
+            def fake_check_output(argv, **_kw):
+                if argv[0] == 'xwininfo':
+                    return self.TREE
+                if argv[0] == 'xprop':
+                    wid = argv[2]
+                    pid = '1001' if wid == '0x2000004' else '1002'
+                    return f'_NET_WM_PID(CARDINAL) = {pid}\n'
+                raise AssertionError(argv)
+
+            def fake_cmdline(pid):
+                return (['wrapper-2.0', '/usr/lib/libgenmon.so', '26'] if pid == 1001
+                        else ['wrapper-2.0', '/usr/lib/libgenmon.so', '25'])
+
+            closed = []
+            clock = [10.0]
+            with (patch.object(instance.subprocess, 'check_output', side_effect=fake_check_output) as check_out,
+                  patch.object(instance, '_cmdline', side_effect=fake_cmdline),
+                  patch.object(instance.time, 'monotonic', side_effect=lambda: clock[0]),
+                  patch.object(instance.subprocess, 'Popen') as popen):
+                # Hovering over overview is ignored so rofi is never opened on hover.
+                ov_evt = types.SimpleNamespace(x_root=1650, y_root=24)
+                self.assertFalse(instance.bar_hover_handoff(ov_evt, 'control-center', lambda: closed.append(True),
+                                                            bin_dir=bin_dir, panel_rc=panel_rc, dwell=0.05))
+                self.assertEqual(closed, [])
+
+                # First motion onto neighbor starts dwell timer without closing.
+                nb_evt = types.SimpleNamespace(x_root=1505, y_root=24)
+                self.assertFalse(instance.bar_hover_handoff(nb_evt, 'control-center', lambda: closed.append(True),
+                                                            bin_dir=bin_dir, panel_rc=panel_rc, dwell=0.05))
+                self.assertEqual(closed, [])
+                popen.assert_not_called()
+
+                # Second motion after dwell closes current popup and launches neighbor using cached rects.
+                clock[0] = 10.07
+                self.assertTrue(instance.bar_hover_handoff(nb_evt, 'control-center', lambda: closed.append(True),
+                                                           bin_dir=bin_dir, panel_rc=panel_rc, dwell=0.05))
+                self.assertEqual(closed, [True])
+                popen.assert_called_once()
+                self.assertEqual(popen.call_args.args[0], [str(bin_dir / 'battery-menu')])
+                # xwininfo was only called once because bar_rects caches for 2s.
+                xwin_calls = [c for c in check_out.call_args_list if c.args[0][0] == 'xwininfo']
+                self.assertEqual(len(xwin_calls), 1)
+
+
+class KeyboardBacklight(unittest.TestCase):
+    def setUp(self):
+        loader = importlib.machinery.SourceFileLoader('kbd_backlight', str(ROOT / 'bin/kbd-backlight'))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        self.kbd = importlib.util.module_from_spec(spec)
+        loader.exec_module(self.kbd)
+
+    def test_curve_and_toggle_remember_last_nonzero_level(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            led = base / 'spi::kbd_backlight'
+            led.mkdir()
+            (led / 'max_brightness').write_text('255')
+            (led / 'brightness').write_text('0')
+            state = base / 'kbd-backlight.state'
+
+            def fake_set(want, target_led=led):
+                (target_led / 'brightness').write_text(str(int(want)))
+
+            with (patch.multiple(self.kbd, LED=led, STATE_DIR=base, STATE=state, LOCK=base / 'lock'),
+                  patch.object(self.kbd, 'set_hardware', side_effect=fake_set)):
+                self.assertEqual(self.kbd.apply(step=20), 20)
+                hw_20 = int((led / 'brightness').read_text())
+                self.assertTrue(1 <= hw_20 < 51)
+                self.assertEqual(self.kbd.apply(toggle=True), 0)
+                self.assertEqual(int((led / 'brightness').read_text()), 0)
+                self.assertEqual(self.kbd.apply(toggle=True), 20)
+                self.assertEqual(int((led / 'brightness').read_text()), hw_20)
+
+

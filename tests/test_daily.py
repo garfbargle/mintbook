@@ -248,7 +248,7 @@ class DailyTests(unittest.TestCase):
         sent, updated = [], []
         panel.dismissing = False
         panel._send_value = lambda tile: sent.append(tile.requested_value)
-        tile = NS(update=updated.append)
+        tile = NS(update=updated.append, pressing=True, pending=None)
         panel.set_value(tile, 5)
         panel.set_value(tile, 10)
         panel.set_value(tile, 15)
@@ -256,8 +256,13 @@ class DailyTests(unittest.TestCase):
         panel._set_done(tile, 5, {'value': 5}, None)
         self.assertEqual(sent, [5, 15])
         self.assertEqual(updated, [])
+        # While still pressing, intermediate completion does not overwrite visual state.
         panel._set_done(tile, 15, {'value': 15}, None)
-        self.assertEqual(updated, [{'value': 15}])
+        self.assertEqual(updated, [])
+        tile.pressing = False
+        panel.set_value(tile, 20)
+        panel._set_done(tile, 20, {'value': 20}, None)
+        self.assertEqual(updated, [{'value': 20}])
         self.assertFalse(tile.setting)
 
     def test_tab_visits_toggle_and_detail_without_activation(self):

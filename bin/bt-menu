@@ -1336,8 +1336,14 @@ def main():
         from mintbook_instance import bar_handoff
         bar_handoff(e, 'bt-menu')
         return True
-    menu.win.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+    def on_hover(_w, e):
+        if not menu.outside(e):
+            return False
+        from mintbook_instance import bar_hover_handoff
+        return bar_hover_handoff(e, 'bt-menu', menu.close)
+    menu.win.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.POINTER_MOTION_MASK)
     menu.win.connect('button-press-event', on_outside)
+    menu.win.connect('motion-notify-event', on_hover)
     menu.place(int(px), int(py))
     if os.environ.get('MINTBOOK_BT_TIME'):
         print(f'{(time.monotonic() - T0) * 1000:.0f} ms to on screen',

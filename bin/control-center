@@ -979,22 +979,28 @@ class Tile(Gtk.DrawingArea):
 
     def apply_slider(self, final):
         """Rate-limit a drag to ~20 Hz, but never drop the value it ended on."""
+        value = round(self.drag_value)
+        self.spec['value'] = value
         self.queue_draw()
         now = time.monotonic()
         if final or now - self.last_set > 0.05:
             self.last_set = now
             self.pending = None
-            self.panel.set_value(self, round(self.drag_value))
+            self.panel.set_value(self, value)
             if final:
                 self.drag_value = None
         else:
-            self.pending = round(self.drag_value)
+            self.pending = value
             GLib.timeout_add(60, self._flush)
 
     def _flush(self):
         if self.pending is not None:
+            self.last_set = time.monotonic()
             self.panel.set_value(self, self.pending)
             self.pending = None
+            if not self.pressing:
+                self.drag_value = None
+                self.queue_draw()
         return False
 
     def run_detail(self):
@@ -1325,8 +1331,19 @@ class Panel:
                 bar_handoff(e, 'control-center')
                 return True
             return False
-        self.win.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+
+        def on_motion(_w, e):
+            if e.window != gdk_win or any(getattr(t, 'pressing', False) for t in self.tiles):
+                return False
+            edge = round(SHADOW * SC)
+            if not (edge < e.x < w - edge and edge < e.y < h - edge):
+                from mintbook_instance import bar_hover_handoff
+                return bar_hover_handoff(e, 'control-center', self.close)
+            return False
+
+        self.win.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.POINTER_MOTION_MASK)
         self.win.connect('button-press-event', on_press)
+        self.win.connect('motion-notify-event', on_motion)
 
     def open_menu(self, tile):
         if self.menu_for is tile and self.menu.get_visible():
@@ -1469,7 +1486,8 @@ class Panel:
             self._send_value(tile)
         else:
             tile.setting = False
-            tile.update(spec)
+            if getattr(tile, 'pending', None) is None and not getattr(tile, 'pressing', False):
+                tile.update(spec)
             if error:
                 tile.set_tooltip_text(error)
                 subprocess.Popen(['notify-send', 'Control Center', error],
