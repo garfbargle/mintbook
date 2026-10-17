@@ -241,6 +241,8 @@ def discover(timeout=4.0):
             browse.wait(timeout=2)
         except Exception:
             browse.kill()
+        if browse.stdout is not None:
+            browse.stdout.close()
     # One device, one entry. A phone gets a new endpoint id every time its
     # sheet reopens and avahi keeps serving the old records, so the same
     # phone arrives three or four times over — which would be three or four

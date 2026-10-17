@@ -215,3 +215,59 @@ class PendingControls(unittest.TestCase):
             self.assertTrue(binds)
             self.assertTrue(all(quit_at<i<start_at for i in binds))
             self.assertEqual(prefs.read_text(), 'existing')
+
+
+class BarScrubbing(unittest.TestCase):
+    TREE = (
+        '     0x1800003 "xfce4-panel": ("xfce4-panel" "Xfce4-panel")  1920x52+0+0  +0+0\n'
+        '        0x2000004 "wrapper-2.0": ("wrapper-2.0" "Wrapper-2.0")  60x52+0+0  +1485+0\n'
+        '        0x2200004 "wrapper-2.0": ("wrapper-2.0" "Wrapper-2.0")  48x52+0+0  +1635+0\n'
+    )
+
+    def test_click_below_bar_never_queries_xwininfo(self):
+        event = types.SimpleNamespace(button=1, x_root=1500, y_root=220)
+        with patch.object(instance.subprocess, 'check_output') as check_output:
+            self.assertFalse(instance.bar_handoff(event, 'control-center'))
+            check_output.assert_not_called()
+
+    def test_click_on_neighbor_bar_icon_hands_off_with_anchor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            panel_rc = Path(tmp) / 'panel'
+            panel_rc.mkdir()
+            (panel_rc / 'genmon-26.rc').write_text('Command=/home/cobo/.local/bin/panel-battery\n')
+            (panel_rc / 'genmon-25.rc').write_text('Command=/home/cobo/.local/bin/panel-control\n')
+            bin_dir = Path(tmp) / 'bin'
+            bin_dir.mkdir()
+            for name in ('battery-menu', 'control-center'):
+                p = bin_dir / name
+                p.write_text('#!/bin/sh\n')
+                p.chmod(0o755)
+
+            def fake_check_output(argv, **_kw):
+                if argv[0] == 'xwininfo':
+                    return self.TREE
+                if argv[0] == 'xprop':
+                    wid = argv[2]
+                    pid = '1001' if wid == '0x2000004' else '1002'
+                    return f'_NET_WM_PID(CARDINAL) = {pid}\n'
+                raise AssertionError(argv)
+
+            def fake_cmdline(pid):
+                return (['wrapper-2.0', '/usr/lib/libgenmon.so', '26'] if pid == 1001
+                        else ['wrapper-2.0', '/usr/lib/libgenmon.so', '25'])
+
+            with (patch.object(instance.subprocess, 'check_output', side_effect=fake_check_output),
+                  patch.object(instance, '_cmdline', side_effect=fake_cmdline),
+                  patch.object(instance.subprocess, 'Popen') as popen):
+                # Clicking the same menu's icon only closes; no relaunch.
+                same_evt = types.SimpleNamespace(button=1, x_root=1650, y_root=24)
+                self.assertFalse(instance.bar_handoff(same_evt, 'control-center', bin_dir=bin_dir, panel_rc=panel_rc))
+                popen.assert_not_called()
+
+                # Clicking a neighbor icon launches the neighbor with MINTBOOK_ANCHOR.
+                neighbor_evt = types.SimpleNamespace(button=1, x_root=1505, y_root=24)
+                self.assertTrue(instance.bar_handoff(neighbor_evt, 'control-center', bin_dir=bin_dir, panel_rc=panel_rc))
+                popen.assert_called_once()
+                self.assertEqual(popen.call_args.args[0], [str(bin_dir / 'battery-menu')])
+                self.assertEqual(popen.call_args.kwargs['env']['MINTBOOK_ANCHOR'], '1505,24')
+

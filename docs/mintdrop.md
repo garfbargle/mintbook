@@ -21,6 +21,7 @@ bin/mintdrop-install                 install; --revert puts it all back
 | | |
 |---|---|
 | **the dock** | drag files onto the Mintdrop icon in Plank |
+| **Overview** | press `Cmd+Space` and type `mintdrop` |
 | **Files** | right-click a selection → *Send with Mintdrop* |
 | **the sheet** | `mintdrop-menu`, then drop files onto a device |
 | **a terminal** | `mintdrop send` |
@@ -31,7 +32,10 @@ bin/mintdrop-install                 install; --revert puts it all back
   <img src="images/mintdrop-sheet-dark.png" alt="The Mintdrop sheet, dark" width="232">
 </p>
 
-The sheet is one window: round tiles for the devices that are nearby, a
+The sheet (`bin/mintdrop-menu`) and receiver prompt (`bin/mintdrop-accept`) are
+drawn on the same Pearl/Slate glass surface as the bar popups, generated from
+`config/theme/mintbook-glass.ini` by `bin/palette-generate`. The sheet is one
+window: round tiles for the devices that are nearby, a
 glyph saying what kind of thing each one is, and the transfer drawn on the
 tile itself as a ring closing clockwise from twelve. Dropping files on a tile
 sends them; so does clicking one, when the sheet was opened with files

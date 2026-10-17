@@ -575,7 +575,10 @@ class Menu:
             if event.window != gdk_win: return False
             edge = round(SHADOW * SC)
             if not (edge < event.x < w - edge and edge < event.y < h - edge):
-                self.close(); return True
+                self.close()
+                from mintbook_instance import bar_handoff
+                bar_handoff(event, 'system-menu')
+                return True
             return False
         self.win.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
         self.win.connect('button-press-event', outside)
@@ -607,10 +610,13 @@ def single_instance():
 def main():
     global PTR_XY, SC
     try:
-        raw = subprocess.run(['xdotool', 'getmouselocation', '--shell'], capture_output=True,
-                             text=True, timeout=3).stdout
-        parts = dict(part.split('=', 1) for part in raw.split() if '=' in part)
-        PTR_XY = (int(parts['X']), int(parts['Y']))
+        if 'MINTBOOK_ANCHOR' in os.environ:
+            PTR_XY = tuple(int(v) for v in os.environ['MINTBOOK_ANCHOR'].split(',', 1))
+        else:
+            raw = subprocess.run(['xdotool', 'getmouselocation', '--shell'], capture_output=True,
+                                 text=True, timeout=3).stdout
+            parts = dict(part.split('=', 1) for part in raw.split() if '=' in part)
+            PTR_XY = (int(parts['X']), int(parts['Y']))
     except Exception: PTR_XY = None
     if not single_instance(): return
     SC = round((Gdk.Screen.get_default().get_resolution() or 96) / 96, 3) or 1

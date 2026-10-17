@@ -74,10 +74,13 @@ os.environ.setdefault('GTK_THEME', 'Adwaita')
 # same late position the Gdk read did: click the icon, move the mouse away, and
 # the popup opened where the mouse had got to. Costs ~12 ms, paid in full.
 try:
-    _ptr = subprocess.run(['xdotool', 'getmouselocation', '--shell'],
-                          capture_output=True, text=True, timeout=3).stdout
-    _ptr = dict(p.split('=', 1) for p in _ptr.split() if '=' in p)
-    PTR_XY = (int(_ptr['X']), int(_ptr['Y']))
+    if 'MINTBOOK_ANCHOR' in os.environ:
+        PTR_XY = tuple(int(v) for v in os.environ['MINTBOOK_ANCHOR'].split(',', 1))
+    else:
+        _ptr = subprocess.run(['xdotool', 'getmouselocation', '--shell'],
+                              capture_output=True, text=True, timeout=3).stdout
+        _ptr = dict(p.split('=', 1) for p in _ptr.split() if '=' in p)
+        PTR_XY = (int(_ptr['X']), int(_ptr['Y']))
 except Exception:
     PTR_XY = None
 
@@ -1318,6 +1321,8 @@ class Panel:
             edge = round(SHADOW * SC)
             if not (edge < e.x < w - edge and edge < e.y < h - edge):
                 self.close()
+                from mintbook_instance import bar_handoff
+                bar_handoff(e, 'control-center')
                 return True
             return False
         self.win.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)

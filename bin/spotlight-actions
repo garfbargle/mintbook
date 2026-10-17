@@ -8,6 +8,7 @@ import sys
 BIN = Path.home() / '.local/bin'
 ACTIONS = {
     'control': ('Open Control Center', 'preferences-system', 'settings brightness volume', ['control-center']),
+    'mintdrop': ('Send files with Mintdrop', 'document-send', 'airdrop quickshare share nearby', ['mintdrop-menu']),
     'wifi': ('Choose Wi-Fi network', 'network-wireless', 'internet connect network', ['wifi-menu']),
     'bluetooth': ('Connect headphones or Bluetooth device', 'bluetooth', 'speaker audio pairing', ['bt-menu']),
     'battery': ('Show battery history', 'battery', 'energy charge usage power', ['battery-history']),
@@ -18,6 +19,10 @@ ACTIONS = {
     'light': ('Use light appearance', 'weather-clear', 'theme pearl day', ['appearance-mode', 'light']),
     'dark': ('Use dark appearance', 'weather-clear-night', 'theme slate night', ['appearance-mode', 'dark']),
     'auto': ('Use automatic appearance', 'preferences-desktop-theme', 'theme sunrise sunset', ['appearance-mode', 'auto']),
+    'night-on': ('Turn on Night Light', 'weather-clear-night', 'warm screen eyes redshift', ['night-apply', 'on']),
+    'night-auto': ('Use automatic Night Light', 'preferences-desktop-theme', 'warm screen sunset redshift', ['night-apply', 'auto']),
+    'night-off': ('Turn off Night Light', 'weather-clear', 'warm screen redshift', ['night-apply', 'off']),
+    'input-feel': ('Reapply touchpad and keyboard feel', 'input-touchpad', 'natural scroll tap click repeat', ['input-feel']),
     'awake30': ('Keep awake for 30 minutes', 'weather-clear', 'sleep screen presentation', ['keep-awake', '30']),
     'awake60': ('Keep awake for 1 hour', 'weather-clear', 'sleep screen presentation', ['keep-awake', '60']),
     'awake120': ('Keep awake for 2 hours', 'weather-clear', 'sleep screen presentation', ['keep-awake', '120']),
@@ -38,7 +43,7 @@ def execute(key):
         result = subprocess.run(command, timeout=3600, capture_output=True, text=True)
         if result.returncode:
             raise RuntimeError(result.stderr.strip()[-240:] or 'The action did not complete.')
-        if key in ('light', 'dark', 'auto'):
+        if key in ('light', 'dark', 'auto', 'night-on', 'night-auto', 'night-off', 'input-feel'):
             subprocess.run(['notify-send', 'Mintbook', label], timeout=5)
     except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
         subprocess.run(['notify-send', '-u', 'normal', 'Mintbook action failed', str(error)], timeout=5)

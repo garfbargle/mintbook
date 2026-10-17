@@ -15,7 +15,7 @@ BIN = HOME / '.local/bin'
 UNITS = HOME / '.config/systemd/user'
 UNIT_NAMES = ('mintbook-backlight-curve.service', 'mintbook-redshift.service')
 SCRIPTS = ('backlight-curve', 'backlight-curve-watch', 'mintbook_backlight.py',
-           'mintbook-redshift', 'night-apply')
+           'mintbook-redshift', 'night-apply', 'hud-notify')
 PLUGIN = HOME / '.local/share/mintbook/control-center/plugins/30-brightness'
 PROP = '/xfce4-power-manager/handle-brightness-keys'
 KEYS = {key: str(BIN / 'backlight-curve') + ' step ' + value for key, value in
