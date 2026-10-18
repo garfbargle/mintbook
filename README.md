@@ -9,7 +9,7 @@ Quiet by design. Familiar at first glance. Built for the hardware underneath.
 </div>
 
 <p align="center">
-  <img src="docs/images/spotlight.jpg" alt="Overview open on the mintbook desktop" width="880">
+  <img src="docs/images/spotlight.jpg" alt="Overview open over Files on the mintbook desktop, with a screenshot toast in the corner" width="880">
 </p>
 
 <p align="center">
