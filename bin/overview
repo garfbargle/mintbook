@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Mintbook Overview — Spotlight-style Cairo glass search launcher for apps and actions."""
+import fcntl
 import importlib.machinery
 import importlib.util
 import math
@@ -179,7 +180,87 @@ def collect_entries(gio_module=None, actions_mod=None):
     return entries
 
 
+class StartGuardBusy(Exception):
+    """Another launch is already building the first window."""
+
+
+def take_start_guard(path):
+    """Take the launch guard, or raise StartGuardBusy if one is already held.
+
+    None means the cache is not writable; the launcher still opens, and the
+    pidfile claim below remains the fallback serialization.
+    """
+    try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    except OSError:
+        return None
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        raise StartGuardBusy
+    except OSError:
+        os.close(fd)
+        return None
+    return fd
+
+
+class GrabRetry:
+    """Retry a seat grab until it succeeds or the popup closes.
+
+    XFCE holds the keyboard for as long as Cmd+Space is down, so the grab
+    that arrives with the launch can come back ALREADY_GRABBED. Keep asking;
+    once the shortcut releases the keyboard, the popup owns it for the rest
+    of its life. The first 40 tries are fast (25 ms); after that there is no
+    hurry and 200 ms keeps an unlucky popup out of a busy loop.
+    """
+
+    def __init__(self, grab, schedule, closed=lambda: False):
+        self.grab = grab
+        self.schedule = schedule
+        self.closed = closed
+        self.done = False
+        self.tries = 0
+
+    def attempt(self):
+        if self.done or self.closed():
+            return False
+        self.tries += 1
+        try:
+            self.done = bool(self.grab())
+        except Exception:
+            self.done = False
+        if not self.done:
+            self.schedule(25 if self.tries < 40 else 200, self.attempt)
+        return False
+
+
 def run_overview(initial_query=''):
+    # Cmd+Space auto-repeats while it is held, and XFCE launches this command
+    # on every repeat. Claiming the pidfile is not enough to serialize those
+    # starts: the repeats race the first process before it has shown anything,
+    # and the last one signals the one that was still coming up. Hold a start
+    # guard until the keyboard grab succeeds (or a short timeout) so a held
+    # shortcut opens one Overview instead of a storm of them. The app-grid
+    # handoff deliberately skips the guard: it must be able to replace an
+    # Overview that is already open.
+    start_fd = None
+    if not initial_query:
+        try:
+            start_fd = take_start_guard(PIDFILE + '.start')
+        except StartGuardBusy:
+            return 0
+
+    def release_start():
+        nonlocal start_fd
+        if start_fd is not None:
+            fd, start_fd = start_fd, None
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
     import cairo
     import gi
     gi.require_version('Gtk', '3.0')
@@ -190,6 +271,7 @@ def run_overview(initial_query=''):
 
     screen = Gdk.Screen.get_default()
     if screen is None:
+        release_start()
         return 1
 
     sys.path.insert(0, BIN)
@@ -202,6 +284,7 @@ def run_overview(initial_query=''):
             time.sleep(0.02)
     else:
         if not claim(PIDFILE, 'overview', signal.SIGTERM):
+            release_start()
             return 0
     for extra in ('rofi',):
         subprocess.run(['pkill', '-x', extra], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -319,6 +402,7 @@ def run_overview(initial_query=''):
         if state['closing']:
             return
         state['closing'] = True
+        release_start()
         try:
             display.get_default_seat().ungrab()
         except Exception:
@@ -647,16 +731,38 @@ def run_overview(initial_query=''):
         gdk_win.set_override_redirect(True)
     update_geometry()
     Gtk.Widget.set_opacity(win, 0.0)
+    win.set_can_focus(True)
     win.show_all()
     win.present()
-    if gdk_win is not None:
-        try:
-            seat = display.get_default_seat()
-            seat.grab(gdk_win, Gdk.SeatCapabilities.ALL, True, None, None, None)
-        except Exception:
-            pass
-    win.set_can_focus(True)
     win.grab_focus()
+
+    # Cmd+Space is still held when XFCE launches this command. XFCE owns the
+    # keyboard grab for as long as the chord is down, so the first seat grab
+    # can come back ALREADY_GRABBED. xfwm4 never focuses an override-redirect
+    # window on its own, which would leave every following keystroke in the
+    # app underneath. Retry until the shortcut releases the keyboard; after
+    # that the grab holds for the life of the popup, as it does when opened
+    # from the bar.
+    seat = display.get_default_seat()
+
+    def grab_keyboard_once():
+        try:
+            owned = seat.grab(gdk_win, Gdk.SeatCapabilities.ALL, True,
+                              None, None, None) == Gdk.GrabStatus.SUCCESS
+        except Exception:
+            owned = False
+        if owned:
+            release_start()
+        return owned
+
+    if gdk_win is None:
+        release_start()
+    else:
+        # Never let a keyboard another client refuses to release block the
+        # bar icon from closing a popup that could not take the keys.
+        GLib.timeout_add(5000, release_start)
+        GrabRetry(grab_keyboard_once, GLib.timeout_add,
+                  closed=lambda: state['closing']).attempt()
 
     t0 = time.monotonic()
 
@@ -680,6 +786,7 @@ def run_overview(initial_query=''):
     try:
         Gtk.main()
     finally:
+        release_start()
         try:
             if read_file(PIDFILE) == str(os.getpid()):
                 os.unlink(PIDFILE)

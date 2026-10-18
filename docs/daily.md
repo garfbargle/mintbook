@@ -167,5 +167,10 @@ release. Window tests verified exact restoration of normal and maximized windows
 A separate test selection verified PNG clipboard transfer and ownership cleanup
 without changing the user clipboard. The installer undo was executed, all backed-up
 files and shortcuts compared, and the improvements reinstalled. Each changed popup was opened on the actual display for layout and
-keyboard checks. Sleep itself was not changed or triggered: the user reports it
-has worked over the last few days; see input.md for the remaining measurement gap.
+keyboard checks. Overview's keyboard grab was exercised on the live display
+with a held shortcut and with a competing X keyboard grab: the retry took
+ownership once the competitor released, the arrow keys moved the selected row,
+Escape closed the window, thirty rapid starts produced one popup, and the
+`--filter` handoff from the app grid still replaced an open Overview. Sleep
+itself was not changed or triggered: the user reports it has worked over the
+last few days; see input.md for the remaining measurement gap.

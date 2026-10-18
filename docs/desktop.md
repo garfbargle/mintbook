@@ -1025,12 +1025,15 @@ margin_top=52                    # fallback only; the panel's strut is the real 
 show_dock_shadow=false           # see Gotchas
 ```
 
-### Overview (rofi)
+### Overview
 
-`Cmd+Space` runs [`bin/overview`](../bin/overview), which toggles
-`rofi -show drun` with [`config/rofi/spotlight.rasi`](../config/rofi/spotlight.rasi):
-centred, 52% wide, 14% from the top, translucent glass, rounded 24px, fuzzy
-matching.
+`Cmd+Space` runs [`bin/overview`](../bin/overview), a native GTK3/Cairo glass
+launcher for applications and Mintbook actions. It replaced the rofi wrapper;
+`bin/spotlight` and the rofi theme remain only for existing integrations and
+old shortcuts. The window is override-redirect, 620 logical px wide, horizontally
+centred on the primary workarea 14% from its top, with up to eight 48px rows.
+It reads `~/.config/mintbook/appearance.applied` at launch, so the next open
+is already in the current light or dark palette.
 
 [`bin/overview-install`](../bin/overview-install) also adds a dedicated search
 icon as plugin 27, after the clock at the far-right edge of the top bar. Clicking
@@ -1043,32 +1046,31 @@ it opens Overview; its tooltip reads `Open with Super + Space`. The old
   <img src="images/spotlight-dark.jpg" alt="Overview, slate" width="46%">
 </p>
 
-**It follows the appearance mode.** The theme file holds no colours at all — it
-opens with `@import "palette.rasi"`, and `bin/appearance-mode` installs either
-[`palette-light.rasi`](../config/rofi/palette-light.rasi) or
-[`palette-dark.rasi`](../config/rofi/palette-dark.rasi) there. Six names —
-`glass`, `edge`, `rule`, `fg`, `fg-dim`, `lift` — are the whole interface
-between the two files. rofi reads its theme when it launches, so there is
-nothing to reload: the next `Cmd+Space` is already in the new appearance.
+**The colours are generated, not themed at runtime.** `bin/palette-generate`
+writes the `LIGHT` and `DARK` dictionaries in `bin/overview` from
+[`config/theme/mintbook-glass.ini`](../config/theme/mintbook-glass.ini), using
+the same bar fill and Control Center stops as the other glass surfaces.
+`bin/appearance-mode` re-runs the generator when the mode changes, and
+`bin/palette-generate --check` fails if the embedded colours have drifted.
+There is no theme file to reload: the next `Cmd+Space` uses the new palette.
 
-The surface is the bar's own fill at panel density (`[SystemBarLight]` /
-`[SystemBarDark]` in the glass palette), not a second dark grey invented for
-this window — which is what it used to be. The slate is darkened toward the
-Control Center's lower stop, because a full-width panel at the bar's own
-lightness reads as fog rather than glass.
+**Keyboard ownership is explicit.** xfwm4 never focuses an override-redirect
+window, so Overview grabs the seat for the life of the popup. `Cmd+Space` is
+still down when XFCE launches the command, and XFCE owns the keyboard until the
+chord is released, so the first grab can fail with `ALREADY_GRABBED`. Overview
+retries at 25 ms for the first second and then at 200 ms; without that the
+window would appear while every keystroke landed in the application underneath.
+XFCE also launches the command on every auto-repeat of a held key, so a start
+guard allows only the first process to build a window. The guard is released
+when the grab succeeds, or after five seconds so the bar icon can still close a
+popup that could not take the keyboard.
 
-> A missing `palette.rasi` is fatal to rofi, not cosmetic — it fails the
-> `@import` outright. `appearance-mode` therefore treats an absent palette as a
-> reason to reapply even when the mode has not changed, so `--refresh` heals a
-> fresh checkout.
-
-Sizes in the theme are **real device pixels** — rofi 1.7.5 lays `px` out
-literally and does not scale it by `Xft.dpi`, so on this 168dpi panel a
-96dpi-sized theme comes out at ~0.6x. The theme is written ~1.7x up to land at
-the familiar macOS search surface's apparent size: 52px app icons, 80px rows, `Inter 30` in the
-search field, `Inter 18` in the list. Fonts follow the same rule (rofi renders
-them at 96dpi here), so a point size in this file is not the point size you
-would use in a GTK app.
+> **Future direction.** The retry above is a workaround for the
+> override-redirect window. The cleaner form is a managed, focusable window
+> (like the app grid) that xfwm4 focuses, with a pointer-only grab or a
+> focus-out handler for dismissal. A 2026-10-18 probe showed it took focus and
+> survived a held shortcut and key repeat, but outside-click and bar-icon
+> toggle behavior still need a proper test before it replaces this path.
 
 ### Keyboard
 
