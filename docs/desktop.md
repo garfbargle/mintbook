@@ -1065,6 +1065,13 @@ guard allows only the first process to build a window. The guard is released
 when the grab succeeds, or after five seconds so the bar icon can still close a
 popup that could not take the keyboard.
 
+> **Future direction.** The retry above is a workaround for the
+> override-redirect window. The cleaner form is a managed, focusable window
+> (like the app grid) that xfwm4 focuses, with a pointer-only grab or a
+> focus-out handler for dismissal. A 2026-10-18 probe showed it took focus and
+> survived a held shortcut and key repeat, but outside-click and bar-icon
+> toggle behavior still need a proper test before it replaces this path.
+
 ### Keyboard
 
 ```
