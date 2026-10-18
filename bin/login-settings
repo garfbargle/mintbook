@@ -19,6 +19,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 
 HOME = os.path.expanduser('~')
 CONF = os.environ.get('MINTBOOK_GREETER_CONF', '/etc/lightdm/slick-greeter.conf')
