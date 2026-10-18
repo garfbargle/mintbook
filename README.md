@@ -41,6 +41,10 @@ it is the surface you meet every time the lid opens. **Login Screen** picks the
 picture it shows: every wallpaper already on the disk, or one of your own,
 which it copies somewhere the greeter can actually read.
 
+<p align="center">
+  <img src="docs/images/login-settings.jpg" alt="The Login Screen wallpaper picker, with a light and dark pair selected and the wallpaper library below" width="560">
+</p>
+
 Click the search icon at the far right of the bar—or press **Cmd+Space**.
 Overview finds applications and system actions together, in one fast surface,
 and follows the appearance you are in.
@@ -56,11 +60,27 @@ typing and your first keystroke flows straight into Overview. No second search.
 No starting over.
 
 <p align="center">
-  <img src="docs/images/app-grid.png" alt="Show All Applications on Mintbook" width="880">
+  <img src="docs/images/app-grid.png" alt="Show All Applications in the dark appearance, with the Settings and System Tools folders among the apps" width="880">
 </p>
 
-**Cmd+Left/Right** places windows. **Cmd+Shift+3** takes a screenshot. The
-familiar gestures are simply there.
+**Cmd+Left/Right** places windows. **Cmd+Shift+3** takes a screenshot; the
+capture arrives as a glass card with **Copy** and **Open**. The familiar
+gestures are simply there.
+
+<p align="center">
+  <img src="docs/images/screenshot-toast-light.png" alt="The screenshot toast in the light appearance, with a thumbnail, Copy, and Open" width="48%">
+  &nbsp;
+  <img src="docs/images/screenshot-toast-dark.png" alt="The same screenshot toast in the dark appearance" width="48%">
+</p>
+
+Volume, display brightness, and keyboard backlight step through the same glass
+pill, then leave.
+
+<p align="center">
+  <img src="docs/images/hud-light.png" alt="The keyboard backlight HUD in the light appearance, at 40 percent" width="48%">
+  &nbsp;
+  <img src="docs/images/hud-dark.png" alt="The volume HUD in the dark appearance, at 70 percent" width="48%">
+</p>
 
 ## Everything you need. Nothing you don't.
 

@@ -325,6 +325,10 @@ class DailyTests(unittest.TestCase):
         self.assertEqual(actions.ACTIONS['night-off'][3], ['night-apply', 'off'])
         self.assertEqual(actions.ACTIONS['input-feel'][3], ['input-feel'])
 
+    def test_login_settings_imports_time_used_by_window_fade(self):
+        ls = load('login-settings')
+        self.assertTrue(hasattr(ls, 'time'))
+
     def test_login_settings_background_preserves_cairo_matrix_and_glides(self):
         import cairo
         ls = load('login-settings')
