@@ -72,6 +72,50 @@ class DailyTests(unittest.TestCase):
             self.assertEqual(spawn.call_args.args[0][-2:], ['--execute', 'dark'])
             self.assertNotIn('shell', spawn.call_args.kwargs)
 
+    def test_overview_start_guard_allows_one_launch(self):
+        overview = load('overview')
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory) / 'overview.start')
+            first = overview.take_start_guard(path)
+            self.assertIsNotNone(first)
+            with self.assertRaises(overview.StartGuardBusy):
+                overview.take_start_guard(path)
+            os.close(first)
+            second = overview.take_start_guard(path)
+            self.assertIsNotNone(second)
+            os.close(second)
+
+    def test_overview_retries_a_busy_keyboard_grab(self):
+        overview = load('overview')
+        grabs, scheduled = [], []
+
+        def grab():
+            grabs.append(len(grabs))
+            return len(grabs) > 1
+
+        retry = overview.GrabRetry(grab, lambda delay, cb: scheduled.append((delay, cb)))
+        retry.attempt()
+        self.assertFalse(retry.done)
+        self.assertEqual(scheduled[0][0], 25)
+        retry.attempt()
+        self.assertTrue(retry.done)
+        retry.attempt()
+        self.assertEqual(len(grabs), 2)
+        self.assertEqual(len(scheduled), 1)
+
+    def test_overview_stops_grab_retries_after_close_and_backs_off(self):
+        overview = load('overview')
+        delays = []
+        retry = overview.GrabRetry(lambda: False, lambda delay, cb: delays.append(delay))
+        for _ in range(40):
+            retry.attempt()
+        self.assertEqual(delays[38], 25)
+        self.assertEqual(delays[39], 200)
+        closed = overview.GrabRetry(lambda: self.fail('grabbed a closed popup'),
+                                    lambda *_: self.fail('scheduled a closed popup'),
+                                    closed=lambda: True)
+        closed.attempt()
+
     def test_health_parse_ignores_noise(self):
         health = load('mintbook-health')
         rows = health.parse('noise\nok\twifi\tworking\nfail\tinput\treinstall hook\nsummary\t1\t0\t1\n')
