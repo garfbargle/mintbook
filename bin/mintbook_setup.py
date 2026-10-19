@@ -146,7 +146,7 @@ def backup_paths():
         '.local/state/mintbook/panel-before.json', '.local/state/mintbook/desktop-install.json',
     ]
     paths += [f'.config/autostart/{name}' for name in
-              ('plank.desktop', 'mintbook-panel.desktop', 'mintbook-night.desktop', 'mintupdate.desktop', 'nm-applet.desktop', 'blueman.desktop')]
+              ('plank.desktop', 'mintbook-panel.desktop', 'mintbook-night.desktop', 'mintupdate.desktop', 'nm-applet.desktop', 'mintreport.desktop', 'blueman.desktop')]
     paths += [f'.config/systemd/user/{path.name}' for path in (ROOT / 'config/systemd').glob('mintbook-*') if path.is_file()]
     paths += [f'.local/share/applications/{name}' for name in ('mintbook-app-grid.desktop',)]
     # Timers enabled by daily/updates; save their enablement links too.
@@ -287,7 +287,11 @@ def install_recipe():
         appearance.write_text('light\n')
     if not (HOME / '.config/rofi/palette.rasi').exists():
         put(ROOT / 'config/rofi/palette-light.rasi', HOME / '.config/rofi/palette.rasi')
-    put(ROOT / 'config/autostart/plank.desktop', HOME / '.config/autostart/plank.desktop')
+    # The Mintbook panel provides network controls and system health. Suppress
+    # only the distribution's duplicate tray autostarts, keeping their apps
+    # available on demand and leaving other users' sessions unchanged.
+    for name in ('plank.desktop', 'nm-applet.desktop', 'mintreport.desktop'):
+        put(ROOT / 'config/autostart' / name, HOME / '.config/autostart' / name)
     put(ROOT / 'config/plank/WhiteSur/dock.theme', HOME / '.local/share/plank/themes/WhiteSur/dock.theme')
     for name in data['dock']['dock-items']:
         put(ROOT / 'config/plank' / name, HOME / '.config/plank/dock1/launchers' / name)

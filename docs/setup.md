@@ -121,3 +121,17 @@ non-Mint distributions are not covered by this recipe.
 Mintdrop's protocol code is available in the runtime, but its shared listening
 socket, advertisement and device identity remain opt-in through its dedicated
 installer. Port 8771 can have only one listening account on a machine.
+
+### Distribution tray applets
+
+Setup writes per-user `Hidden=true` autostart overrides for `nm-applet.desktop`
+and `mintreport.desktop`. Mintbook's Wi-Fi control and System health menu take
+those tray seats. NetworkManager itself keeps running, and System Reports
+remains available as an application. Undo restores the original autostart
+entries. Other accounts retain their own settings.
+
+Applications installed under `/usr/share/applications` are normally visible to
+all users. Applications installed under one user's `~/.local` are available
+only to that account. A per-user Relay installation must be installed for each
+account separately; desktop setup does not copy another user's app data or
+sign-ins.

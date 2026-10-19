@@ -115,6 +115,8 @@ s.install_recipe()
 actual = xf.snapshot()
 assert actual['xsettings']['/Xft/DPI'] == ['i', '168'], actual['xsettings']
 assert actual['xfce4-panel']['/panels'][0] == 'av'
+for name in ('nm-applet.desktop', 'mintreport.desktop'):
+    assert 'Hidden=true' in (s.HOME / '.config/autostart' / name).read_text()
 assert {str(wallpaper)!r} in actual['xfce4-desktop']['/backdrop/screen0/monitor0/workspace0/last-image'][1]
 assert {str(home)!r} in actual['xfce4-keyboard-shortcuts']['/commands/custom/<Shift><Super>numbersign'][1]
 assert Path({str(events)!r}).read_text().splitlines() == {[*data['features'], 'appearance-mode']!r}
@@ -133,6 +135,8 @@ assert xf.snapshot()['xfce4-desktop']['/backdrop/screen0/monitor0/workspace0/las
 assert s.run('gsettings', 'get', 'net.launchpad.plank.dock.settings:' + s.DOCK_PATH, 'icon-size').stdout.strip() == '90'
 s.restore(backup)
 assert not (s.HOME / '.config/rofi/config.rasi').exists()
+assert not (s.HOME / '.config/autostart/nm-applet.desktop').exists()
+assert not (s.HOME / '.config/autostart/mintreport.desktop').exists()
 assert not (s.HOME / '.local/bin/control-install').exists()
 assert xf.snapshot()['xsettings'].get('/Xft/DPI') == original['xsettings'].get('/Xft/DPI')
 print('fresh setup, arrays, feature composition, preferences and restore passed')
