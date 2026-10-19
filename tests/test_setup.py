@@ -31,6 +31,17 @@ class SetupTests(unittest.TestCase):
         self.assertIn('config/desktop.json', payload)
         self.assertIn('bin/mintbook_setup.py', payload)
 
+    def test_new_managed_files_join_original_undo_without_overwriting_old_backups(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            original, recovery = Path(tmp) / 'original.json', Path(tmp) / 'run.json'
+            old = {'path': '.config/autostart/nm-applet.desktop', 'backup': '/old/original'}
+            original.write_text(json.dumps({'files': [old]}))
+            added = {'path': '.config/autostart/mintreport.desktop', 'backup': None}
+            recovery.write_text(json.dumps({'files': [dict(old, backup='/new/changed'), added]}))
+            setup.extend_original_snapshot(original, recovery)
+            setup.extend_original_snapshot(original, recovery)
+            self.assertEqual(json.loads(original.read_text())['files'], [old, added])
+
     def test_multiarch_packages_count_as_installed(self):
         result = SimpleNamespace(stdout='python3\tinstall ok installed\ngir1.2-gtk-3.0:amd64\tinstall ok installed\n')
         with patch.object(setup.subprocess, 'run', return_value=result):

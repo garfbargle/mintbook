@@ -178,6 +178,18 @@ def snapshot(label):
     return backup / 'snapshot.json'
 
 
+def extend_original_snapshot(original, recovery):
+    """Include newly managed files in undo without replacing earlier originals."""
+    from mintbook_deploy import atomic_text
+    data = json.loads(Path(original).read_text())
+    known = {row['path'] for row in data['files']}
+    additions = [row for row in json.loads(Path(recovery).read_text())['files']
+                 if row['path'] not in known]
+    if additions:
+        data['files'].extend(additions)
+        atomic_text(Path(original), json.dumps(data, indent=2))
+
+
 def restore(snapshot_file):
     data = json.loads(Path(snapshot_file).read_text())
     for unit, active in data.get('units', {}).items():
@@ -396,6 +408,8 @@ def main(argv=None):
             # Themes are immutable external dependencies selected by the repo.
             ensure_themes(data)
             recovery = snapshot('setup-run')
+            if 'original' in state:
+                extend_original_snapshot(state['original'], recovery)
             state.setdefault('original', str(recovery))
             state['pending'] = str(recovery)
             initial_dpi = state.get('dpi', 96)
@@ -422,6 +436,10 @@ def main(argv=None):
                 run('systemctl', '--user', 'daemon-reload')
                 panel.start()
                 raise
+        # Hidden autostart overrides take effect next login; close already
+        # running duplicate indicators only after the new panel is healthy.
+        for applet in ('nm-applet', 'mintreport-tray'):
+            subprocess.run(['pkill', '-u', str(os.getuid()), '-x', applet], capture_output=True, timeout=10)
         # Plank is session-owned, not a second resident management service.
         if subprocess.run(['pgrep', '-u', str(os.getuid()), '-x', 'plank'], capture_output=True).returncode == 1:
             subprocess.Popen(['plank'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
