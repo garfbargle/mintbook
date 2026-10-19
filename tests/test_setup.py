@@ -79,6 +79,9 @@ class PrivateSessionSetupTests(unittest.TestCase):
             shutil.copytree(ROOT / 'config', source / 'config')
             data = json.loads((source / 'config/desktop.json').read_text())
             events = Path(tmp) / 'events'
+            wallpaper = Path(tmp) / 'wallpaper.png'; wallpaper.write_bytes(b'wallpaper-fixture')
+            data['wallpaper'] = str(wallpaper)
+            (source / 'config/desktop.json').write_text(json.dumps(data))
             for name in [*data['features'], 'appearance-mode']:
                 script = source / 'bin' / name
                 script.write_text('#!/usr/bin/env python3\nfrom pathlib import Path\n'
@@ -105,15 +108,19 @@ def isolated_run(command, **kwargs):
     return real_run(command, **kwargs)
 s.subprocess.run = isolated_run
 xf = s.Xfconf()
+xf.set('xfce4-desktop', '/backdrop/screen0/monitor0/workspace0/last-image', 's', '/old-wallpaper.png')
 original = xf.snapshot()
 backup = s.snapshot('test-original')
 s.install_recipe()
 actual = xf.snapshot()
 assert actual['xsettings']['/Xft/DPI'] == ['i', '168'], actual['xsettings']
 assert actual['xfce4-panel']['/panels'][0] == 'av'
+assert {str(wallpaper)!r} in actual['xfce4-desktop']['/backdrop/screen0/monitor0/workspace0/last-image'][1]
 assert {str(home)!r} in actual['xfce4-keyboard-shortcuts']['/commands/custom/<Shift><Super>numbersign'][1]
 assert Path({str(events)!r}).read_text().splitlines() == {[*data['features'], 'appearance-mode']!r}
 xf.set('xsettings', '/Gtk/FontName', 's', 'My Font 12')
+xf.set('xfce4-desktop', '/backdrop/screen0/monitor0/workspace0/last-image', 's', '/my-wallpaper.png')
+s.run('gsettings', 'set', 'net.launchpad.plank.dock.settings:' + s.DOCK_PATH, 'icon-size', '90')
 recipe_path = s.ROOT / 'config/desktop.json'
 recipe = json.loads(recipe_path.read_text())
 recipe['settings']['xsettings']['/Net/ThemeName'] = ['s', 'WhiteSur-Dark']
@@ -122,6 +129,8 @@ recipe_path.write_text(json.dumps(recipe))
 s.install_recipe()
 assert xf.snapshot()['xsettings']['/Net/ThemeName'][1] == "'WhiteSur-Dark'"
 assert xf.snapshot()['xsettings']['/Gtk/FontName'][1] == "'My Font 12'"
+assert xf.snapshot()['xfce4-desktop']['/backdrop/screen0/monitor0/workspace0/last-image'][1] == "'/my-wallpaper.png'"
+assert s.run('gsettings', 'get', 'net.launchpad.plank.dock.settings:' + s.DOCK_PATH, 'icon-size').stdout.strip() == '90'
 s.restore(backup)
 assert not (s.HOME / '.config/rofi/config.rasi').exists()
 assert not (s.HOME / '.local/bin/control-install').exists()
