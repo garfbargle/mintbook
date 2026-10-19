@@ -78,6 +78,12 @@ The status bar was the most expensive software on the machine, and it drew six g
 
 [The measurements](docs/performance.md) · [The hardware](docs/hardware.md) · [How hibernation was found](docs/hibernate.md)
 
+## Use it on another account or machine
+
+Start with [the setup guide](docs/setup.md) and `bin/setup-check`. Each account
+needs its own configuration; the desktop release manager migrates an existing
+setup, and hardware changes need a review for the target machine.
+
 ## Everything, documented.
 
 | | |

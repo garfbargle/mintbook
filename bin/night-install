@@ -5,6 +5,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+python3 "$ROOT/bin/night-config" --check "$@"
 # Installed desktops route feature changes through the release transaction.
 if [ "${MINTBOOK_INSTALL_TRANSACTION:-}" != 1 ] && [ -e "$HOME/.local/lib/mintbook/current/manifest.json" ]; then
   exec "$ROOT/bin/desktop-install" --feature "$(basename "$0")" "$@"
@@ -36,7 +37,7 @@ rm -f "$BIN/panel-night"
 install -m755 "$ROOT/bin/panel-night" "$BIN/panel-night"
 
 echo "==> redshift.conf"
-install -m644 "$ROOT/config/redshift.conf" "$HOME/.config/redshift.conf"
+python3 "$ROOT/bin/night-config" "$@"
 
 echo "==> genmon-$PLUGIN.rc"
 install -dm755 "$PANEL_RC"

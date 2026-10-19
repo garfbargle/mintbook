@@ -1,4 +1,4 @@
-Command=/home/cobo/.local/bin/panel-cpu
+Command=panel-cpu
 UpdatePeriod=2000
 Text=
 Font=Inter 9

@@ -120,6 +120,20 @@ def snapshot():
     return data
 
 
+def install_file(source, dest):
+    # Plank requires an absolute file URI, rendered separately for each account.
+    # Keep the generated file in the existing snapshot/revert lifecycle.
+    if source.name == '07-mintdrop.dockitem':
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        temporary = dest.with_name(dest.name + '.new')
+        temporary.unlink(missing_ok=True)
+        temporary.write_text(source.read_text().replace(
+            '@MINTDROP_DESKTOP_URI@', (APPS / 'mintbook-mintdrop.desktop').as_uri()))
+        temporary.replace(dest)
+    else:
+        link(source, dest)
+
+
 def link(source, dest):
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists() or dest.is_symlink():
@@ -259,7 +273,7 @@ def install(args):
         if not source.exists():
             print(f'[!] missing from the checkout: {source}', file=sys.stderr)
             continue
-        link(source, dest)
+        install_file(source, dest)
     print(f'[+] linked {len(SCRIPTS)} scripts into {BIN}')
 
     run('systemctl', '--user', 'daemon-reload', check=False)

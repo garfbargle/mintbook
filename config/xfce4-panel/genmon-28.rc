@@ -1,4 +1,4 @@
-Command=/home/cobo/.local/bin/panel-system
+Command=panel-system
 UpdatePeriod=30000
 Text=
 Font=Inter 9

@@ -837,10 +837,13 @@ immediately left of volume.
 
 ```
 sudo apt install redshift
-bin/night-install
+bin/night-install --location LATITUDE LONGITUDE
 ```
 
-Config is [`config/redshift.conf`](../config/redshift.conf) → `~/.config/redshift.conf`:
+The installer renders [`config/redshift.conf`](../config/redshift.conf) into
+`~/.config/redshift.conf` only when it does not already exist. Supply your own
+coordinates for a new account; omit `--location` on subsequent runs.
+The reference machine's configuration is:
 
 | | |
 |---|---|
@@ -1625,3 +1628,13 @@ from the installed manager inherit its source commit provenance rather than
 being mislabeled as an untraceable local release. The temporary QA idle inhibitors
 have been released; normal idle behavior and the user's Keep Awake setting are
 preserved.
+
+
+### Other users — 2026-10-19
+
+See [setup.md](setup.md) for account prerequisites and current fresh-install limits.
+Night Light now requires explicit coordinates for a new configuration and retains
+existing preferences on rerun. Mintdrop renders its dock launcher for the installing
+account. Runtime templates no longer reference the author's home directory.
+Validation uses temporary homes; no desktop or hardware settings were changed
+on the reference machine. Feature undo and desktop release rollback remain as above.

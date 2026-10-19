@@ -1,0 +1,46 @@
+#!/usr/bin/env python3
+"""Read-only checks before configuring another user's Mintbook desktop."""
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+
+def main():
+    failures = []
+
+    def check(label, ok, remedy):
+        print(f'{"PASS" if ok else "MISSING"} {label}' + ('' if ok else f': {remedy}'))
+        if not ok:
+            failures.append(label)
+
+    check('desktop user', os.geteuid() != 0, 'run without sudo, inside the target account')
+    check('Python 3.10+', sys.version_info >= (3, 10), 'use the supported Mint system Python')
+    check('X11 desktop', bool(os.environ.get('DISPLAY')) and os.environ.get('XDG_SESSION_TYPE') != 'wayland',
+          'run from a terminal in the target XFCE X11 session')
+    desktop = os.environ.get('XDG_CURRENT_DESKTOP', '').lower()
+    check('XFCE session', 'xfce' in desktop, 'log into XFCE')
+    for command, package in (('xfconf-query', 'xfconf'), ('xfce4-panel', 'xfce4-panel'),
+                             ('xdotool', 'xdotool'), ('rofi', 'rofi'), ('systemctl', 'systemd'),
+                             ('desktop-file-validate', 'desktop-file-utils')):
+        check(command, shutil.which(command) is not None, f'install {package}')
+    gtk = subprocess.run([sys.executable, '-c',
+                          'import gi, cairo; gi.require_version("Gtk", "3.0"); '
+                          'gi.require_version("PangoCairo", "1.0"); '
+                          'from gi.repository import Gtk, PangoCairo'], capture_output=True, timeout=10)
+    check('GTK Python bindings', gtk.returncode == 0,
+          'install python3-gi python3-gi-cairo python3-cairo gir1.2-gtk-3.0 gir1.2-pango-1.0')
+    local_bin = Path.home() / '.local/bin'
+    check('user executable PATH', str(local_bin) in os.get_exec_path(),
+          f'add {local_bin} to your login PATH and log in again')
+    if shutil.which('systemctl'):
+        bus = subprocess.run(['systemctl', '--user', 'show-environment'], capture_output=True, timeout=10)
+        check('user service manager', bus.returncode == 0, 'run inside the target user\'s logged-in desktop session')
+    print('NOTE Hardware fixes target MacBook8,1; inspect docs/hardware.md before system changes.')
+    print('NOTE Feature-specific dependencies and setup limits: docs/setup.md')
+    return bool(failures)
+
+
+if __name__ == '__main__':
+    sys.exit(main())

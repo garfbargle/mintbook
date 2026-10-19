@@ -19,6 +19,8 @@ def main():
     action.add_argument('--status', action='store_true', help='show the installed release and local overrides')
     action.add_argument('--feature', nargs=argparse.REMAINDER, help='run an existing feature installer within the activation boundary')
     args = parser.parse_args()
+    if os.geteuid() == 0 and not args.status:
+        parser.error('run desktop-install as the desktop user, without sudo')
     deployment = Deployment(Path(__file__).resolve().parents[1])
     if args.status:
         if not deployment.current.exists():
