@@ -27,11 +27,25 @@ class HookTestCase(unittest.TestCase):
         self.state = self.root / 'state'
         self.modprobe_log = self.root / 'modprobe.log'
         self.run_log = self.root / 'systemd-run.log'
+        self.modules = self.root / 'modules'
+        self.modules.write_text('')
+        # The hook checks /proc/modules after modprobe. Model that state as
+        # well as the calls: CI must not require the host's Broadcom driver.
+        self._fake('grep',
+                   '#!/bin/sh\n'
+                   'if [ "$#" = 3 ] && [ "$3" = /proc/modules ]; then\n'
+                   '  exec /usr/bin/grep "$1" "$2" "$FAKE_MODULES"\n'
+                   'fi\nexec /usr/bin/grep "$@"\n')
         self._fake('nmcli',
                    '#!/bin/sh\n'
                    'printf "%s\\n" "${FAKE_NMCLI_STATE:-wifi:disconnected}"\n')
         self._fake('modprobe',
-                   '#!/bin/sh\nprintf "%s\\n" "$*" >> "$FAKE_MODPROBE_LOG"\n')
+                   '#!/bin/sh\nprintf "%s\\n" "$*" >> "$FAKE_MODPROBE_LOG"\n'
+                   'if [ "$1" = -r ]; then\n'
+                   '  sed -i "/^$2 /d" "$FAKE_MODULES"\n'
+                   'else\n'
+                   '  printf "%s 0 0 - Live 0x0\\n" "$1" >> "$FAKE_MODULES"\n'
+                   'fi\n')
         self._fake('systemd-run',
                    '#!/bin/sh\nprintf "%s\\n" "$*" >> "$FAKE_SYSTEMD_RUN_LOG"\n')
 
@@ -50,6 +64,7 @@ class HookTestCase(unittest.TestCase):
             'PATH': f'{self.bindir}:{os.environ["PATH"]}',
             'FAKE_NMCLI_STATE': f'wifi:{state}',
             'FAKE_MODPROBE_LOG': str(self.modprobe_log),
+            'FAKE_MODULES': str(self.modules),
             'FAKE_SYSTEMD_RUN_LOG': str(self.run_log),
             'MINTBOOK_WIFI_STATE_DIR': str(self.state),
             'MINTBOOK_WIFI_RECOVER_TIMEOUT': timeout,
@@ -79,8 +94,8 @@ class Recover(HookTestCase):
         result = self._run('--recover', state='disconnected', timeout='1')
         self.assertEqual(result.returncode, 0)
         lines = self._modprobe_lines()
-        # Load lines, not the "-r ..." unload ones: the load always happens, so
-        # the test does not depend on whether the host has brcmfmac loaded.
+        # Both module calls and loaded-state probes use the fixture; the host
+        # never needs to have a Broadcom driver loaded.
         self.assertIn('brcmfmac_wcc', lines)
         self.assertIn('brcmfmac', lines)
         self.assertIn('reloading brcmfmac', result.stderr)
