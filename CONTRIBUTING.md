@@ -25,7 +25,12 @@ Keep each change bounded and retain the measured decisions in the relevant doc.
    transaction. Install code through that command; keep preferences outside
    release directories. `--rollback` restores the previous desktop release.
    Avoid changing files directly in `~/.local/bin`: they are managed links.
-7. Record what changed, what was tested, limits and undo steps in the feature doc.
+7. `config/desktop.json` is the install/update recipe: package prerequisites,
+   pinned external themes, initial GUI defaults and ordered feature installers.
+   Keep a feature's installer current and add newly enabled features to this
+   recipe. Do not export a maintainer account to define the product. Test fresh
+   setup and reruns, including custom preferences, when changing setup behavior.
+8. Record what changed, what was tested, limits and undo steps in the feature doc.
    Keep historical measurements labelled with their original date.
 
 Hardware traps: OpenCore chooses boots; GRUB does not. Preserve the applespi DMA

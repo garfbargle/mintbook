@@ -1,0 +1,19 @@
+name: Checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dbus-x11 python3-gi python3-cairo python3-cryptography gir1.2-gtk-3.0 gir1.2-pango-1.0 xfconf dconf-cli plank
+      - name: Unit and private-session tests
+        run: /usr/bin/python3 -m unittest discover -s tests -v
+      - name: Embedded palette consistency
+        run: bin/palette-generate --check

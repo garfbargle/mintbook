@@ -1,0 +1,5 @@
+--- a/libs/lib-install.sh
++++ b/libs/lib-install.sh
+@@ -607 +607 @@
+-  stop_animation; fix_whiskermenu
++  stop_animation

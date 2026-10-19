@@ -1638,3 +1638,11 @@ existing preferences on rerun. Mintdrop renders its dock launcher for the instal
 account. Runtime templates no longer reference the author's home directory.
 Validation uses temporary homes; no desktop or hardware settings were changed
 on the reference machine. Feature undo and desktop release rollback remain as above.
+
+### Repository-driven setup — 2026-10-19
+
+`bin/setup` now composes the desktop from the repository's recipe and existing
+feature installers. It runs inside the versioned release transaction, retains
+typed XFCE settings and file backups for undo, and applies the same recipe
+on updates. It does not export a source user's account. See [setup.md](setup.md)
+for the supported starting system, per-user update command and validation limits.
