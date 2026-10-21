@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Mintbook Dock
+Exec=plank
+OnlyShowIn=XFCE;
+Terminal=false

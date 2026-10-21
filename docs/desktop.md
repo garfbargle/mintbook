@@ -837,10 +837,13 @@ immediately left of volume.
 
 ```
 sudo apt install redshift
-bin/night-install
+bin/night-install --location LATITUDE LONGITUDE
 ```
 
-Config is [`config/redshift.conf`](../config/redshift.conf) → `~/.config/redshift.conf`:
+The installer renders [`config/redshift.conf`](../config/redshift.conf) into
+`~/.config/redshift.conf` only when it does not already exist. Supply your own
+coordinates for a new account; omit `--location` on subsequent runs.
+The reference machine's configuration is:
 
 | | |
 |---|---|
@@ -1023,7 +1026,15 @@ button_layout=CHM|               # close/min/max on the LEFT, Mac order
 title_alignment=center
 margin_top=52                    # fallback only; the panel's strut is the real reserve. Gotchas.
 show_dock_shadow=false           # see Gotchas
+tile_on_move=true                # drag to an edge tiles the window
+wrap_windows=false               # must stay false; xfwm4 skips edge tiling while wrapping is on
 ```
+
+xfwm4 refuses to tile while off-screen window wrapping is enabled, so
+`tile_on_move` alone does nothing. With the stock `wrap_windows=true`, dragging
+a window to the left or right edge moves it to the next hidden workspace
+instead of filling half the screen. `config/desktop.json` owns both values so a
+new account gets the tiling behavior rather than the distro default.
 
 ### Overview
 
@@ -1625,3 +1636,21 @@ from the installed manager inherit its source commit provenance rather than
 being mislabeled as an untraceable local release. The temporary QA idle inhibitors
 have been released; normal idle behavior and the user's Keep Awake setting are
 preserved.
+
+
+### Other users — 2026-10-19
+
+See [setup.md](setup.md) for account prerequisites and current fresh-install limits.
+Night Light now requires explicit coordinates for a new configuration and retains
+existing preferences on rerun. Mintdrop renders its dock launcher for the installing
+account. Runtime templates no longer reference the author's home directory.
+Validation uses temporary homes; no desktop or hardware settings were changed
+on the reference machine. Feature undo and desktop release rollback remain as above.
+
+### Repository-driven setup — 2026-10-19
+
+`bin/setup` now composes the desktop from the repository's recipe and existing
+feature installers. It runs inside the versioned release transaction, retains
+typed XFCE settings and file backups for undo, and applies the same recipe
+on updates. It does not export a source user's account. See [setup.md](setup.md)
+for the supported starting system, per-user update command and validation limits.

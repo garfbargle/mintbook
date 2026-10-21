@@ -1,0 +1,6 @@
+#!/usr/bin/env python3
+"""Install or update Mintbook's per-user desktop from this checkout."""
+from mintbook_setup import main
+
+if __name__ == '__main__':
+    raise SystemExit(main())

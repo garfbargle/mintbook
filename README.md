@@ -78,6 +78,20 @@ The status bar was the most expensive software on the machine, and it drew six g
 
 [The measurements](docs/performance.md) · [The hardware](docs/hardware.md) · [How hibernation was found](docs/hibernate.md)
 
+## Install it in your account
+
+From a Linux Mint 22.3 XFCE session:
+
+```bash
+git clone https://github.com/garfbargle/mintbook.git
+cd mintbook
+bin/setup --install-deps
+```
+
+Update with `git pull --ff-only` followed by `bin/setup`, in each account.
+[The setup guide](docs/setup.md) covers DPI, Night Light, undo and hardware scope.
+The recipe installs the GUI; hardware and boot fixes remain explicit steps.
+
 ## Everything, documented.
 
 | | |

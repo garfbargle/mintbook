@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""Internal setup recipe, run inside the desktop release transaction."""
+import os
+from mintbook_setup import install_recipe
+
+if __name__ == '__main__':
+    if os.environ.get('MINTBOOK_INSTALL_TRANSACTION') != '1':
+        raise SystemExit('Use bin/setup so backup, activation and recovery run together.')
+    install_recipe()

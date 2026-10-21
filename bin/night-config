@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""Prepare Night Light configuration without replacing existing preferences."""
+import argparse
+import math
+from pathlib import Path
+import sys
+
+
+def prepare(home, location=None, check=False):
+    target = Path(home) / '.config/redshift.conf'
+    if target.exists():
+        if location:
+            raise ValueError(f'{target} already exists; edit its [manual] location directly')
+        return target
+    if location is None:
+        raise ValueError('Night Light needs your location: bin/night-install --location LATITUDE LONGITUDE')
+    lat, lon = location
+    if not (math.isfinite(lat) and math.isfinite(lon) and -90 <= lat <= 90 and -180 <= lon <= 180):
+        raise ValueError('latitude must be -90..90 and longitude -180..180')
+    if not check:
+        template = Path(__file__).resolve().parents[1] / 'config/redshift.conf'
+        text = template.read_text().replace('@LATITUDE@', str(lat)).replace('@LONGITUDE@', str(lon))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # Exclusive creation also protects a configuration created after preflight.
+        with target.open('x') as handle:
+            handle.write(text)
+    return target
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--location', nargs=2, type=float, metavar=('LATITUDE', 'LONGITUDE'))
+    parser.add_argument('--check', action='store_true', help='validate without writing files')
+    args = parser.parse_args()
+    try:
+        prepare(Path.home(), args.location, args.check)
+    except (OSError, ValueError) as error:
+        print(error, file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

@@ -7,7 +7,7 @@
 # rather than by making one cheap. See docs/mintdrop.md.
 [Unit]
 Description=Mintdrop — accept files from nearby devices
-Documentation=file:///home/cobo/mintbook/docs/mintdrop.md
+Documentation=https://github.com/garfbargle/mintbook/blob/main/docs/mintdrop.md
 
 [Socket]
 ListenStream=8771

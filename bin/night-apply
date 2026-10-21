@@ -65,6 +65,8 @@ def redshift_daemon_pids():
         if not name.isdigit():
             continue
         try:
+            if os.stat(f'/proc/{name}').st_uid != os.getuid():
+                continue
             raw = open(f'/proc/{name}/cmdline', 'rb').read().split(b'\0')
         except OSError:
             continue

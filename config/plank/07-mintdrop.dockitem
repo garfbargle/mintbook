@@ -1,2 +1,2 @@
 [PlankDockItemPreferences]
-Launcher=file:///home/cobo/.local/share/applications/mintbook-mintdrop.desktop
+Launcher=@MINTDROP_DESKTOP_URI@

@@ -1,0 +1,315 @@
+{
+  "schema": 1,
+  "packages": [
+    "git",
+    "python3",
+    "python3-gi",
+    "python3-gi-cairo",
+    "python3-cairo",
+    "python3-cryptography",
+    "gir1.2-gtk-3.0",
+    "gir1.2-pango-1.0",
+    "dbus-user-session",
+    "dconf-cli",
+    "desktop-file-utils",
+    "rofi",
+    "xdotool",
+    "plank",
+    "xfce4-genmon-plugin",
+    "xfce4-xapp-status-plugin",
+    "xfce4-screenshooter",
+    "pulseaudio-utils",
+    "redshift",
+    "brightnessctl",
+    "sassc",
+    "libglib2.0-dev-bin",
+    "libxml2-utils",
+    "fonts-inter",
+    "fonts-noto-core",
+    "gnome-system-monitor",
+    "btop",
+    "lm-sensors",
+    "mint-backgrounds-wallpapers",
+    "python3-apt",
+    "python3-dbus",
+    "blueman",
+    "network-manager-gnome"
+  ],
+  "themes": [
+    {
+      "name": "WhiteSur-gtk-theme",
+      "url": "https://github.com/vinceliuice/WhiteSur-gtk-theme.git",
+      "commit": "e39f6341fdcdf02826d3daab68faf4204669edf3",
+      "license": "MIT",
+      "args": [
+        "-o",
+        "normal",
+        "-c",
+        "light",
+        "-c",
+        "dark",
+        "-a",
+        "normal",
+        "-t",
+        "default",
+        "-d",
+        "@HOME@/.themes"
+      ],
+      "patches": [
+        "config/themes/whitesur-no-session.patch"
+      ]
+    },
+    {
+      "name": "WhiteSur-icon-theme",
+      "url": "https://github.com/vinceliuice/WhiteSur-icon-theme.git",
+      "commit": "b860eb387fdb6c0cd6e4717a2b533e0ff419d118",
+      "license": "GPL-3.0",
+      "args": [
+        "-d",
+        "@HOME@/.icons"
+      ]
+    }
+  ],
+  "features": [
+    "daily-install",
+    "cpu-install",
+    "wifi-install",
+    "battery-install",
+    "updates-install",
+    "control-install",
+    "bt-panel-install",
+    "overview-install",
+    "app-grid-install"
+  ],
+  "settings": {
+    "xsettings": {
+      "/Net/ThemeName": [
+        "s",
+        "WhiteSur-Light"
+      ],
+      "/Net/IconThemeName": [
+        "s",
+        "WhiteSur-light"
+      ],
+      "/Gtk/FontName": [
+        "s",
+        "Inter 10"
+      ],
+      "/Gtk/CursorThemeSize": [
+        "i",
+        32
+      ],
+      "/Gtk/DecorationLayout": [
+        "s",
+        "close,minimize,maximize:"
+      ],
+      "/Xft/DPI": [
+        "i",
+        96
+      ]
+    },
+    "xfwm4": {
+      "/general/theme": [
+        "s",
+        "WhiteSur-Light-hdpi"
+      ],
+      "/general/title_font": [
+        "s",
+        "Inter 10"
+      ],
+      "/general/button_layout": [
+        "s",
+        "CHM|"
+      ],
+      "/general/use_compositing": [
+        "b",
+        true
+      ],
+      "/general/margin_top": [
+        "i",
+        52
+      ],
+      "/general/show_dock_shadow": [
+        "b",
+        false
+      ],
+      "/general/tile_on_move": [
+        "b",
+        true
+      ],
+      "/general/wrap_windows": [
+        "b",
+        false
+      ]
+    },
+    "xfce4-panel": {
+      "/configver": [
+        "i",
+        2
+      ],
+      "/panels": [
+        "ai",
+        [
+          1
+        ]
+      ],
+      "/panels/panel-1/position": [
+        "s",
+        "p=6;x=0;y=0"
+      ],
+      "/panels/panel-1/position-locked": [
+        "b",
+        true
+      ],
+      "/panels/panel-1/length": [
+        "u",
+        100
+      ],
+      "/panels/panel-1/size": [
+        "u",
+        52
+      ],
+      "/panels/panel-1/icon-size": [
+        "u",
+        36
+      ],
+      "/panels/panel-1/enable-struts": [
+        "b",
+        true
+      ],
+      "/panels/panel-1/background-style": [
+        "u",
+        1
+      ],
+      "/panels/panel-1/background-rgba": [
+        "ad",
+        [
+          0.8431372549,
+          0.8549019608,
+          0.8705882353,
+          0.8588235294
+        ]
+      ],
+      "/panels/panel-1/plugin-ids": [
+        "ai",
+        [
+          1,
+          7,
+          8,
+          10,
+          19,
+          17,
+          18,
+          21,
+          12,
+          11,
+          13
+        ]
+      ],
+      "/plugins/plugin-1": [
+        "s",
+        "launcher"
+      ],
+      "/plugins/plugin-7": [
+        "s",
+        "separator"
+      ],
+      "/plugins/plugin-7/expand": [
+        "b",
+        true
+      ],
+      "/plugins/plugin-7/style": [
+        "u",
+        0
+      ],
+      "/plugins/plugin-8": [
+        "s",
+        "systray"
+      ],
+      "/plugins/plugin-10": [
+        "s",
+        "xapp-status-plugin"
+      ],
+      "/plugins/plugin-11": [
+        "s",
+        "power-manager-plugin"
+      ],
+      "/plugins/plugin-12": [
+        "s",
+        "pulseaudio"
+      ],
+      "/plugins/plugin-13": [
+        "s",
+        "clock"
+      ],
+      "/plugins/plugin-13/digital-time-font": [
+        "s",
+        "Inter 11"
+      ],
+      "/plugins/plugin-13/digital-time-format": [
+        "s",
+        "%a %-d %b  %H:%M  "
+      ],
+      "/plugins/plugin-17": [
+        "s",
+        "genmon"
+      ],
+      "/plugins/plugin-18": [
+        "s",
+        "genmon"
+      ],
+      "/plugins/plugin-19": [
+        "s",
+        "genmon"
+      ],
+      "/plugins/plugin-21": [
+        "s",
+        "genmon"
+      ],
+      "/plugins/plugin-13/digital-layout": [
+        "u",
+        3
+      ],
+      "/plugins/plugin-13/digital-date-font": [
+        "s",
+        "Inter 8"
+      ]
+    },
+    "xfce4-keyboard-shortcuts": {
+      "/commands/custom/<Shift><Super>numbersign": [
+        "s",
+        "@HOME@/.local/bin/screenshot -f"
+      ],
+      "/commands/custom/<Shift><Super>dollar": [
+        "s",
+        "@HOME@/.local/bin/screenshot -r"
+      ],
+      "/commands/custom/<Shift><Super>percent": [
+        "s",
+        "@HOME@/.local/bin/screenshot -w"
+      ],
+      "/commands/custom/Super_L": [
+        "s",
+        "/bin/true"
+      ]
+    }
+  },
+  "dock": {
+    "alignment": "center",
+    "auto-pinning": false,
+    "hide-mode": "intelligent",
+    "icon-size": 64,
+    "position": "bottom",
+    "show-dock-item": false,
+    "theme": "WhiteSur",
+    "zoom-enabled": true,
+    "zoom-percent": 150,
+    "dock-items": [
+      "01-thunar.dockitem",
+      "browser.dockitem",
+      "03-terminal.dockitem",
+      "06-settings.dockitem"
+    ]
+  },
+  "wallpaper": "/usr/share/backgrounds/linuxmint-wallpapers/ssinclair_psychedelic.jpg"
+}
