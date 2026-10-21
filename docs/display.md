@@ -1,10 +1,10 @@
-# Display — HiDPI scaling
+# Display — scaling and monitor changes
 
 The panel is **2304x1440 in 259x162mm**, which is **~226 real DPI** — genuine Retina
 density, comparable to a MacBook Pro. At stock settings every UI element is drawn at
 native pixel size, so a fresh install is close to unreadable.
 
-## Current values
+## Laptop sizing baseline
 
 | Setting | Value | Effect |
 |---|---|---|
@@ -206,3 +206,21 @@ rc files are now materialized as private writable user preferences at activation
 release copies remain hash-verifiable after a plugin save. The affected prior
 release's rc was restored to its exact manifest hash before retrying activation;
 its effective settings were unchanged.
+
+### Validation
+
+The full suite passed (423 tests); the additional writable-preference regression
+and all 34 desktop-runtime tests also passed with private D-Bus access. Nine
+sizing tests cover dock/undock transitions, new and unknown-density displays,
+EDID identity across ports, remembered edits, restart, missing-primary events,
+failed settings writes and failed preference saves.
+
+Live on the Samsung: 96 DPI, 24px cursor, 40px panel, 24px panel icons, 40px top
+margin, ordinary WhiteSur-Light decorations. X11 reports the panel at
+`3440x40+1920+0`, matching the primary output. Both services are active and the
+release manifest verifies. The watcher accumulated zero CPU ticks during a
+five-second idle sample. Overview was visually inspected at actual scale in
+both appearances and dismissed; previews did not change the saved appearance.
+
+![Launcher at 96 DPI, light](screenshots/display-sizing-light.png)
+![Launcher at 96 DPI, dark](screenshots/display-sizing-dark.png)
