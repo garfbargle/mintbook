@@ -67,6 +67,17 @@ class DisplaySizingTests(unittest.TestCase):
         self.sizing.apply(WIDE)
         self.assertEqual(self.backend.settings['dpi'], 108)
 
+    def test_manual_preference_is_saved_before_service_restart(self):
+        self.sizing.apply(WIDE)
+        self.backend.settings['dpi'] = 120
+        self.sizing.remember()
+        fresh = m.Sizing(self.backend, self.path)
+        self.backend.settings['dpi'] = 96
+        fresh.apply(WIDE)
+        self.assertEqual(self.backend.settings['dpi'], 120)
+        metrics = json.loads(self.path.with_name('bar-sizing.json').read_text())
+        self.assertEqual(metrics['canvas'], 25)
+
     def test_restart_preserves_retina_baseline(self):
         self.sizing.apply(WIDE)
         fresh = m.Sizing(self.backend, self.path)

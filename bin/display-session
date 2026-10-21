@@ -7,7 +7,11 @@ import os
 from pathlib import Path
 import re
 import signal
+import sys
 import subprocess
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from mintbook_bar import canvas_height, effective_dpi
 
 SETTINGS = {
     'dpi': ('xsettings', '/Xft/DPI', 'int'),
@@ -74,7 +78,10 @@ class Sizing:
             save(path, self.data)
 
     def apply(self, monitor):
-        if monitor is None or monitor['key'] == self.active:
+        if monitor is None:
+            return False
+        if monitor['key'] == self.active:
+            self.remember()
             return False
         key = monitor['key']
         before = self.backend.read()
@@ -92,8 +99,25 @@ class Sizing:
             self.backend.apply(before)
             raise
         self.data, self.active = updated, key
+        self.publish_metrics(profile)
         print(f"Display sizing: {monitor['name']}: {profile['dpi']} DPI, {profile['panel']}px bar", flush=True)
         return True
+
+    def publish_metrics(self, profile):
+        path = self.path.with_name('bar-sizing.json')
+        data = {'dpi': effective_dpi(profile['dpi']), 'canvas': canvas_height(profile['dpi'])}
+        if not path.exists() or json.loads(path.read_text()) != data:
+            save(path, data)
+
+    def remember(self):
+        if self.active is None:
+            return
+        profile = self.backend.read()
+        if self.data['profiles'].get(self.active) != profile:
+            updated = dict(self.data, profiles=dict(self.data['profiles'], **{self.active: profile}))
+            save(self.path, updated)
+            self.data = updated
+        self.publish_metrics(profile)
 
 
 def main():
@@ -143,6 +167,11 @@ def main():
                 wm.set_string('/general/theme', theme)
                 raise
 
+    try:
+        saved_profiles = json.loads(STATE.read_text()).get('profiles', {})
+    except (OSError, ValueError):
+        saved_profiles = {}
+
     def monitor():
         primary = display.get_primary_monitor()
         # A hotplug can briefly have no primary. Wait for the settled event.
@@ -169,9 +198,11 @@ def main():
             edid = None
         key = ('internal' if internal else edid or '|'.join(map(str, (
             primary.get_manufacturer() or '', name, width_mm, height_mm))))
-        # Include density class: a deliberate resolution change may change the
-        # appropriate sizing, while reconnecting the same setup stays stable.
-        key += ':hidpi' if internal or 150 <= density <= 400 else ':standard'
+        # Retain the existing preference key across DPI/scale changes.
+        for suffix in (':standard', ':hidpi'):
+            if key + suffix in saved_profiles:
+                key += suffix
+                break
         return dict(key=key, name=name, internal=internal, density=density)
 
     backend = Backend()
@@ -203,6 +234,43 @@ def main():
             print('Display sizing failed: ' + str(error), flush=True)
         return GLib.SOURCE_REMOVE
 
+    preference_pending = None
+    dpi_changed = False
+
+    def preferences_changed(channel, prop, _value):
+        nonlocal preference_pending, dpi_changed
+        relevant = {path for name, path, _kind in SETTINGS.values()}
+        if prop not in relevant:
+            return
+        dpi_changed = dpi_changed or prop == '/Xft/DPI'
+        if preference_pending is not None:
+            GLib.source_remove(preference_pending)
+        preference_pending = GLib.timeout_add(300, remember_preferences, prop)
+
+    def remember_preferences(prop):
+        nonlocal preference_pending, dpi_changed
+        preference_pending = None
+        adapt_dpi, dpi_changed = dpi_changed, False
+        if sizing.active is None:
+            return False
+        try:
+            # Font DPI changes in Appearance update chrome without snapping
+            # back to the monitor default. The GUI remains the source of truth.
+            profile = backend.read()
+            if adapt_dpi and profile['dpi'] != sizing.data['profiles'][sizing.active]['dpi']:
+                dpi = effective_dpi(profile['dpi'])
+                profile.update(cursor=max(24, round(40 * dpi / 168)),
+                               panel=max(40, round(52 * dpi / 168)),
+                               icons=max(24, round(36 * dpi / 168)))
+                profile['margin'] = profile['panel']
+                backend.apply(profile)
+            sizing.remember()
+        except Exception as error:
+            print('Cannot remember display preferences: ' + str(error), flush=True)
+        return False
+
+    for channel in channels.values():
+        channel.connect('property-changed', preferences_changed)
     screen.connect('monitors-changed', changed)
     screen.connect('size-changed', changed)
     # Some drivers change the primary output without changing screen geometry.

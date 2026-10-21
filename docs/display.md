@@ -155,7 +155,7 @@ and the custom Cairo menus also use. The Samsung 3440×1440 display reports
 `display-session` now starts with the managed panel through
 `mintbook-display.service`. It listens to GDK monitor/size changes and XFCE's
 display settings, debounces changes for 750 ms, and changes sizing only when the
-primary monitor or its density class changes. No idle polling or repeated
+primary monitor changes. No idle polling or repeated
 xrandr commands. The one xrandr query per settled event reads EDID identity;
 plugging the same monitor into a different port retains its preferences.
 
@@ -177,9 +177,8 @@ plugging the same monitor into a different port retains its preferences.
 **X11 limitation:** font DPI is session-wide, so mixed-density screens share
 the primary display's sizing. This does not provide macOS-style independent
 per-monitor scaling. Some already-running applications cache DPI and need a
-restart; Mintbook popups read it when they launch. A same-primary manual edit
-is remembered on the next monitor switch, not immediately across a service
-restart. Invalid/missing physical dimensions use the standard external default;
+restart; Mintbook popups read it when they launch. Manual sizing edits are saved after a short debounce and survive service
+restarts. Invalid/missing physical dimensions use the standard external default;
 user preferences take precedence after a monitor has been used.
 
 Read-only inspection: `~/.local/bin/display-session status`.
@@ -224,3 +223,30 @@ both appearances and dismissed; previews did not change the saved appearance.
 
 ![Launcher at 96 DPI, light](screenshots/display-sizing-light.png)
 ![Launcher at 96 DPI, dark](screenshots/display-sizing-dark.png)
+
+## Consistent status-bar scale and manual adjustment
+
+The initial 96-DPI change exposed a rendering mismatch: genmon images retained
+34px SVG canvases while clock/temperature text followed DPI. The collector now
+uses one shared SVG viewport rule for custom indicators and CPU graphs:
+20 logical pixels at 96 DPI, 25 at 120, and 35 at 168. SVG viewBoxes remain
+unchanged, so outlines, padding and graphs scale proportionally without raster
+resampling. Repeated identical renders do not rewrite the image cache.
+The temperature uses Inter Medium 10, matching the clock's point-size rhythm;
+the battery percentage has larger embedded digits to remain legible at the
+smaller viewport. Third-party application icons retain their existing sizing.
+
+Use Display Settings' Scale control for whole-screen scaling. For fine font/menu
+size, open Appearance → Fonts → Custom DPI (96=100%, 108=112.5%, 120=125%).
+The search launcher now offers **Display Settings** and **Adjust Text and
+Interface Size**. The latter opens XFCE's existing Appearance preferences.
+Window Scaling in Appearance is the separate coarse 1×/2× control.
+
+The watcher now saves manual DPI/panel/cursor/icon edits after a short debounce,
+including before a service restart. DPI changes update the custom icon viewport,
+cursor, panel dimensions, decorations and window margin. Monitor identity no
+longer changes with resolution/density class, so using Display Settings' Scale
+control cannot accidentally select another DPI profile and double-scale it.
+Existing preference keys remain compatible. Whole-screen fractional scaling
+may resample the display on this X11 desktop; DPI changes retain vector/text
+sharpness but apply session-wide, as described above.

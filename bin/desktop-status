@@ -14,6 +14,9 @@ import subprocess
 import sys
 import time
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from mintbook_bar import scale_images
+
 HERE = Path(__file__).resolve().parent
 CACHE = Path(os.environ.get('XDG_CACHE_HOME', str(Path.home() / '.cache'))) / 'mintbook/status'
 PERIODS = {'wifi': 60, 'bt': 60, 'battery': 5, 'temp': 30, 'system': 30,
@@ -39,6 +42,7 @@ def atomic(path, text):
 
 def publish(name, text, now=None):
     now = time.clock_gettime(time.CLOCK_BOOTTIME) if now is None else now
+    text = scale_images(name, text, CACHE)
     atomic(CACHE / (name + '.xml'), 'v2 ' + str(int(now + TTL[name])) + '\n' + text.rstrip() + '\n')
 
 
@@ -124,6 +128,8 @@ class Collector:
         else:
             self.errors.pop(name, None)
         publish(name, text)
+        if name in ('control', 'overview'):
+            self.nudge()
         if name in self.pending:
             self.request(name, self.pending.pop(name))
         return False
@@ -209,9 +215,10 @@ class Collector:
 
     def chrome_event(self, _monitor, file, _other, _event):
         name = file.get_basename()
-        if name in ('system-chrome.env', 'appearance.applied'):
+        if name in ('system-chrome.env', 'appearance.applied', 'bar-sizing.json'):
             self.cpu_tick(repaint=True)
             self.schedule(PERIODS)
+            self.GLib.timeout_add(500, lambda: (self.nudge(), False)[1])
         elif name == 'appearance.mode':
             self.appearance_tick()
         elif name == 'battery.conf':
