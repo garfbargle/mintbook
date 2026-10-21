@@ -41,7 +41,9 @@ def scale_images(name, markup, cache, preferences=PREFERENCES):
             if width <= 0 or height <= 0:
                 return match.group(0)
             svg.set('viewBox', svg.get('viewBox', f'0 0 {width:g} {height:g}'))
-            svg.set('width', str(round(width * target / height)))
+            viewbox = [float(part) for part in svg.get('viewBox').replace(',', ' ').split()]
+            ratio = viewbox[2] / viewbox[3] if len(viewbox) == 4 and viewbox[3] > 0 else width / height
+            svg.set('width', str(round(ratio * target)))
             svg.set('height', str(target))
             ET.register_namespace('', 'http://www.w3.org/2000/svg')
             data = ET.tostring(svg, encoding='utf-8')

@@ -164,6 +164,15 @@ class CachedReaderTests(unittest.TestCase):
             return subprocess.run([str(ROOT / 'bin/panel-read'), name], env={**os.environ, 'HOME': d},
                                   capture_output=True, text=True, check=True).stdout
 
+    def test_resize_keeps_original_device_data_expiry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory)
+            path = cache / 'wifi.xml'
+            path.write_text('v2 12345\n<img>original.svg</img>\n')
+            with patch.object(status, 'CACHE', cache), patch.object(status, 'scale_images', return_value='<img>scaled.svg</img>\n'):
+                status.resize_cached_images()
+            self.assertEqual(path.read_text(), 'v2 12345\n<img>scaled.svg</img>\n')
+
     def test_fresh_status_is_displayed(self):
         now = int(time.clock_gettime(time.CLOCK_BOOTTIME))
         self.assertEqual(self.run_reader('cpu', now + 8, now + 8), '<txt>live</txt>\n')

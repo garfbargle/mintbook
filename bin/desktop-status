@@ -46,6 +46,18 @@ def publish(name, text, now=None):
     atomic(CACHE / (name + '.xml'), 'v2 ' + str(int(now + TTL[name])) + '\n' + text.rstrip() + '\n')
 
 
+def resize_cached_images():
+    """Repaint on a sizing event without marking cached device data as fresh."""
+    for name in TTL:
+        path = CACHE / (name + '.xml')
+        try:
+            header, markup = path.read_text().split('\n', 1)
+            scaled = scale_images(name, markup, CACHE)
+            atomic(path, header + '\n' + scaled)
+        except (OSError, ValueError):
+            continue
+
+
 def unavailable(name):
     labels = {'wifi': 'Wi-Fi', 'bt': 'Bluetooth', 'cpu': 'CPU', 'temp': 'Temperature',
               'battery': 'Battery', 'control': 'Control Center', 'system': 'System', 'overview': 'Overview'}
@@ -215,7 +227,11 @@ class Collector:
 
     def chrome_event(self, _monitor, file, _other, _event):
         name = file.get_basename()
-        if name in ('system-chrome.env', 'appearance.applied', 'bar-sizing.json'):
+        if name == 'bar-sizing.json':
+            self.cpu_tick(repaint=True)
+            resize_cached_images()
+            self.nudge()
+        elif name in ('system-chrome.env', 'appearance.applied'):
             self.cpu_tick(repaint=True)
             self.schedule(PERIODS)
             self.GLib.timeout_add(500, lambda: (self.nudge(), False)[1])
