@@ -199,3 +199,10 @@ to restore the saved laptop sizing. The sizing file is intentionally retained.
   workarea geometry; Control Center anchors to the pointer's monitor.
 - Unplug/replug, lid-close, sleep/wake, and use of a different physical monitor
   require operator testing. They are not simulated by disconnecting hardware.
+
+Installation exposed an existing release-integrity edge: genmon saved an extra
+blank line through its rc symlink, modifying the active immutable release. Panel
+rc files are now materialized as private writable user preferences at activation;
+release copies remain hash-verifiable after a plugin save. The affected prior
+release's rc was restored to its exact manifest hash before retrying activation;
+its effective settings were unchanged.

@@ -269,8 +269,14 @@ class Deployment:
         for relative, path in destinations.items():
             if str(path) not in known:
                 data['files'].append({'relative': relative, 'path': str(path), 'present': path.exists() or path.is_symlink()})
-            bridge = self.manager if relative in MANAGED else self.current
-            atomic_link(path, bridge / relative)
+            if relative.startswith('config/xfce4-panel/'):
+                # Genmon rewrites its rc file on shutdown, even when only a
+                # trailing blank line changes. Never let that mutate a release.
+                atomic_text(path, (release / relative).read_text())
+                path.chmod(0o600)
+            else:
+                bridge = self.manager if relative in MANAGED else self.current
+                atomic_link(path, bridge / relative)
         atomic_link(self.current, release)
         if previous != release:
             data['previous'] = previous.name

@@ -131,6 +131,17 @@ class ReleaseTests(unittest.TestCase):
         text = (release / 'config/xfce4-panel/genmon-99.rc').read_text()
         self.assertIn('panel-read cpu', text); self.assertIn('Font=Personal 12', text); self.assertIn('UpdatePeriod=2000', text)
 
+    def test_plugin_can_save_preferences_without_mutating_release(self):
+        path = self.home / '.config/xfce4/panel/genmon-99.rc'
+        path.parent.mkdir(parents=True)
+        path.write_text('Command=panel-read overview\nFont=Personal 12\n')
+        release = self.deployment.build()
+        self.deployment.activate(release)
+        self.assertFalse(path.is_symlink())
+        path.write_text(path.read_text() + '\n')
+        self.deployment.validate(release)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
     def test_failed_activation_restores_previous_code_and_restarts_it(self):
         fake = NS(session_pid=Mock(return_value=12), stop=Mock(), start=Mock())
         with patch.object(deploy, 'load_panel', return_value=fake), \
