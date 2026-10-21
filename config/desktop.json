@@ -136,6 +136,10 @@
       "/general/tile_on_move": [
         "b",
         true
+      ],
+      "/general/wrap_windows": [
+        "b",
+        false
       ]
     },
     "xfce4-panel": {

@@ -34,6 +34,11 @@ For the reference MacBook's Retina screen, supply 168:
 bin/setup --install-deps --dpi 168
 ```
 
+The recipe also sets the window-manager default that makes edge dragging tile:
+`tile_on_move` on and `wrap_windows` off. Accounts installed before that default
+was added pick it up on their next `bin/setup`; a later user change to wrapping
+is retained.
+
 Night Light is optional. To configure it for a **new** account, supply that
 user's coordinates, for example London:
 

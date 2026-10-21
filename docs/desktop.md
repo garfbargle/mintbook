@@ -1026,7 +1026,15 @@ button_layout=CHM|               # close/min/max on the LEFT, Mac order
 title_alignment=center
 margin_top=52                    # fallback only; the panel's strut is the real reserve. Gotchas.
 show_dock_shadow=false           # see Gotchas
+tile_on_move=true                # drag to an edge tiles the window
+wrap_windows=false               # must stay false; xfwm4 skips edge tiling while wrapping is on
 ```
+
+xfwm4 refuses to tile while off-screen window wrapping is enabled, so
+`tile_on_move` alone does nothing. With the stock `wrap_windows=true`, dragging
+a window to the left or right edge moves it to the next hidden workspace
+instead of filling half the screen. `config/desktop.json` owns both values so a
+new account gets the tiling behavior rather than the distro default.
 
 ### Overview
 

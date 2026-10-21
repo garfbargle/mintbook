@@ -31,6 +31,12 @@ class SetupTests(unittest.TestCase):
         self.assertIn('config/desktop.json', payload)
         self.assertIn('bin/mintbook_setup.py', payload)
 
+    def test_recipe_enables_edge_tiling(self):
+        xfwm4 = setup.manifest()['settings']['xfwm4']
+        self.assertEqual(xfwm4['/general/tile_on_move'], ['b', True])
+        # xfwm4 refuses to tile while off-screen wrapping is enabled.
+        self.assertEqual(xfwm4['/general/wrap_windows'], ['b', False])
+
     def test_new_managed_files_join_original_undo_without_overwriting_old_backups(self):
         with tempfile.TemporaryDirectory() as tmp:
             original, recovery = Path(tmp) / 'original.json', Path(tmp) / 'run.json'
@@ -126,6 +132,8 @@ s.install_recipe()
 actual = xf.snapshot()
 assert actual['xsettings']['/Xft/DPI'] == ['i', '168'], actual['xsettings']
 assert actual['xfce4-panel']['/panels'][0] == 'av'
+assert actual['xfwm4']['/general/tile_on_move'] == ['b', 'true'], actual['xfwm4']
+assert actual['xfwm4']['/general/wrap_windows'] == ['b', 'false'], actual['xfwm4']
 for name in ('nm-applet.desktop', 'mintreport.desktop'):
     assert 'Hidden=true' in (s.HOME / '.config/autostart' / name).read_text()
 assert {str(wallpaper)!r} in actual['xfce4-desktop']['/backdrop/screen0/monitor0/workspace0/last-image'][1]
