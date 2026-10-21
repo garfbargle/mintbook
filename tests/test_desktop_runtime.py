@@ -131,6 +131,17 @@ class ReleaseTests(unittest.TestCase):
         text = (release / 'config/xfce4-panel/genmon-99.rc').read_text()
         self.assertIn('panel-read cpu', text); self.assertIn('Font=Personal 12', text); self.assertIn('UpdatePeriod=2000', text)
 
+    def test_plugin_can_save_preferences_without_mutating_release(self):
+        path = self.home / '.config/xfce4/panel/genmon-99.rc'
+        path.parent.mkdir(parents=True)
+        path.write_text('Command=panel-read overview\nFont=Personal 12\n')
+        release = self.deployment.build()
+        self.deployment.activate(release)
+        self.assertFalse(path.is_symlink())
+        path.write_text(path.read_text() + '\n')
+        self.deployment.validate(release)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
     def test_failed_activation_restores_previous_code_and_restarts_it(self):
         fake = NS(session_pid=Mock(return_value=12), stop=Mock(), start=Mock())
         with patch.object(deploy, 'load_panel', return_value=fake), \
@@ -152,6 +163,15 @@ class CachedReaderTests(unittest.TestCase):
             if valid is not None: (cache / (name + '.xml')).write_text('v2 ' + str(valid) + '\n' + text)
             return subprocess.run([str(ROOT / 'bin/panel-read'), name], env={**os.environ, 'HOME': d},
                                   capture_output=True, text=True, check=True).stdout
+
+    def test_resize_keeps_original_device_data_expiry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory)
+            path = cache / 'wifi.xml'
+            path.write_text('v2 12345\n<img>original.svg</img>\n')
+            with patch.object(status, 'CACHE', cache), patch.object(status, 'scale_images', return_value='<img>scaled.svg</img>\n'):
+                status.resize_cached_images()
+            self.assertEqual(path.read_text(), 'v2 12345\n<img>scaled.svg</img>\n')
 
     def test_fresh_status_is_displayed(self):
         now = int(time.clock_gettime(time.CLOCK_BOOTTIME))

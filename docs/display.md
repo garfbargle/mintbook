@@ -1,10 +1,10 @@
-# Display — HiDPI scaling
+# Display — scaling and monitor changes
 
 The panel is **2304x1440 in 259x162mm**, which is **~226 real DPI** — genuine Retina
 density, comparable to a MacBook Pro. At stock settings every UI element is drawn at
 native pixel size, so a fresh install is close to unreadable.
 
-## Current values
+## Laptop sizing baseline
 
 | Setting | Value | Effect |
 |---|---|---|
@@ -139,3 +139,114 @@ See [the top-bar review](top-bar-review.md) for tests and measured costs.
 
 Redshift keeps the existing base config path allowed by AppArmor; no new policy
 permission or generated runtime config is needed.
+
+## Primary-display sizing (2026-10-20)
+
+The customized desktop is XFCE, with a Plank dock and an XFCE system panel.
+The panel must have `/panels/panel-1/output-name = Primary`: an automatic
+output choice did not follow the primary-monitor selection on this machine.
+This is a persistent XFCE preference, not a Cinnamon panel setting.
+
+The first ultrawide connection exposed a second issue: `WindowScalingFactor=1`
+was still accompanied by `Xft/DPI=168`. That is 175% font scaling, which Chrome
+and the custom Cairo menus also use. The Samsung 3440×1440 display reports
+797×333 mm (~110 DPI); the Retina font setting made its UI oversized.
+
+`display-session` now starts with the managed panel through
+`mintbook-display.service`. It listens to GDK monitor/size changes and XFCE's
+display settings, debounces changes for 750 ms, and changes sizing only when the
+primary monitor changes. No idle polling or repeated
+xrandr commands. The one xrandr query per settled event reads EDID identity;
+plugging the same monitor into a different port retains its preferences.
+
+- The first run saves the existing laptop sizing in
+  `~/.config/mintbook/display-sizing.json`, outside the versioned releases.
+- Internal displays and external displays reporting 150–400 DPI use that
+  Retina baseline (currently 168 DPI, 40px cursor, 52px bar and 36px icons).
+- Other external displays default to 96 DPI, a 24px cursor, 40px bar and
+  24px panel icons. The bar retains room for the existing 34px SVG indicators.
+- The window-manager fallback top margin always changes with the bar height.
+  The panel's enabled strut remains the real reserved area.
+- WhiteSur window decorations switch between ordinary and installed `-hdpi`
+  variants while retaining Light/Dark. Other window themes are left alone.
+- Manual edits are remembered when leaving a primary monitor; changing
+  secondary-monitor geometry does not overwrite or reapply sizing.
+- XFCE retains control of primary selection, resolution, layout and refresh
+  rate. This helper does not disable outputs, move windows, or select modes.
+
+**X11 limitation:** font DPI is session-wide, so mixed-density screens share
+the primary display's sizing. This does not provide macOS-style independent
+per-monitor scaling. Some already-running applications cache DPI and need a
+restart; Mintbook popups read it when they launch. Manual sizing edits are saved after a short debounce and survive service
+restarts. Invalid/missing physical dimensions use the standard external default;
+user preferences take precedence after a monitor has been used.
+
+Read-only inspection: `~/.local/bin/display-session status`.
+Install code using `bin/desktop-install`, which validates and activates a
+self-contained release. Undo: run `~/.local/bin/desktop-install --rollback`
+to remove the watcher, then run the new checkout's `bin/display-session restore`
+to restore the saved laptop sizing. The sizing file is intentionally retained.
+
+### Related edges observed in this setup
+
+- The laptop is currently 1920×1200 rather than its native 2304×1440. That can
+  reduce sharpness. It was left alone to preserve the selected layout.
+- The ultrawide advertises 49.99 Hz as its only 3440×1440 mode on the current
+  connection. This can limit smoothness; a higher refresh rate was not forced.
+- `window-place` already restores windows within the current monitor workarea
+  after an unplug. Overview and screenshot notifications already use primary
+  workarea geometry; Control Center anchors to the pointer's monitor.
+- Unplug/replug, lid-close, sleep/wake, and use of a different physical monitor
+  require operator testing. They are not simulated by disconnecting hardware.
+
+Installation exposed an existing release-integrity edge: genmon saved an extra
+blank line through its rc symlink, modifying the active immutable release. Panel
+rc files are now materialized as private writable user preferences at activation;
+release copies remain hash-verifiable after a plugin save. The affected prior
+release's rc was restored to its exact manifest hash before retrying activation;
+its effective settings were unchanged.
+
+### Validation
+
+The full suite passed (423 tests); the additional writable-preference regression
+and all 34 desktop-runtime tests also passed with private D-Bus access. Nine
+sizing tests cover dock/undock transitions, new and unknown-density displays,
+EDID identity across ports, remembered edits, restart, missing-primary events,
+failed settings writes and failed preference saves.
+
+Live on the Samsung: 96 DPI, 24px cursor, 40px panel, 24px panel icons, 40px top
+margin, ordinary WhiteSur-Light decorations. X11 reports the panel at
+`3440x40+1920+0`, matching the primary output. Both services are active and the
+release manifest verifies. The watcher accumulated zero CPU ticks during a
+five-second idle sample. Overview was visually inspected at actual scale in
+both appearances and dismissed; previews did not change the saved appearance.
+
+![Launcher at 96 DPI, light](screenshots/display-sizing-light.png)
+![Launcher at 96 DPI, dark](screenshots/display-sizing-dark.png)
+
+## Consistent status-bar scale and manual adjustment
+
+The initial 96-DPI change exposed a rendering mismatch: genmon images retained
+34px SVG canvases while clock/temperature text followed DPI. The collector now
+uses one shared SVG viewport rule for custom indicators and CPU graphs:
+20 logical pixels at 96 DPI, 25 at 120, and 35 at 168. SVG viewBoxes remain
+unchanged, so outlines, padding and graphs scale proportionally without raster
+resampling. Repeated identical renders do not rewrite the image cache.
+The temperature uses Inter Medium 10, matching the clock's point-size rhythm;
+the battery percentage has larger embedded digits to remain legible at the
+smaller viewport. Third-party application icons retain their existing sizing.
+
+Use Display Settings' Scale control for whole-screen scaling. For fine font/menu
+size, open Appearance → Fonts → Custom DPI (96=100%, 108=112.5%, 120=125%).
+The search launcher now offers **Display Settings** and **Adjust Text and
+Interface Size**. The latter opens XFCE's existing Appearance preferences.
+Window Scaling in Appearance is the separate coarse 1×/2× control.
+
+The watcher now saves manual DPI/panel/cursor/icon edits after a short debounce,
+including before a service restart. DPI changes update the custom icon viewport,
+cursor, panel dimensions, decorations and window margin. Monitor identity no
+longer changes with resolution/density class, so using Display Settings' Scale
+control cannot accidentally select another DPI profile and double-scale it.
+Existing preference keys remain compatible. Whole-screen fractional scaling
+may resample the display on this X11 desktop; DPI changes retain vector/text
+sharpness but apply session-wide, as described above.

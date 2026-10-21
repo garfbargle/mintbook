@@ -1,6 +1,6 @@
 [Unit]
 Description=Mintbook top bar with session-aware recovery
-Wants=mintbook-status.service
+Wants=mintbook-status.service mintbook-display.service
 After=graphical-session-pre.target mintbook-status.service
 StartLimitIntervalSec=120
 StartLimitBurst=5

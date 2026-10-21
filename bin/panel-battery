@@ -145,14 +145,14 @@ case "$COLOR" in
 esac
 
 # Only rewrite the file when what it would draw has changed.
-sig="v2:$pct/$st/$fill/$boltfill/$fg/$SHOW_PERCENT"
+sig="v3:$pct/$st/$fill/$boltfill/$fg/$SHOW_PERCENT"
 osig='' otick=0 oprev=0
 [ -r "$STATE" ] && read -r osig otick oprev < "$STATE"
 otick=${otick:-0} oprev=${oprev:-0}
 # v2 changes the logged percentage from design-relative to usable-relative.
 # Make the first new sample a graph break rather than drawing a fake 20-point
 # charge jump from a legacy sample to a normalized one.
-case "$osig" in v2:*) ;; *) oprev=0 ;; esac
+case "$osig" in v2:*|v3:*) ;; *) oprev=0 ;; esac
 
 # A rounded rectangle as an SVG path, in half-pixel units — `rr x y w h r`.
 # Two of them under fill-rule=evenodd is an outline of exactly the thickness
@@ -193,7 +193,7 @@ if [ "${osig:-}" != "$sig" ] || [ ! -s "$SVG" ]; then
   if [ "$SHOW_PERCENT" = 1 ]; then
     tx=$(( bx + bw / 2 ))
     [ "$st" = C ] && tx=$(( ix + (iw - 26) / 2 ))   # the well before the bolt
-    marks=$(printf '  <text x="%s" y="44" text-anchor="middle" fill="%s" fill-opacity=".95" font-family="Inter" font-size="29" font-weight="600" style="font-feature-settings:%s">%s</text>' \
+    marks=$(printf '  <text x="%s" y="47" text-anchor="middle" fill="%s" fill-opacity=".95" font-family="Inter" font-size="37" font-weight="600" style="font-feature-settings:%s">%s</text>' \
       "$tx" "$fg" "'tnum'" "$pct")
   fi
 

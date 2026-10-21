@@ -46,7 +46,7 @@ fi
 padded="$c"
 while [ "${#padded}" -lt 3 ]; do padded=$' '"$padded"; done
 
-printf '<txt><span font_features="tnum" foreground="%s">%s°C </span></txt>\n' "$col" "$padded"
+printf '<txt><span font_desc="Inter Medium 10" font_features="tnum" foreground="%s">%s°C </span></txt>\n' "$col" "$padded"
 
 # CPU is already on the bar. The hover names the other sensors that are not.
 bits=''

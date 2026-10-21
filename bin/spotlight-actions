@@ -8,6 +8,8 @@ import sys
 BIN = Path.home() / '.local/bin'
 ACTIONS = {
     'control': ('Open Control Center', 'preferences-system', 'settings brightness volume', ['control-center']),
+    'display-settings': ('Display Settings', 'video-display', 'monitor resolution layout primary screen scale', ['/usr/bin/xfce4-display-settings']),
+    'display-sizing': ('Adjust Text and Interface Size', 'preferences-desktop-font', 'display scaling font dpi appearance size', ['/usr/bin/xfce4-appearance-settings']),
     'wallpaper': ('Choose Wallpaper', 'preferences-desktop-wallpaper', 'background desktop login picture', ['login-settings']),
     'mintdrop': ('Send files with Mintdrop', 'document-send', 'airdrop quickshare share nearby', ['mintdrop-menu']),
     'wifi': ('Choose Wi-Fi network', 'network-wireless', 'internet connect network', ['wifi-menu']),
