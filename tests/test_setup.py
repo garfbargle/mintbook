@@ -30,6 +30,21 @@ class SetupTests(unittest.TestCase):
         payload = Deployment(ROOT, Path('/tmp/unused-setup-home')).source_files()
         self.assertIn('config/desktop.json', payload)
         self.assertIn('bin/mintbook_setup.py', payload)
+        self.assertIn('gir1.2-xfconf-0', data['packages'])
+
+    def test_display_sizing_is_installed_in_each_users_release(self):
+        home = Path('/tmp/unused-setup-home')
+        deployment = Deployment(ROOT, home)
+        files = deployment.source_files()
+        self.assertIn('bin/display-session', files)
+        self.assertIn('config/systemd/mintbook-display.service', files)
+        self.assertIn(b'Wants=mintbook-status.service mintbook-display.service',
+                      files['config/systemd/mintbook-panel.service'][0])
+        targets = deployment.target_paths(files)
+        self.assertEqual(Path(targets['bin/display-session']),
+                         home / '.local/bin/display-session')
+        self.assertEqual(Path(targets['config/systemd/mintbook-display.service']),
+                         home / '.config/systemd/user/mintbook-display.service')
 
     def test_recipe_enables_edge_tiling(self):
         xfwm4 = setup.manifest()['settings']['xfwm4']

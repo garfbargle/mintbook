@@ -182,6 +182,10 @@ restarts. Invalid/missing physical dimensions use the standard external default;
 user preferences take precedence after a monitor has been used.
 
 Read-only inspection: `~/.local/bin/display-session status`.
+The setup recipe declares `gir1.2-xfconf-0` for the watcher's Xfconf bindings
+(`--install-deps` installs it) and maps the service into each user's
+`~/.config/systemd/user`. `bin/desktop-install` alone assumes the binding is
+already present.
 Install code using `bin/desktop-install`, which validates and activates a
 self-contained release. Undo: run `~/.local/bin/desktop-install --rollback`
 to remove the watcher, then run the new checkout's `bin/display-session restore`
