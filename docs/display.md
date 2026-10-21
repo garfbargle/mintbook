@@ -139,3 +139,63 @@ See [the top-bar review](top-bar-review.md) for tests and measured costs.
 
 Redshift keeps the existing base config path allowed by AppArmor; no new policy
 permission or generated runtime config is needed.
+
+## Primary-display sizing (2026-10-20)
+
+The customized desktop is XFCE, with a Plank dock and an XFCE system panel.
+The panel must have `/panels/panel-1/output-name = Primary`: an automatic
+output choice did not follow the primary-monitor selection on this machine.
+This is a persistent XFCE preference, not a Cinnamon panel setting.
+
+The first ultrawide connection exposed a second issue: `WindowScalingFactor=1`
+was still accompanied by `Xft/DPI=168`. That is 175% font scaling, which Chrome
+and the custom Cairo menus also use. The Samsung 3440×1440 display reports
+797×333 mm (~110 DPI); the Retina font setting made its UI oversized.
+
+`display-session` now starts with the managed panel through
+`mintbook-display.service`. It listens to GDK monitor/size changes and XFCE's
+display settings, debounces changes for 750 ms, and changes sizing only when the
+primary monitor or its density class changes. No idle polling or repeated
+xrandr commands. The one xrandr query per settled event reads EDID identity;
+plugging the same monitor into a different port retains its preferences.
+
+- The first run saves the existing laptop sizing in
+  `~/.config/mintbook/display-sizing.json`, outside the versioned releases.
+- Internal displays and external displays reporting 150–400 DPI use that
+  Retina baseline (currently 168 DPI, 40px cursor, 52px bar and 36px icons).
+- Other external displays default to 96 DPI, a 24px cursor, 40px bar and
+  24px panel icons. The bar retains room for the existing 34px SVG indicators.
+- The window-manager fallback top margin always changes with the bar height.
+  The panel's enabled strut remains the real reserved area.
+- WhiteSur window decorations switch between ordinary and installed `-hdpi`
+  variants while retaining Light/Dark. Other window themes are left alone.
+- Manual edits are remembered when leaving a primary monitor; changing
+  secondary-monitor geometry does not overwrite or reapply sizing.
+- XFCE retains control of primary selection, resolution, layout and refresh
+  rate. This helper does not disable outputs, move windows, or select modes.
+
+**X11 limitation:** font DPI is session-wide, so mixed-density screens share
+the primary display's sizing. This does not provide macOS-style independent
+per-monitor scaling. Some already-running applications cache DPI and need a
+restart; Mintbook popups read it when they launch. A same-primary manual edit
+is remembered on the next monitor switch, not immediately across a service
+restart. Invalid/missing physical dimensions use the standard external default;
+user preferences take precedence after a monitor has been used.
+
+Read-only inspection: `~/.local/bin/display-session status`.
+Install code using `bin/desktop-install`, which validates and activates a
+self-contained release. Undo: run `~/.local/bin/desktop-install --rollback`
+to remove the watcher, then run the new checkout's `bin/display-session restore`
+to restore the saved laptop sizing. The sizing file is intentionally retained.
+
+### Related edges observed in this setup
+
+- The laptop is currently 1920×1200 rather than its native 2304×1440. That can
+  reduce sharpness. It was left alone to preserve the selected layout.
+- The ultrawide advertises 49.99 Hz as its only 3440×1440 mode on the current
+  connection. This can limit smoothness; a higher refresh rate was not forced.
+- `window-place` already restores windows within the current monitor workarea
+  after an unplug. Overview and screenshot notifications already use primary
+  workarea geometry; Control Center anchors to the pointer's monitor.
+- Unplug/replug, lid-close, sleep/wake, and use of a different physical monitor
+  require operator testing. They are not simulated by disconnecting hardware.

@@ -11,7 +11,7 @@ import tempfile
 import time
 
 TREES = ('bin', 'icons', 'config', 'control-center', 'vendor')
-CORE = {'desktop-install', 'desktop-status', 'panel-read', 'panel-session', 'mintbook_deploy.py'}
+CORE = {'desktop-install', 'desktop-status', 'panel-read', 'panel-session', 'mintbook_deploy.py', 'display-session'}
 MANAGED = {'bin/desktop-install', 'bin/mintbook_deploy.py', 'bin/panel-session',
            'bin/mb81-jack-switch', 'config/systemd/user-overrides/mb81-jack-switch.service.d/override.conf'}
 STATUS_NAMES = {'cpu', 'temp', 'wifi', 'bt', 'battery', 'system', 'control', 'overview'}
@@ -227,6 +227,7 @@ class Deployment:
             result['bin/' + name] = self.home / '.local/bin' / name
         result['config/systemd/mintbook-panel.service'] = self.home / '.config/systemd/user/mintbook-panel.service'
         result['config/systemd/mintbook-appearance-refresh.service'] = self.home / '.config/systemd/user/mintbook-appearance-refresh.service'
+        result['config/systemd/mintbook-display.service'] = self.home / '.config/systemd/user/mintbook-display.service'
         result['config/systemd/mintbook-status.service'] = self.home / '.config/systemd/user/mintbook-status.service'
         result['config/autostart/mintbook-panel.desktop'] = self.home / '.config/autostart/mintbook-panel.desktop'
         return {name: str(path) for name, path in result.items() if name in files}

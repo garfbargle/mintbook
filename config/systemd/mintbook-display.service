@@ -1,0 +1,10 @@
+[Unit]
+Description=Mintbook primary-display sizing
+PartOf=mintbook-panel.service
+After=graphical-session-pre.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/display-session watch
+Restart=on-failure
+RestartSec=5

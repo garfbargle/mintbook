@@ -1,0 +1,218 @@
+#!/usr/bin/python3
+"""Follow the primary display's sizing without polling or changing its layout."""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import signal
+import subprocess
+
+SETTINGS = {
+    'dpi': ('xsettings', '/Xft/DPI', 'int'),
+    'cursor': ('xsettings', '/Gtk/CursorThemeSize', 'int'),
+    'panel': ('xfce4-panel', '/panels/panel-1/size', 'uint'),
+    'icons': ('xfce4-panel', '/panels/panel-1/icon-size', 'uint'),
+    'margin': ('xfwm4', '/general/margin_top', 'int'),
+}
+STATE = Path.home() / '.config/mintbook/display-sizing.json'
+
+
+def monitor_edid(text, connector):
+    """Read one output's EDID, so USB-C port changes do not lose preferences."""
+    output = None
+    collecting = False
+    chunks = []
+    for line in text.splitlines():
+        if line and not line[0].isspace():
+            output = line.split()[0]
+            collecting = False
+        elif output == connector:
+            if line.strip() == 'EDID:':
+                collecting = True
+            elif collecting and re.fullmatch(r'[0-9a-fA-F]{32}', line.strip()):
+                chunks.append(line.strip().lower())
+            else:
+                collecting = False
+    return hashlib.sha256(''.join(chunks).encode()).hexdigest()[:24] if chunks else None
+
+
+def default_profile(baseline, monitor):
+    # Preserve the tuned Retina setup. Unknown external sizes use standard DPI;
+    # TVs/projectors sometimes report zero or implausible physical dimensions.
+    if monitor['internal'] or 150 <= monitor['density'] <= 400:
+        return dict(baseline)
+    return dict(dpi=96, cursor=24, panel=40, icons=24, margin=40)
+
+
+def theme_for(theme, dpi):
+    # Only adapt the installed WhiteSur variants; retain the current appearance.
+    if not re.fullmatch(r'WhiteSur-(Light|Dark)(-x?hdpi)?', theme):
+        return theme
+    base = re.sub(r'-x?hdpi$', '', theme)
+    return base + ('-hdpi' if dpi >= 144 else '')
+
+
+def save(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix('.tmp')
+    temporary.write_text(json.dumps(data, indent=2) + '\n')
+    temporary.replace(path)
+
+
+class Sizing:
+    def __init__(self, backend, path=STATE):
+        self.backend, self.path = backend, path
+        self.active = None
+        if path.exists():
+            self.data = json.loads(path.read_text())
+            if self.data.get('version') != 1:
+                raise ValueError('unsupported display sizing preferences')
+        else:
+            self.data = {'version': 1, 'baseline': backend.read(), 'profiles': {}}
+            save(path, self.data)
+
+    def apply(self, monitor):
+        if monitor is None or monitor['key'] == self.active:
+            return False
+        key = monitor['key']
+        before = self.backend.read()
+        # Remember manual sizing edits for the monitor we are leaving.
+        profiles = dict(self.data['profiles'])
+        if self.active:
+            profiles[self.active] = before
+        profile = profiles.get(key, default_profile(self.data['baseline'], monitor))
+        self.backend.apply(profile)
+        profiles[key] = profile
+        updated = dict(self.data, profiles=profiles)
+        try:
+            save(self.path, updated)
+        except Exception:
+            self.backend.apply(before)
+            raise
+        self.data, self.active = updated, key
+        print(f"Display sizing: {monitor['name']}: {profile['dpi']} DPI, {profile['panel']}px bar", flush=True)
+        return True
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('action', choices=('watch', 'apply', 'status', 'restore'))
+    args = parser.parse_args()
+    import gi
+    gi.require_version('Gdk', '3.0')
+    gi.require_version('Xfconf', '0')
+    from gi.repository import Gdk, GLib, Xfconf
+    if not Xfconf.init():
+        raise RuntimeError('cannot connect to the desktop settings service')
+    display = Gdk.Display.get_default()
+    screen = Gdk.Screen.get_default()
+    if display is None or screen is None:
+        raise RuntimeError('run from the graphical desktop session')
+    channels = {name: Xfconf.Channel.get(name) for name, _, _ in SETTINGS.values()}
+
+    class Backend:
+        def read(self):
+            return {name: getattr(channels[channel], 'get_' + kind)(prop, 0)
+                    for name, (channel, prop, kind) in SETTINGS.items()}
+
+        def apply(self, profile):
+            before = self.read()
+            wm = channels['xfwm4']
+            theme = wm.get_string('/general/theme', '')
+            desired_theme = theme_for(theme, profile['dpi'])
+            written = []
+            try:
+                for name, (channel, prop, kind) in SETTINGS.items():
+                    if before[name] == profile[name]:
+                        continue
+                    if not getattr(channels[channel], 'set_' + kind)(prop, profile[name]):
+                        raise RuntimeError('cannot set ' + prop)
+                    written.append(name)
+                if desired_theme != theme:
+                    # Do not select a variant that is not installed.
+                    roots = (Path.home() / '.themes', Path.home() / '.local/share/themes', Path('/usr/share/themes'))
+                    if any((root / desired_theme / 'xfwm4').is_dir() for root in roots):
+                        if not wm.set_string('/general/theme', desired_theme):
+                            raise RuntimeError('cannot set window decoration theme')
+            except Exception:
+                for name in reversed(written):
+                    channel, prop, kind = SETTINGS[name]
+                    getattr(channels[channel], 'set_' + kind)(prop, before[name])
+                wm.set_string('/general/theme', theme)
+                raise
+
+    def monitor():
+        primary = display.get_primary_monitor()
+        # A hotplug can briefly have no primary. Wait for the settled event.
+        if primary is None:
+            if display.get_n_monitors() != 1:
+                return None
+            primary = display.get_monitor(0)
+        index = next((i for i in range(display.get_n_monitors())
+                      if display.get_monitor(i) == primary), 0)
+        connector = screen.get_monitor_plug_name(index) or ''
+        width_mm, height_mm = primary.get_width_mm(), primary.get_height_mm()
+        geometry = primary.get_geometry()
+        scale = primary.get_scale_factor()
+        density = geometry.width * scale * 25.4 / width_mm if width_mm > 0 else 0
+        internal = connector.startswith(('eDP', 'LVDS', 'DSI'))
+        # Prefer EDID identity; fall back to the reported model and dimensions.
+        # Layouts and resolutions remain XFCE's job.
+        name = primary.get_model() or connector or 'unknown display'
+        try:
+            result = subprocess.run(['xrandr', '--props'], capture_output=True,
+                                    text=True, check=True, timeout=3)
+            edid = monitor_edid(result.stdout, connector)
+        except (OSError, subprocess.SubprocessError):
+            edid = None
+        key = ('internal' if internal else edid or '|'.join(map(str, (
+            primary.get_manufacturer() or '', name, width_mm, height_mm))))
+        # Include density class: a deliberate resolution change may change the
+        # appropriate sizing, while reconnecting the same setup stays stable.
+        key += ':hidpi' if internal or 150 <= density <= 400 else ':standard'
+        return dict(key=key, name=name, internal=internal, density=density)
+
+    backend = Backend()
+    if args.action == 'status':
+        print(json.dumps({'primary': monitor(), 'settings': backend.read()}, indent=2))
+        return
+    sizing = Sizing(backend)
+    if args.action == 'restore':
+        backend.apply(sizing.data['baseline'])
+        return
+    if args.action == 'apply':
+        sizing.apply(monitor())
+        return
+    loop = GLib.MainLoop()
+    pending = None
+
+    def changed(*_args):
+        nonlocal pending
+        if pending is not None:
+            GLib.source_remove(pending)
+        pending = GLib.timeout_add(750, settled)
+
+    def settled():
+        nonlocal pending
+        pending = None
+        try:
+            sizing.apply(monitor())
+        except Exception as error:
+            print('Display sizing failed: ' + str(error), flush=True)
+        return GLib.SOURCE_REMOVE
+
+    screen.connect('monitors-changed', changed)
+    screen.connect('size-changed', changed)
+    # Some drivers change the primary output without changing screen geometry.
+    channels['displays'] = Xfconf.Channel.get('displays')
+    channels['displays'].connect('property-changed', changed)
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, sig, lambda: (loop.quit(), GLib.SOURCE_REMOVE)[1])
+    changed()
+    loop.run()
+
+
+if __name__ == '__main__':
+    main()
