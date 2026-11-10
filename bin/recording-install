@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""Install recording and microphone controls through the desktop release transaction."""
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+HOME = Path.home()
+STATE = HOME / '.config/mintbook/recording-install.json'
+KEY = '/commands/custom/<Shift><Super>r'
+SCRIPTS = ('mintbook-audio', 'mintbook-record', 'recording-vaapi-install', 'control-center', 'spotlight-actions')
+PLUGINS = ('36-audio-input', '37-microphone', '38-input-volume', '39-audio-mixer', '39-recording')
+
+
+def run(*args, check=True):
+    return subprocess.run(args, check=check, capture_output=True, text=True, timeout=15)
+
+
+def targets():
+    return ([(ROOT / 'bin' / name, HOME / '.local/bin' / name) for name in SCRIPTS] +
+            [(ROOT / 'control-center/plugins' / name,
+              HOME / '.local/share/mintbook/control-center/plugins' / name) for name in PLUGINS])
+
+
+def install():
+    if not shutil.which('obs') or not shutil.which('pavucontrol'):
+        raise RuntimeError('Install obs-studio and pavucontrol first (bin/setup --install-deps).')
+    desktop = HOME / '.local/share/applications/mintbook-record.desktop'
+    backup = HOME / '.local/state/mintbook/recording-before'
+    backup.mkdir(parents=True, exist_ok=True)
+    if STATE.exists():
+        data = json.loads(STATE.read_text())
+    else:
+        data = {'files': [], 'key': run('xfconf-query', '-c', 'xfce4-keyboard-shortcuts', '-p', KEY, check=False).stdout.rstrip('\n') or None}
+    known = {entry['path'] for entry in data['files']}
+    for _, dest in targets() + [(None, desktop)]:
+        if str(dest) in known:
+            continue
+        saved = None
+        if dest.exists():
+            saved = backup / str(len(data['files']))
+            shutil.copy2(dest, saved)
+        data['files'].append({'path': str(dest), 'backup': str(saved) if saved else None})
+    STATE.parent.mkdir(parents=True, exist_ok=True)
+    STATE.write_text(json.dumps(data, indent=2) + '\n')
+    for source, dest in targets():
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        # Release-managed files must be replaced, never modified through a symlink.
+        dest.unlink(missing_ok=True)
+        shutil.copy2(source, dest)
+    desktop.parent.mkdir(parents=True, exist_ok=True)
+    desktop.write_text('[Desktop Entry]\nType=Application\nName=Record Screen\n'
+                       'Comment=Record your screen, microphone and computer audio\n'
+                       'Icon=media-record\nExec="' + str(HOME / '.local/bin/mintbook-record') + '"\n'
+                       'Terminal=false\nCategories=AudioVideo;Recorder;\n'
+                       'Keywords=screen;recording;capture;microphone;OBS;\nActions=Recordings;Mixer;\n\n'
+                       '[Desktop Action Recordings]\nName=Open Recordings\nExec="' +
+                       str(HOME / '.local/bin/mintbook-record') + '" --folder\n\n'
+                       '[Desktop Action Mixer]\nName=Audio Mixer\nExec=pavucontrol\n')
+    run('xfconf-query', '-c', 'xfce4-keyboard-shortcuts', '-p', KEY, '-r', check=False)
+    run('xfconf-query', '-c', 'xfce4-keyboard-shortcuts', '-p', KEY,
+        '-n', '-t', 'string', '-s', str(HOME / '.local/bin/mintbook-record'))
+    run(str(ROOT / 'bin/mintbook-record'), '--setup')
+    run('update-desktop-database', str(desktop.parent), check=False)
+    print('Ready: Cmd+Shift+R or Control Center → Record Screen.\nRecordings: ~/Videos/Recordings\nUndo: bin/recording-install --revert')
+
+
+def revert():
+    if not STATE.exists():
+        return
+    data = json.loads(STATE.read_text())
+    for entry in data['files']:
+        dest = Path(entry['path'])
+        dest.unlink(missing_ok=True)
+        if entry['backup']:
+            shutil.copy2(entry['backup'], dest)
+    run('xfconf-query', '-c', 'xfce4-keyboard-shortcuts', '-p', KEY, '-r', check=False)
+    if data['key']:
+        run('xfconf-query', '-c', 'xfce4-keyboard-shortcuts', '-p', KEY,
+            '-n', '-t', 'string', '-s', data['key'])
+    STATE.unlink()
+    print('Recording shortcuts and controls restored. OBS settings and videos retained.')
+
+
+def main():
+    if sys.argv[1:] not in ([], ['--revert']):
+        raise SystemExit('usage: recording-install [--revert]')
+    if os.environ.get('MINTBOOK_INSTALL_TRANSACTION') != '1' and (HOME / '.local/lib/mintbook/current/manifest.json').exists():
+        os.execv(str(ROOT / 'bin/desktop-install'), [str(ROOT / 'bin/desktop-install'), '--feature', 'recording-install', *sys.argv[1:]])
+    if os.geteuid() == 0:
+        raise SystemExit('Run recording-install as the desktop user, without sudo.')
+    if not os.environ.get('DISPLAY'):
+        raise SystemExit('Run recording-install from your desktop session.')
+    if '--revert' in sys.argv:
+        revert()
+    else:
+        install()
+
+
+if __name__ == '__main__':
+    main()

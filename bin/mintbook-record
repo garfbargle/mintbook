@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""Open a ready-to-record OBS profile without replacing the user's settings."""
+import argparse
+import configparser
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+
+NAME = 'Mintbook Recording'
+SLUG = 'Mintbook_Recording'
+
+
+def dimensions():
+    try:
+        out = subprocess.run(['xrandr', '--listmonitors'], capture_output=True,
+                             text=True, check=True, timeout=3).stdout
+        size = re.search(r'\s(\d+)/\d+x(\d+)/\d+\+', out)
+        if size:
+            return tuple(map(int, size.groups()))
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return 2304, 1440
+
+
+def source(name, identifier, settings, mixers=0):
+    return dict(name=name, id=identifier, versioned_id=identifier, settings=settings,
+                volume=1.0, enabled=True, muted=False, mixers=mixers,
+                sync=0, flags=0, hotkeys={}, private_settings={})
+
+
+def setup(home=None, size=None):
+    home = Path.home() if home is None else Path(home)
+    root = home / '.config/obs-studio'
+    profile = root / 'basic/profiles' / SLUG
+    scenes = root / 'basic/scenes' / (SLUG + '.json')
+    recordings = home / 'Videos/Recordings'
+    recordings.mkdir(parents=True, exist_ok=True)
+    hardware = hardware_driver(home) is not None
+    width, height = size or dimensions()
+    # Keep the monitor's aspect ratio and avoid upscaling small displays.
+    factor = min(1, 1280 / width, 800 / height)
+    output = tuple(max(2, int(v * factor) // 2 * 2) for v in (width, height))
+    if not (profile / 'basic.ini').exists():
+        profile.mkdir(parents=True, exist_ok=True)
+        config = configparser.ConfigParser(interpolation=None)
+        config.optionxform = str
+        config.read_dict({
+            'General': {'Name': NAME},
+            'Output': {'Mode': 'Simple', 'FilenameFormatting': '%CCYY-%MM-%DD %hh-%mm-%ss'},
+            'SimpleOutput': {'FilePath': str(recordings), 'RecFormat2': 'mkv',
+                             'RecEncoder': 'x264_lowcpu', 'RecQuality': 'Small',
+                             'RecAudioEncoder': 'aac', 'RecTracks': '7', 'ABitrate': '192'},
+            'Video': {'BaseCX': str(width), 'BaseCY': str(height),
+                      'OutputCX': str(output[0]), 'OutputCY': str(output[1]),
+                      'FPSType': '1', 'FPSInt': '24', 'ScaleType': 'bicubic', 'AutoRemux': 'true'},
+            'Audio': {'SampleRate': '48000', 'ChannelSetup': 'Stereo'},
+            'Hotkeys': {key: json.dumps({'bindings': [{'key': 'OBS_KEY_F9' if key.endswith('StartRecording') else 'OBS_KEY_F10', 'control': True, 'shift': True}]})
+                        for key in ('OBSBasic.StartRecording', 'OBSBasic.StopRecording')},
+        })
+        if hardware:
+            config['Output']['Mode'] = 'Advanced'
+            config['AdvOut'] = {
+                'RecType': 'Standard', 'RecFilePath': str(recordings), 'RecFormat2': 'mkv',
+                'RecEncoder': 'ffmpeg_vaapi', 'RecAudioEncoder': 'ffmpeg_aac',
+                'RecTracks': '7', 'Track1Name': 'Mix', 'Track2Name': 'Microphone',
+                'Track3Name': 'Computer audio', 'Track1Bitrate': '192',
+                'Track2Bitrate': '192', 'Track3Bitrate': '192',
+            }
+            (profile / 'recordEncoder.json').write_text(json.dumps({
+                'vaapi_device': '/dev/dri/renderD128', 'profile': 100, 'level': 40,
+                'rate_control': 'CQP', 'qp': 23, 'keyint_sec': 2, 'bf': 0, 'ffmpeg_opts': 'quality=7',
+            }, indent=2) + '\n')
+        with (profile / 'basic.ini').open('w') as file:
+            config.write(file, space_around_delimiters=False)
+    if not scenes.exists():
+        scenes.parent.mkdir(parents=True, exist_ok=True)
+        screen = source('Entire screen', 'xshm_input', {'screen': 0, 'show_cursor': True})
+        scene = source('Screen recording', 'scene', {'items': [
+            {'name': 'Entire screen', 'visible': True, 'locked': True, 'rot': 0.0,
+             'pos': {'x': 0.0, 'y': 0.0}, 'scale': {'x': 1.0, 'y': 1.0},
+             'align': 5, 'bounds_type': 2, 'bounds_align': 0,
+             'bounds': {'x': float(width), 'y': float(height)}, 'id': 1}], 'id_counter': 1})
+        scenes.write_text(json.dumps({
+            'name': NAME, 'current_scene': 'Screen recording',
+            'current_program_scene': 'Screen recording',
+            'scene_order': [{'name': 'Screen recording'}], 'sources': [screen, scene],
+            'DesktopAudioDevice1': source('Computer audio', 'pulse_output_capture', {'device_id': 'default'}, 5),
+            'AuxAudioDevice1': source('Microphone', 'pulse_input_capture', {'device_id': 'default'}, 3),
+            'current_transition': 'Fade', 'transition_duration': 300,
+        }, indent=2) + '\n')
+    # Only skip the wizard for an entirely new OBS installation.
+    global_ini = root / 'global.ini'
+    if not global_ini.exists():
+        global_ini.write_text('[General]\nFirstRun=true\n\n[Basic]\nProfile=' + NAME +
+                              '\nProfileDir=' + SLUG + '\nSceneCollection=' + NAME +
+                              '\nSceneCollectionFile=' + SLUG + '\n\n[BasicWindow]\n' +
+                              'PreviewEnabled=true\nSysTrayEnabled=true\n\n[OBSWebSocket]\nServerEnabled=false\n')
+    return recordings
+
+
+def hardware_driver(home=None):
+    home = Path.home() if home is None else Path(home)
+    driver = home / '.local/share/mintbook/recording/vaapi'
+    return driver if (driver / 'i965_drv_video.so').is_file() else None
+
+
+def raise_existing():
+    """Include minimized windows, excluding OBS's hidden Qt helper windows."""
+    if not shutil.which('xdotool'):
+        return False
+    windows = subprocess.run(['xdotool', 'search', '--class', '^obs$'],
+                             capture_output=True, text=True, timeout=3)
+    for window in windows.stdout.split():
+        name = subprocess.run(['xdotool', 'getwindowname', window],
+                              capture_output=True, text=True, timeout=3)
+        if name.stdout.startswith('OBS '):
+            result = subprocess.run(['xdotool', 'windowactivate', '--sync', window], timeout=3)
+            return result.returncode == 0
+    return False
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--setup', action='store_true')
+    parser.add_argument('--folder', action='store_true')
+    args = parser.parse_args()
+    if args.folder:
+        folder = Path.home() / 'Videos/Recordings'
+        folder.mkdir(parents=True, exist_ok=True)
+        os.execvp('xdg-open', ['xdg-open', str(folder)])
+    if not shutil.which('obs'):
+        subprocess.run(['notify-send', 'Screen Recording', 'Install OBS Studio to record your screen.'])
+        return 1
+    if not args.setup and raise_existing():
+        return 0
+    setup()
+    if not args.setup:
+        driver = hardware_driver()
+        if driver is not None:
+            os.environ['LIBVA_DRIVER_NAME'] = 'i965'
+            os.environ['LIBVA_DRIVERS_PATH'] = str(driver)
+        os.execvp('obs', ['obs', '--profile', NAME, '--collection', NAME, '--disable-updater'])
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

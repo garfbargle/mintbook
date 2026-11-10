@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+cat <<EOF
+kind = meter
+glyph = sliders
+title = Audio Mixer
+subtitle = App volumes & levels
+detail = /usr/bin/pavucontrol
+EOF

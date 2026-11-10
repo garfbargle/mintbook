@@ -7,6 +7,9 @@ import sys
 
 BIN = Path.home() / '.local/bin'
 ACTIONS = {
+    'record': ('Record Screen', 'media-record', 'obs screen recording video microphone capture', ['mintbook-record']),
+    'recordings': ('Open Recordings', 'folder-videos', 'screen recordings videos captures', ['mintbook-record', '--folder']),
+    'audio-mixer': ('Audio Mixer', 'multimedia-volume-control', 'microphone input output volume sources levels sound', ['/usr/bin/pavucontrol']),
     'control': ('Open Control Center', 'preferences-system', 'settings brightness volume', ['control-center']),
     'display-settings': ('Display Settings', 'video-display', 'monitor resolution layout primary screen scale', ['/usr/bin/xfce4-display-settings']),
     'display-sizing': ('Adjust Text and Interface Size', 'preferences-desktop-font', 'display scaling font dpi appearance size', ['/usr/bin/xfce4-appearance-settings']),
@@ -34,6 +37,12 @@ ACTIONS = {
     'sleep-normal': ('Stop keeping awake', 'weather-clear-night', 'sleep screen normal', ['keep-awake', 'off']),
     'screenshots': ('Open screenshots folder', 'folder-pictures', 'capture pictures', ['@folder']),
 }
+
+
+# Keep optional recording actions out of search when the feature is removed.
+if not (BIN / 'mintbook-record').exists():
+    for key in ('record', 'recordings'):
+        ACTIONS.pop(key, None)
 
 
 def execute(key):
