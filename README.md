@@ -97,7 +97,7 @@ The recipe installs the GUI; hardware and boot fixes remain explicit steps.
 | | |
 |---|---|
 | **Desktop** | [Look and behavior](docs/desktop.md) · [Control Center](docs/control-center.md) · [Updates](docs/updates.md) · [HiDPI](docs/display.md) · [Login](docs/login.md) |
-| **Daily** | [Shortcuts and search](docs/daily.md) · [Battery](docs/battery.md) · [Video](docs/video.md) · [Nearby sharing](docs/mintdrop.md) |
+| **Daily** | [Shortcuts and search](docs/daily.md) · [Battery](docs/battery.md) · [Video](docs/video.md) · [Screen recording](docs/recording.md) · [Nearby sharing](docs/mintdrop.md) |
 | **Hardware** | [Input and sleep](docs/input.md) · [Hibernation](docs/hibernate.md) · [Audio](docs/audio.md) · [Camera](docs/camera.md) · [Bluetooth](docs/bluetooth.md) |
 | **System** | [Boot and kernels](docs/boot.md) · [App performance](docs/app-performance.md) · [Top-bar review](docs/top-bar-review.md) · [Implementation](CONTRIBUTING.md) |
 

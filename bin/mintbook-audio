@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""Microphone controls backed by actual PipeWire/PulseAudio state."""
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+
+def pactl(*args):
+    return subprocess.run(['pactl', *args], check=True, capture_output=True,
+                          text=True, timeout=3).stdout.strip()
+
+
+def microphones():
+    return [s for s in json.loads(pactl('-f', 'json', 'list', 'sources'))
+            if s.get('monitor_of_sink') in (None, 4294967295) and not s['name'].endswith('.monitor')]
+
+
+def microphone_label(source):
+    if source.get('active_port') == 'analog-input-internal-mic':
+        return 'Built-in microphone'
+    return source['description']
+
+
+def selected():
+    name = pactl('get-default-source')
+    return next((s for s in microphones() if s['name'] == name), None)
+
+
+def choose(name):
+    sources = microphones()
+    if name not in {s['name'] for s in sources}:
+        raise ValueError('That microphone is no longer connected.')
+    # Move microphone clients, never desktop-monitor recordings or DSP links.
+    physical = {s['index'] for s in sources}
+    streams = json.loads(pactl('-f', 'json', 'list', 'source-outputs'))
+    pactl('set-default-source', name)
+    for stream in streams:
+        if stream['source'] in physical and stream.get('client') not in (None, 4294967295):
+            try:
+                pactl('move-source-output', str(stream['index']), name)
+            except subprocess.CalledProcessError:
+                pass  # A client can disappear between listing and moving.
+
+
+def tile(kind, verb='read', value=None):
+    if verb == 'set':
+        if kind == 'input':
+            choose(value)
+        else:
+            source = selected()
+            if source is None:
+                raise ValueError('No microphone is available.')
+            if kind == 'mic':
+                if value not in ('on', 'off'):
+                    raise ValueError('Invalid microphone state.')
+                pactl('set-source-mute', source['name'], '0' if value == 'on' else '1')
+            elif kind == 'gain':
+                number = float(value)
+                if not 0 <= number <= 100:
+                    raise ValueError('Input volume must be between 0 and 100.')
+                # Adjusting gain must never silently unmute the microphone.
+                pactl('set-source-volume', source['name'], f'{round(number)}%')
+        return
+    sources = microphones()
+    default = pactl('get-default-source')
+    source = next((s for s in sources if s['name'] == default), None)
+    if kind == 'input':
+        result = dict(kind='menu', glyph='mic', title='Input', value=default,
+                      subtitle='No microphone', live=2,
+                      options=[[s['name'], microphone_label(s)] for s in sources])
+    elif source is None:
+        result = dict(skip='on')
+    elif kind == 'mic':
+        muted = source['mute']
+        result = dict(kind='toggle', glyph='mic-off' if muted else 'mic', title='Microphone',
+                      value='off' if muted else 'on', subtitle='Muted' if muted else 'On', live=2)
+    else:
+        pct = round(max((v['value'] for v in source['volume'].values()), default=0) / 65536 * 100)
+        result = dict(kind='slider', glyph='mic', title='Input volume', value=min(100, pct),
+                      subtitle='Muted' if source['mute'] else f'{pct}%', live=2, span=6)
+    print(json.dumps(result))
+
+
+def main():
+    try:
+        tile(*sys.argv[1:])
+    except (OSError, ValueError, subprocess.SubprocessError, KeyError) as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

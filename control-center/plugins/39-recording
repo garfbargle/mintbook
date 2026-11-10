@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+command -v obs >/dev/null || { echo 'skip = on'; exit 0; }
+cat <<EOF
+kind = meter
+glyph = record
+title = Record Screen
+subtitle = Screen, mic & audio
+detail = $HOME/.local/bin/mintbook-record
+EOF

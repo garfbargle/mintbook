@@ -34,7 +34,10 @@
     "python3-apt",
     "python3-dbus",
     "blueman",
-    "network-manager-gnome"
+    "network-manager-gnome",
+    "pavucontrol",
+    "obs-studio",
+    "ffmpeg"
   ],
   "themes": [
     {
@@ -80,6 +83,7 @@
     "control-install",
     "bt-panel-install",
     "overview-install",
+    "recording-install",
     "app-grid-install"
   ],
   "settings": {

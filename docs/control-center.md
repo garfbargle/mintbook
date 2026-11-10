@@ -44,6 +44,8 @@ bin/control-install --revert # put the old indicators back
 | Wi-Fi, Bluetooth | `plugin-21` genmon |
 | Display brightness | nothing — there was no control for it |
 | Sound, output destination | `plugin-12`, the XFCE pulseaudio plugin |
+| Microphone input, mute and input volume | New controls; recording setup in [recording.md](recording.md) |
+| Audio Mixer and Record Screen | Direct access to pavucontrol and the configured OBS recorder |
 | Appearance | `plugin-24` genmon |
 | Night Light | `plugin-23` genmon |
 | Power profile | `plugin-22` genmon, and `bin/power-menu`'s popup |
@@ -206,7 +208,7 @@ should show both choices, and it is four lines of a plugin to ask for one.
 
 `wifi`, `bluetooth`, `moon`, `sun`, `speaker`, `display`, `cpu`,
 `thermometer`, `bolt`, `gear`, `box`, `half`, `leaf`, `gauge`, `check`,
-`chevron`, `dot`.
+`chevron`, `dot`, `mic`, `mic-off`, `record`, `sliders`.
 
 `half` is a disc with one side filled — the shape for a setting that is
 following something else rather than being held at a value, which is what

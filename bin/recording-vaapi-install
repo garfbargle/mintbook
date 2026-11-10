@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Optional Broadwell encoder for OBS only. No root or system driver replacement.
+set -euo pipefail
+command -v ffmpeg >/dev/null || { echo 'Install ffmpeg first.' >&2; exit 1; }
+[ -r /dev/dri/renderD128 ] || { echo 'No accessible Intel render device.' >&2; exit 1; }
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+cd "$work"
+# apt verifies the package against the signed Ubuntu archive metadata.
+apt-get download i965-va-driver-shaders
+package=$(find . -maxdepth 1 -name 'i965-va-driver-shaders_*.deb' -print -quit)
+dpkg-deb -x "$package" extracted
+driver=extracted/usr/lib/x86_64-linux-gnu/dri
+# A successful synthetic encode is required; vainfo alone overstates support.
+LIBVA_DRIVER_NAME=i965 LIBVA_DRIVERS_PATH="$work/$driver" \
+  ffmpeg -hide_banner -loglevel error -vaapi_device /dev/dri/renderD128 \
+    -f lavfi -i color=size=1536x960:rate=30 -vf format=nv12,hwupload \
+    -frames:v 3 -c:v h264_vaapi -quality 7 -f null -
+target="$HOME/.local/share/mintbook/recording/vaapi"
+install -dm755 "$target"
+install -m755 "$driver/i965_drv_video.so" "$target/i965_drv_video.so.new"
+mv "$target/i965_drv_video.so.new" "$target/i965_drv_video.so"
+install -m644 extracted/usr/share/doc/i965-va-driver-shaders/copyright "$target/copyright"
+dpkg-deb -f "$package" Package Version > "$target/package.txt"
+echo "Verified Intel encoder installed for OBS only: $target"
+echo 'New Mintbook Recording profiles will use hardware encoding.'
+echo 'Undo: remove ~/.local/share/mintbook/recording/vaapi and select x264 in OBS Settings → Output.'
